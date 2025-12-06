@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Spécification – Infra PostgreSQL &amp; pgAdmin derrière NGINX</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body>
+<main>
+  <h1>Spécification – Infra PostgreSQL &amp; pgAdmin derrière NGINX</h1>
+
+  <!-- Résumé exécutif -->
+  <section id="resume-executif">
+    <h2>Résumé exécutif</h2>
+    <p>
+      Cette spécification décrit une infrastructure où une base de données <strong>PostgreSQL</strong> et
+      l’interface d’administration <strong>pgAdmin</strong> sont déployées derrière un <strong>reverse proxy NGINX</strong>.
+    </p>
+    <p>
+      L’objectif est de fournir un accès sécurisé à pgAdmin via HTTP(S) tout en protégeant PostgreSQL,
+      qui ne doit <strong>jamais être exposé directement à Internet</strong>. NGINX sert de point d’entrée
+      unique (TLS, routage, contrôles de sécurité).
+    </p>
+    <p>
+      La solution doit respecter les exigences de sécurité, de conformité (AMF, Loi&nbsp;25) et de
+      traçabilité, et être suffisamment précise pour permettre au Dev/DevOps AI de générer l’infra
+      (Docker/Kubernetes/VM) et les configurations associées.
+    </p>
+  </section>
+
+  <!-- Contexte & objectifs -->
+  <section id="contexte-objectifs">
+    <h2>1. Contexte &amp; objectifs</h2>
+    <h3>Contexte</h3>
+    <ul>
+      <li>Besoin d’un environnement de base de données relationnelle pour les applications internes.</li>
+      <li>Utilisation de <strong>PostgreSQL</strong> comme moteur de base de données principal.</li>
+      <li>Utilisation de <strong>pgAdmin</strong> comme outil graphique de gestion de PostgreSQL.</li>
+      <li>Exposition contrôlée via un <strong>reverse proxy NGINX</strong> (HTTP/HTTPS) pour les administrateurs.</li>
+    </ul>
+
+    <h3>Objectifs</h3>
+    <ul>
+      <li>O1 – Fournir une base de données PostgreSQL accessible uniquement depuis le réseau interne / back-end.</li>
+      <li>O2 – Offrir un accès web sécurisé à pgAdmin pour les DBA et équipes techniques, via NGINX.</li>
+      <li>O3 – Centraliser la sécurité réseau (TLS, filtrage, headers) au niveau de NGINX.</li>
+      <li>O4 – Garantir la conformité (Loi&nbsp;25, sécurité, journalisation) pour toutes les connexions administratives.</li>
+    </ul>
+  </section>
+
+  <!-- Hypothèses -->
+  <section id="hypotheses">
+    <h2>2. Hypothèses (à confirmer)</h2>
+    <ul>
+      <li>H1 : L’infra sera déployée soit en containers (Docker/Compose/Kubernetes), soit sur VMs.</li>
+      <li>H2 : NGINX est le seul point d’entrée réseau exposé (port 80/443) depuis Internet ou le réseau utilisateur.</li>
+      <li>H3 : PostgreSQL écoute uniquement sur un réseau interne (bridge Docker, subnet privé, VNet, etc.).</li>
+      <li>H4 : pgAdmin ne doit être accessible qu’à des utilisateurs authentifiés (auth appli/SSO ou auth interne pgAdmin).</li>
+      <li>H5 : Les secrets (mots de passe PostgreSQL, comptes pgAdmin) sont gérés via un gestionnaire sécurisé (vault, secrets manager, variables protégées).</li>
+    </ul>
+  </section>
+
+  <!-- Exigences business -->
+  <section id="br">
+    <h2>3. Exigences business (BR)</h2>
+    <ul>
+      <li>
+        <strong>BR-001 – Sécurisation de l’accès à la base</strong><br />
+        Les données d’entreprise stockées dans PostgreSQL doivent être protégées par une exposition minimale et un contrôle strict des accès.
+      </li>
+      <li>
+        <strong>BR-002 – Administration centralisée</strong><br />
+        Les administrateurs doivent pouvoir gérer PostgreSQL via une interface web unique (pgAdmin) accessible derrière NGINX.
+      </li>
+      <li>
+        <strong>BR-003 – Conformité &amp; audit</strong><br />
+        Les accès à l’outil d’administration doivent être traçables et conformes aux exigences réglementaires (AMF, Loi&nbsp;25).
+      </li>
+    </ul>
+  </section>
+
+  <!-- Exigences fonctionnelles -->
+  <section id="fr">
+    <h2>4. Exigences fonctionnelles (FR)</h2>
+
+    <h3>4.1 Architecture réseau &amp; routage</h3>
+    <ul>
+      <li>
+        <strong>FR-001 – Point d’entrée NGINX</strong><br />
+        NGINX doit être le point d’entrée unique pour toutes les requêtes HTTP/HTTPS vers l’infra PostgreSQL/pgAdmin.
+      </li>
+      <li>
+        <strong>FR-002 – Routage vers pgAdmin</strong><br />
+        NGINX doit router les requêtes vers pgAdmin via un chemin dédié (ex. <code>/pgadmin/</code>) ou un vhost (ex. <code>pgadmin.mondomaine.local</code>).
+      </li>
+      <li>
+        <strong>FR-003 – Isolation de PostgreSQL</strong><br />
+        PostgreSQL ne doit pas être accessible directement depuis Internet ou le réseau utilisateur ; l’accès se fait uniquement :
+        <ul>
+          <li>via pgAdmin (HTTP/S &rarr; NGINX &rarr; pgAdmin &rarr; PostgreSQL) ;</li>
+          <li>via les applications back-end autorisées sur le réseau interne.</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.2 Accès à pgAdmin</h3>
+    <ul>
+      <li>
+        <strong>FR-004 – URL d’accès à pgAdmin</strong><br />
+        L’accès à pgAdmin doit se faire via une URL lisible et stable, par exemple :
+        <ul>
+          <li><code>https://intra.mondomaine.local/pgadmin/</code>, ou</li>
+          <li><code>https://pgadmin.mondomaine.local/</code>.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-005 – Protection par authentification</strong><br />
+        L’URL pgAdmin doit être protégée par un mécanisme d’authentification :
+        <ul>
+          <li>Soit une auth gérée par NGINX (basic auth, SSO, OIDC, etc.).</li>
+          <li>Soit l’authentification intégrée de pgAdmin, elle-même accessible uniquement après un contrôle d’accès frontal.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-006 – Accès réservé aux rôles autorisés</strong><br />
+        Seuls les rôles autorisés (DBA, DevOps, Architecte, etc.) peuvent accéder à pgAdmin.
+      </li>
+    </ul>
+
+    <h3>4.3 Connexions à PostgreSQL</h3>
+    <ul>
+      <li>
+        <strong>FR-007 – Accès applicatif</strong><br />
+        Les applications consommatrices accèdent à PostgreSQL via le réseau interne (hostname interne, port 5432 ou autre configuré).
+      </li>
+      <li>
+        <strong>FR-008 – Accès administratif</strong><br />
+        pgAdmin doit se connecter à PostgreSQL via des comptes d’administration dédiés, avec droits limités selon l’usage (admin, read-only, etc.).
+      </li>
+      <li>
+        <strong>FR-009 – Aucune exposition directe publique</strong><br />
+        Le port PostgreSQL ne doit pas être exposé sur une adresse IP publique.
+      </li>
+    </ul>
+
+    <h3>4.4 Journalisation &amp; audit</h3>
+    <ul>
+      <li>
+        <strong>FR-010 – Logs NGINX</strong><br />
+        NGINX doit journaliser les accès à l’URL pgAdmin (date, IP source, code HTTP) sans stocker de PII inutile.
+      </li>
+      <li>
+        <strong>FR-011 – Logs PostgreSQL</strong><br />
+        PostgreSQL doit enregistrer les connexions, erreurs et requêtes critiques pour permettre l’investigation en cas d’incident.
+      </li>
+      <li>
+        <strong>FR-012 – Conservation des logs</strong><br />
+        La durée de conservation des logs doit être définie selon les politiques internes et Loi&nbsp;25 (ex. X jours/mois), avec rotation.
+      </li>
+    </ul>
+  </section>
+
+  <!-- NFR -->
+  <section id="nfr">
+    <h2>5. Exigences non fonctionnelles (NFR)</h2>
+    <ul>
+      <li>
+        <strong>NFR-001 – Performance</strong><br />
+        Le temps de réponse moyen pour l’interface pgAdmin via NGINX doit être compatible avec un usage d’administration (ex. &lt; 2&nbsp;s pour les vues principales sur réseau normal).
+      </li>
+      <li>
+        <strong>NFR-002 – Disponibilité</strong><br />
+        L’infra doit supporter une disponibilité suffisante pour les besoins d’exploitation (ex. &gt; 99&nbsp;% en heures ouvrables).
+      </li>
+      <li>
+        <strong>NFR-003 – Sécurité</strong><br />
+        Toutes les communications entre l’utilisateur et NGINX doivent être chiffrées (HTTPS / TLS) lorsque l’accès se fait sur un réseau non entièrement maîtrisé.
+      </li>
+      <li>
+        <strong>NFR-004 – Résilience</strong><br />
+        En cas de redémarrage de NGINX ou de pgAdmin, le service doit pouvoir être restauré automatiquement (containers, systemd, orchestrateur).
+      </li>
+      <li>
+        <strong>NFR-005 – Sauvegarde</strong><br />
+        Les données PostgreSQL doivent être sauvegardées régulièrement (backup complet + incrémental si nécessaire) avec possibilité de restauration testée.
+      </li>
+    </ul>
+  </section>
+
+  <!-- Data -->
+  <section id="data">
+    <h2>6. Exigences de données (Data)</h2>
+    <ul>
+      <li>
+        <strong>DATA-001 – Paramètres PostgreSQL</strong><br />
+        Les paramètres critiques (nom de la base, encodage, timezone, taille max connexions) doivent être définis explicitement dans la configuration.
+      </li>
+      <li>
+        <strong>DATA-002 – Secrets &amp; credentials</strong><br />
+        Les identifiants PostgreSQL et pgAdmin doivent être stockés comme secrets (vault, secrets manager, variables d’environnement chiffrées) et non en clair dans le code ou les fichiers versionnés.
+      </li>
+      <li>
+        <strong>DATA-003 – Données PII</strong><br />
+        Si PostgreSQL contient des données personnelles, les règles de minimisation, rétention et droit à l’oubli (Loi&nbsp;25) doivent être appliquées au niveau des schémas, tables et procédures.
+      </li>
+    </ul>
+  </section>
+
+  <!-- User stories -->
+  <section id="user-stories">
+    <h2>7. User Stories (pour Dev/DevOps AI)</h2>
+    <table border="1" cellpadding="6" cellspacing="0">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Titre</th>
+          <th>Description</th>
+          <th>Priorité</th>
+          <th>Système</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>US-DB-001</td>
+          <td>Infra PostgreSQL sécurisée</td>
+          <td>En tant qu’architecte/DBA, je veux une instance PostgreSQL non exposée à Internet, accessible seulement depuis le réseau interne.</td>
+          <td>Haute</td>
+          <td>PostgreSQL</td>
+        </tr>
+        <tr>
+          <td>US-DB-002</td>
+          <td>Accès pgAdmin via NGINX</td>
+          <td>En tant que DBA, je veux accéder à pgAdmin via une URL HTTPS derrière NGINX, avec authentification.</td>
+          <td>Haute</td>
+          <td>NGINX / pgAdmin</td>
+        </tr>
+        <tr>
+          <td>US-DB-003</td>
+          <td>Contrôle d’accès administrateurs</td>
+          <td>En tant que responsable sécurité, je veux que seuls les rôles autorisés puissent accéder à pgAdmin.</td>
+          <td>Haute</td>
+          <td>NGINX / pgAdmin</td>
+        </tr>
+        <tr>
+          <td>US-DB-004</td>
+          <td>Journalisation des accès</td>
+          <td>En tant qu’auditeur, je veux que les accès à pgAdmin et PostgreSQL soient journalisés pour investigation.</td>
+          <td>Moyenne</td>
+          <td>NGINX / PostgreSQL</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Gherkin -->
+  <section id="gherkin">
+    <h2>8. Scénarios Gherkin (acceptation)</h2>
+
+    <h3>8.1 Accès à pgAdmin via NGINX</h3>
+    <pre><code>Scenario: Accès à pgAdmin derrière NGINX pour un utilisateur autorisé
+  Given NGINX est démarré et accessible en HTTPS
+  And pgAdmin est déployé derrière NGINX
+  And Je suis un utilisateur avec un rôle "DBA"
+  When J’ouvre l’URL "https://intra.mondomaine.local/pgadmin/"
+  And Je m’authentifie avec des identifiants valides
+  Then L’interface pgAdmin s’affiche
+  And Je peux voir la liste des serveurs configurés
+</code></pre>
+
+    <h3>8.2 Refus d’accès pour utilisateur non autorisé</h3>
+    <pre><code>Scenario: Refus d’accès à pgAdmin pour un utilisateur non autorisé
+  Given NGINX est démarré et accessible en HTTPS
+  And Je suis un utilisateur sans rôle d’administration de base de données
+  When J’ouvre l’URL "https://intra.mondomaine.local/pgadmin/"
+  Then L’accès m’est refusé
+  And Je vois un message indiquant que je ne suis pas autorisé
+</code></pre>
+
+    <h3>8.3 PostgreSQL non exposé publiquement</h3>
+    <pre><code>Scenario: Tentative de connexion directe à PostgreSQL depuis Internet
+  Given PostgreSQL écoute uniquement sur un réseau interne
+  When Une connexion est tentée depuis une adresse IP publique sur le port 5432
+  Then La connexion est refusée
+  And Aucun service PostgreSQL n’est visible depuis Internet
+</code></pre>
+
+    <h3>8.4 Journalisation des accès</h3>
+    <pre><code>Scenario: Traçabilité des accès à pgAdmin
+  Given NGINX est configuré pour journaliser les accès
+  And Un utilisateur "DBA" accède à "https://intra.mondomaine.local/pgadmin/"
+  When Il se connecte avec succès à pgAdmin
+  Then Un enregistrement de log est créé avec la date, l’URL appelée et le code HTTP
+  And Aucun PII inutile n’est stocké dans le log
+</code></pre>
+  </section>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Spécification – Intégration Grafana dans front-end SPA</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body>
+  <main>
+    <h1>Spécification – Intégration Grafana dans front-end SPA</h1>
+
+    <!-- Résumé exécutif -->
+    <section id="resume-executif">
+      <h2>Résumé exécutif</h2>
+      <p>
+        On veut ajouter au front-end une entrée de menu permettant d’accéder à la page Grafana 
+        (<code>http://localhost/grafana/</code>) intégrée dans le site en mode micro front end SPA.
+      </p>
+      <p>
+        L’utilisateur reste dans le même shell (header/menu/layout), Grafana est affiché dans la zone de 
+        contenu principale. La navigation se fait via une route SPA <code>/grafana</code>, avec gestion 
+        des erreurs si Grafana est indisponible.
+      </p>
+      <p>
+        Les contraintes de sécurité (authentification, droits d’accès, logs) doivent respecter les 
+        politiques internes et la Loi&nbsp;25 (aucune PII inutile dans les URLs ou les logs).
+      </p>
+    </section>
+
+    <!-- Contexte & objectifs -->
+    <section id="contexte-objectifs">
+      <h2>1. Contexte &amp; objectifs</h2>
+      <h3>Contexte</h3>
+      <ul>
+        <li>Front-end existant en mode <strong>micro front end SPA</strong> (shell + micro apps).</li>
+        <li>Grafana exposé localement via <code>http://localhost/grafana/</code>.</li>
+      </ul>
+
+      <h3>Objectif principal</h3>
+      <p>
+        Permettre aux utilisateurs autorisés d’accéder à Grafana directement depuis le front-end, via une
+        entrée de menu, sans quitter l’application.
+      </p>
+    </section>
+
+    <!-- Hypothèses -->
+    <section id="hypotheses">
+      <h2>2. Hypothèses (à confirmer)</h2>
+      <ul>
+        <li>H1 : Grafana est déjà déployé et accessible via <code>http://localhost/grafana/</code> (ou équivalent par environnement).</li>
+        <li>H2 : L’authentification à Grafana est alignée avec l’appli (SSO / reverse proxy / headers d’auth).</li>
+        <li>H3 : Le front-end dispose d’un shell avec système de routes SPA (<code>/home</code>, <code>/admin</code>, etc.).</li>
+        <li>H4 : L’URL du navigateur doit refléter la navigation via un chemin <code>/grafana</code>.</li>
+      </ul>
+    </section>
+
+    <!-- Exigences business -->
+    <section id="br">
+      <h2>3. Exigences business (BR)</h2>
+      <ul>
+        <li>
+          <strong>BR-001 – Accès centralisé aux dashboards</strong><br />
+          Les utilisateurs doivent pouvoir accéder aux dashboards Grafana sans sortir de l’application front-end.
+        </li>
+        <li>
+          <strong>BR-002 – Expérience utilisateur cohérente</strong><br />
+          L’accès à Grafana réutilise le même shell (menu, header, thème).
+        </li>
+        <li>
+          <strong>BR-003 – Conformité &amp; sécurité</strong><br />
+          L’accès doit respecter les règles de sécurité et de confidentialité, notamment la gestion des droits.
+        </li>
+      </ul>
+    </section>
+
+    <!-- Exigences fonctionnelles -->
+    <section id="fr">
+      <h2>4. Exigences fonctionnelles (FR)</h2>
+
+      <h3>4.1 Menu &amp; navigation</h3>
+      <ul>
+        <li>
+          <strong>FR-001 – Entrée de menu Grafana</strong><br />
+          Ajouter une nouvelle entrée de menu (ex. «&nbsp;Grafana&nbsp;») visible pour les utilisateurs autorisés.
+        </li>
+        <li>
+          <strong>FR-002 – Route SPA dédiée</strong><br />
+          Le clic sur cette entrée doit mettre à jour l’URL vers <code>/grafana</code> sans rechargement complet de la page (SPA).
+        </li>
+        <li>
+          <strong>FR-003 – Intégration dans le shell</strong><br />
+          La vue <code>/grafana</code> doit afficher Grafana dans la zone de contenu principale tout en conservant le header, le menu et le footer.
+        </li>
+      </ul>
+
+      <h3>4.2 Intégration Grafana</h3>
+      <ul>
+        <li>
+          <strong>FR-004 – Mode d’intégration</strong><br />
+          Grafana est affiché :
+          <ul>
+            <li>via un <code>&lt;iframe&gt;</code> pointant vers <code>http://localhost/grafana/</code>, ou</li>
+            <li>via un micro front end/module dédié si l’architecture le permet.</li>
+          </ul>
+        </li>
+        <li>
+          <strong>FR-005 – Gestion du chargement</strong><br />
+          Afficher un indicateur de chargement lors du chargement de Grafana et le masquer une fois l’affichage terminé.
+        </li>
+        <li>
+          <strong>FR-006 – Gestion des erreurs</strong><br />
+          En cas d’indisponibilité de Grafana, afficher un message d’erreur lisible et ne pas casser le reste du front-end.
+        </li>
+      </ul>
+
+      <h3>4.3 Sécurité &amp; visibilité</h3>
+      <ul>
+        <li>
+          <strong>FR-007 – Contrôle d’accès</strong><br />
+          L’entrée de menu et la route <code>/grafana</code> sont accessibles uniquement aux rôles autorisés.
+        </li>
+        <li>
+          <strong>FR-008 – Journalisation</strong><br />
+          L’accès à la vue <code>/grafana</code> peut être loggé (date, utilisateur, action), sans PII sensible dans les messages.
+        </li>
+        <li>
+          <strong>FR-009 – Comportement de retour</strong><br />
+          L’utilisateur doit pouvoir quitter la vue Grafana via la navigation standard pour revenir aux autres pages.
+        </li>
+      </ul>
+    </section>
+
+    <!-- NFR -->
+    <section id="nfr">
+      <h2>5. Exigences non fonctionnelles (NFR)</h2>
+      <ul>
+        <li>
+          <strong>NFR-001 – Performance</strong><br />
+          Le temps d’affichage initial du shell <code>/grafana</code> (hors chargement interne de Grafana) doit être similaire aux autres routes SPA (&lt; 2&nbsp;s).
+        </li>
+        <li>
+          <strong>NFR-002 – Disponibilité</strong><br />
+          L’indisponibilité de Grafana ne doit pas impacter la navigation vers les autres pages.
+        </li>
+        <li>
+          <strong>NFR-003 – Sécurité</strong><br />
+          Aucun jeton, secret ou PII ne doit être exposé dans les URLs ou le code front-end en clair.
+        </li>
+        <li>
+          <strong>NFR-004 – Compatibilité</strong><br />
+          Comportement identique sur les navigateurs supportés (ex. Edge/Chromium).
+        </li>
+      </ul>
+    </section>
+
+    <!-- Data -->
+    <section id="data">
+      <h2>6. Exigences de données (Data)</h2>
+      <ul>
+        <li>
+          <strong>DATA-001 – Configuration du menu</strong><br />
+          Le libellé, l’icône et l’ordre de l’entrée de menu Grafana doivent être configurables (fichier de config, JSON, etc.).
+        </li>
+        <li>
+          <strong>DATA-002 – URL cible</strong><br />
+          L’URL cible (ex. <code>http://localhost/grafana/</code>) doit être paramétrable par environnement (DEV, PPE, PRD).
+        </li>
+      </ul>
+    </section>
+
+    <!-- User stories -->
+    <section id="user-stories">
+      <h2>7. User Stories (pour Dev AI)</h2>
+      <table border="1" cellpadding="6" cellspacing="0">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Titre</th>
+            <th>Description</th>
+            <th>Priorité</th>
+            <th>Système</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>US-001</td>
+            <td>Menu Grafana</td>
+            <td>En tant qu’utilisateur autorisé, je veux voir une entrée de menu “Grafana” pour accéder aux dashboards.</td>
+            <td>Haute</td>
+            <td>Front-end</td>
+          </tr>
+          <tr>
+            <td>US-002</td>
+            <td>Vue Grafana intégrée</td>
+            <td>En tant qu’utilisateur, je veux que Grafana s’affiche dans le site sans ouvrir un nouvel onglet.</td>
+            <td>Haute</td>
+            <td>Front-end</td>
+          </tr>
+          <tr>
+            <td>US-003</td>
+            <td>Gestion erreurs Grafana</td>
+            <td>En tant qu’utilisateur, je veux un message clair si Grafana est indisponible.</td>
+            <td>Moyenne</td>
+            <td>Front-end</td>
+          </tr>
+          <tr>
+            <td>US-004</td>
+            <td>Contrôle d’accès Grafana</td>
+            <td>En tant qu’admin, je veux que seuls les utilisateurs autorisés puissent accéder à Grafana.</td>
+            <td>Haute</td>
+            <td>Front-end</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Gherkin -->
+    <section id="gherkin">
+      <h2>8. Scénarios Gherkin (acceptation)</h2>
+
+      <h3>8.1 Affichage du menu Grafana</h3>
+      <pre><code>Scenario: Affichage de l’entrée de menu Grafana pour un utilisateur autorisé
+  Given Je suis connecté avec un rôle autorisé à voir Grafana
+  When J’affiche le menu principal de l’application
+  Then Je vois une entrée de menu "Grafana"
+  And Cette entrée mène vers la route "/grafana"
+</code></pre>
+
+      <pre><code>Scenario: Masquage de l’entrée de menu Grafana pour un utilisateur non autorisé
+  Given Je suis connecté avec un rôle non autorisé à voir Grafana
+  When J’affiche le menu principal de l’application
+  Then Je ne vois pas l’entrée de menu "Grafana"
+</code></pre>
+
+      <h3>8.2 Navigation vers Grafana</h3>
+      <pre><code>Scenario: Navigation vers la page Grafana intégrée
+  Given Je suis connecté avec un rôle autorisé
+  And Je vois l’entrée de menu "Grafana"
+  When Je clique sur "Grafana"
+  Then L’URL du navigateur devient "/grafana"
+  And Le shell (header, menu) reste affiché
+  And La zone de contenu principale affiche l’interface Grafana
+</code></pre>
+
+      <h3>8.3 Erreur Grafana</h3>
+      <pre><code>Scenario: Grafana indisponible
+  Given Le service Grafana est indisponible
+  And Je suis connecté avec un rôle autorisé
+  When Je clique sur "Grafana" dans le menu
+  Then L’URL du navigateur devient "/grafana"
+  And Un message d’erreur lisible s’affiche indiquant que Grafana est indisponible
+  And Le reste du site reste accessible
+</code></pre>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Spécification – Intégration des logs PostgreSQL &amp; pgAdmin avec l’infrastructure de monitoring</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body>
+<main>
+  <h1>Spécification – Intégration des logs PostgreSQL &amp; pgAdmin avec l’infrastructure de monitoring</h1>
+
+  <!-- Résumé exécutif -->
+  <section id="resume-executif">
+    <h2>Résumé exécutif</h2>
+    <p>
+      Cette spécification décrit comment les logs <strong>PostgreSQL</strong> et <strong>pgAdmin</strong>
+      doivent être collectés, normalisés et envoyés vers l’<strong>infrastructure de monitoring centralisée</strong>.
+    </p>
+    <p>
+      L’objectif est de permettre l’observabilité (diagnostic, performance, sécurité) tout en respectant
+      la <strong>conformité</strong> (Loi&nbsp;25, sécurité, minimisation des PII) et la traçabilité des accès administratifs.
+    </p>
+    <p>
+      La solution repose sur une chaîne de collecte standardisée (agents / sidecars / forwarders) et un
+      format de log unifié (idéalement <strong>JSON structuré</strong>) pour faciliter les tableaux de bord, alertes et audits.
+    </p>
+  </section>
+
+  <!-- Contexte & objectifs -->
+  <section id="contexte-objectifs">
+    <h2>1. Contexte &amp; objectifs</h2>
+
+    <h3>Contexte</h3>
+    <ul>
+      <li>
+        Une infrastructure existante avec <strong>PostgreSQL</strong> et <strong>pgAdmin</strong> déployés derrière un
+        <strong>reverse proxy NGINX</strong>.
+      </li>
+      <li>
+        Une <strong>plateforme de monitoring/logging centralisée</strong> déjà en place (ex. ELK, Loki/Grafana,
+        Azure Log Analytics, ou équivalent).
+      </li>
+      <li>
+        Besoin de centraliser les logs techniques, de sécurité et de performance pour exploitation, audit
+        et détection d’incidents.
+      </li>
+    </ul>
+
+    <h3>Objectifs</h3>
+    <ul>
+      <li>O1 – Centraliser tous les logs pertinents PostgreSQL &amp; pgAdmin dans l’infrastructure de monitoring.</li>
+      <li>O2 – Standardiser le format des logs (idéalement JSON) pour faciliter la recherche, la corrélation et les dashboards.</li>
+      <li>O3 – Permettre la détection des erreurs, lenteurs, tentatives d’accès non autorisées et anomalies.</li>
+      <li>O4 – Respecter les exigences de <strong>confidentialité</strong> (Loi&nbsp;25) : minimiser les PII, contrôler la rétention.</li>
+    </ul>
+  </section>
+
+  <!-- Hypothèses -->
+  <section id="hypotheses">
+    <h2>2. Hypothèses (à confirmer)</h2>
+    <ul>
+      <li>H1 : Une infrastructure de monitoring/logging centralisée existe déjà (stack type SIEM / Observabilité).</li>
+      <li>H2 : L’infra accepte des flux de logs via agents ou protocoles standards (ex. syslog, HTTP, gRPC, agents dédiés).</li>
+      <li>H3 : Les instances PostgreSQL et pgAdmin tournent sur des hôtes (VM, containers) où l’on peut déployer des agents de log.</li>
+      <li>H4 : Il existe une politique de rétention et de classification des logs (sécurité, audit, exploitation).</li>
+      <li>H5 : L’horloge des systèmes est synchronisée (NTP) pour garantir des <strong>timestamps cohérents</strong>.</li>
+    </ul>
+  </section>
+
+  <!-- Exigences business -->
+  <section id="br">
+    <h2>3. Exigences business (BR)</h2>
+    <ul>
+      <li>
+        <strong>BR-LOG-001 – Visibilité sur les opérations BD</strong><br />
+        Les équipes d’exploitation et de DBA doivent pouvoir analyser rapidement les problèmes de performance et d’erreurs PostgreSQL.
+      </li>
+      <li>
+        <strong>BR-LOG-002 – Traçabilité des actions d’administration</strong><br />
+        Les actions réalisées via pgAdmin doivent être traçables (qui, quand, sur quelle base/schéma), pour répondre aux exigences d’audit.
+      </li>
+      <li>
+        <strong>BR-LOG-003 – Détection des comportements anormaux</strong><br />
+        Les logs doivent permettre de détecter les connexions suspectes, échecs répétés d’authentification, ou activités anormales.
+      </li>
+      <li>
+        <strong>BR-LOG-004 – Conformité &amp; confidentialité</strong><br />
+        La collecte et la rétention des logs doivent respecter la Loi&nbsp;25 (minimisation des PII, durée limitée, accès contrôlé).
+      </li>
+    </ul>
+  </section>
+
+  <!-- Exigences fonctionnelles -->
+  <section id="fr">
+    <h2>4. Exigences fonctionnelles (FR)</h2>
+
+    <h3>4.1 Périmètre des logs</h3>
+    <ul>
+      <li>
+        <strong>FR-LOG-001 – Logs PostgreSQL à collecter</strong><br />
+        Les catégories suivantes doivent être collectées :
+        <ul>
+          <li>Connexions / déconnexions (succès, échecs).</li>
+          <li>Erreurs et warnings (erreurs SQL, deadlocks, timeouts).</li>
+          <li>Requêtes lentes (au-delà d’un seuil configuré, ex. &gt; 1&nbsp;s ou selon politique).</li>
+          <li>Événements de maintenance critiques (VACUUM, backup, changements de configuration).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-LOG-002 – Logs pgAdmin à collecter</strong><br />
+        Les catégories suivantes doivent être collectées :
+        <ul>
+          <li>Connexions utilisateur à pgAdmin (succès/échec).</li>
+          <li>Actions d’administration principales (création/suppression de BD, rôles, schémas, etc., si loggable).</li>
+          <li>Erreurs applicatives pgAdmin (échecs de connexion à PostgreSQL, timeouts, erreurs internes).</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.2 Collecte &amp; transport</h3>
+    <ul>
+      <li>
+        <strong>FR-LOG-003 – Agent de collecte</strong><br />
+        Un mécanisme de collecte (agent, sidecar, forwarder) doit être déployé sur les hôtes ou containers exécutant PostgreSQL et pgAdmin pour :
+        <ul>
+          <li>Lire les fichiers de logs ou flux standard (stdout/stderr).</li>
+          <li>Expédier les événements vers l’infrastructure de monitoring.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-LOG-004 – Acheminement vers l’infra de monitoring</strong><br />
+        Les logs doivent être envoyés via un protocole supporté (ex. syslog, HTTP API, agent natif) vers les endpoints de l’infra de monitoring.
+      </li>
+      <li>
+        <strong>FR-LOG-005 – Tolérance aux pannes de monitoring</strong><br />
+        En cas d’indisponibilité temporaire de la plateforme de monitoring, l’agent doit :
+        <ul>
+          <li>bufferiser les logs localement (dans la limite d’une capacité définie), ou</li>
+          <li>échouer de manière contrôlée sans impacter PostgreSQL/pgAdmin.</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.3 Normalisation &amp; enrichissement</h3>
+    <ul>
+      <li>
+        <strong>FR-LOG-006 – Format structuré</strong><br />
+        Les logs doivent être <strong>structurés</strong> (JSON ou équivalent) avec des champs clés standardisés, par exemple :
+        <ul>
+          <li><code>timestamp</code>, <code>level</code> (INFO/WARN/ERROR), <code>message</code>.</li>
+          <li><code>source</code> (postgresql, pgadmin).</li>
+          <li><code>host</code>, <code>instance</code>, <code>environment</code> (DEV/PPE/PRD).</li>
+          <li><code>database</code>, <code>schema</code>, <code>user</code> (pseudonymisé si nécessaire).</li>
+          <li><code>correlationId</code> / <code>requestId</code> si disponible.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-LOG-007 – Enrichissement par environnement</strong><br />
+        Chaque log doit être enrichi (par l’agent ou par la pipeline) avec :
+        <ul>
+          <li>Nom de l’environnement (DEV, PPE, PRD).</li>
+          <li>Nom logique du service (ex. <code>postgres-app1</code>, <code>pgadmin-shared</code>).</li>
+          <li>Zone (on-prem, cloud, sous-réseau, etc.) si pertinent.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-LOG-008 – Minimisation des PII</strong><br />
+        Les logs ne doivent pas contenir de données personnelles sensibles (ex. nom complet, adresse, contenu fonctionnel des requêtes) sauf nécessité justifiée et encadrée.
+      </li>
+    </ul>
+
+    <h3>4.4 Consultation, tableaux de bord &amp; alertes</h3>
+    <ul>
+      <li>
+        <strong>FR-LOG-009 – Tableaux de bord PostgreSQL</strong><br />
+        L’infra de monitoring doit fournir au minimum :
+        <ul>
+          <li>Un dashboard des erreurs et warnings PostgreSQL.</li>
+          <li>Un dashboard des connexions (taux de succès/échec, tentatives suspectes).</li>
+          <li>Des vues sur les requêtes lentes (top N, par base/schéma).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-LOG-010 – Tableaux de bord pgAdmin</strong><br />
+        Un dashboard doit permettre de visualiser :
+        <ul>
+          <li>Les connexions à pgAdmin (par utilisateur, par période).</li>
+          <li>Les erreurs pgAdmin et l’état de santé de l’outil.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-LOG-011 – Alertes</strong><br />
+        Des règles d’alerte doivent être configurées, par exemple :
+        <ul>
+          <li>Taux d’échec de connexion PostgreSQL ou pgAdmin anormalement élevé.</li>
+          <li>Nombre de requêtes lentes dépassant un seuil.</li>
+          <li>Erreurs critiques (ex. corruption, espace disque insuffisant, etc.).</li>
+        </ul>
+      </li>
+    </ul>
+  </section>
+
+  <!-- NFR -->
+  <section id="nfr">
+    <h2>5. Exigences non fonctionnelles (NFR)</h2>
+    <ul>
+      <li>
+        <strong>NFR-LOG-001 – Performance</strong><br />
+        La collecte et l’envoi des logs ne doivent pas dégrader significativement les performances de PostgreSQL ou pgAdmin.
+      </li>
+      <li>
+        <strong>NFR-LOG-002 – Sécurité</strong><br />
+        Le transport des logs vers l’infrastructure de monitoring doit être sécurisé (chiffrement en transit, authentification de l’agent).
+      </li>
+      <li>
+        <strong>NFR-LOG-003 – Rétention</strong><br />
+        La durée de conservation des logs doit être configurable selon les politiques internes (ex. sécurité vs exploitation), en respectant la Loi&nbsp;25.
+      </li>
+      <li>
+        <strong>NFR-LOG-004 – Disponibilité</strong><br />
+        En cas d’indisponibilité de la plateforme de monitoring, PostgreSQL et pgAdmin doivent continuer à fonctionner normalement.
+      </li>
+      <li>
+        <strong>NFR-LOG-005 – Scalabilité</strong><br />
+        La solution de collecte doit supporter l’augmentation du volume de logs (augmentation du trafic, ajout de nouvelles bases ou instances).
+      </li>
+    </ul>
+  </section>
+
+  <!-- Data -->
+  <section id="data">
+    <h2>6. Exigences de données (Data)</h2>
+    <ul>
+      <li>
+        <strong>DATA-LOG-001 – Schéma minimal des logs</strong><br />
+        Un schéma minimal de log doit être documenté (ex. champ, type, description) pour :
+        <ul>
+          <li>PostgreSQL (connexion, erreur, requête lente).</li>
+          <li>pgAdmin (connexion utilisateur, erreurs).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>DATA-LOG-002 – Classification des logs</strong><br />
+        Les logs doivent être classés (ex. exploitation, sécurité, audit) pour adapter les durées de rétention et les droits d’accès.
+      </li>
+      <li>
+        <strong>DATA-LOG-003 – PII &amp; anonymisation</strong><br />
+        Si certains logs contiennent des PII nécessaires, des mécanismes doivent être prévus pour :
+        <ul>
+          <li>Les pseudonymiser/anonymiser autant que possible.</li>
+          <li>Limiter l’accès aux seuls rôles autorisés (sécurité/audit).</li>
+        </ul>
+      </li>
+    </ul>
+  </section>
+
+  <!-- User stories -->
+  <section id="user-stories">
+    <h2>7. User Stories (pour Dev/DevOps AI)</h2>
+    <table border="1" cellpadding="6" cellspacing="0">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Titre</th>
+          <th>Description</th>
+          <th>Priorité</th>
+          <th>Système</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>US-LOG-001</td>
+          <td>Collecte logs PostgreSQL</td>
+          <td>En tant qu’exploitant, je veux que les logs PostgreSQL soient envoyés vers la plateforme de monitoring pour analyse.</td>
+          <td>Haute</td>
+          <td>PostgreSQL / Monitoring</td>
+        </tr>
+        <tr>
+          <td>US-LOG-002</td>
+          <td>Collecte logs pgAdmin</td>
+          <td>En tant que responsable sécurité, je veux centraliser les logs d’accès et d’erreurs pgAdmin pour audit.</td>
+          <td>Haute</td>
+          <td>pgAdmin / Monitoring</td>
+        </tr>
+        <tr>
+          <td>US-LOG-003</td>
+          <td>Format structuré &amp; enrichi</td>
+          <td>En tant que Data/Monitoring Engineer, je veux que les logs soient en JSON structuré, enrichis avec l’environnement et l’instance.</td>
+          <td>Moyenne</td>
+          <td>Collecteur / Pipeline</td>
+        </tr>
+        <tr>
+          <td>US-LOG-004</td>
+          <td>Dashboards et alertes</td>
+          <td>En tant qu’OPS, je veux des dashboards et des alertes basés sur les logs PostgreSQL/pgAdmin pour détecter les incidents.</td>
+          <td>Haute</td>
+          <td>Monitoring</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Gherkin -->
+  <section id="gherkin">
+    <h2>8. Scénarios Gherkin (acceptation)</h2>
+
+    <h3>8.1 Envoi des logs PostgreSQL</h3>
+    <pre><code>Scenario: Collecte et envoi des logs PostgreSQL vers l’infrastructure de monitoring
+  Given PostgreSQL est démarré et produit des logs de connexion et d’erreur
+  And L’agent de logs est configuré sur l’hôte de PostgreSQL
+  When Une erreur SQL critique se produit
+  Then Un événement de log correspondant est envoyé à l’infrastructure de monitoring
+  And L’événement est consultable via la console/log viewer centralisée
+</code></pre>
+
+    <h3>8.2 Envoi des logs pgAdmin</h3>
+    <pre><code>Scenario: Centralisation des logs pgAdmin
+  Given pgAdmin est déployé et accessible aux administrateurs
+  And L’agent de logs collecte les journaux pgAdmin
+  When Un administrateur se connecte à pgAdmin
+  Then Un événement de log "connexion réussie" est envoyé à l’infrastructure de monitoring
+  And L’événement contient le timestamp, la source "pgadmin" et l’environnement
+</code></pre>
+
+    <h3>8.3 Respect de la minimisation des PII</h3>
+    <pre><code>Scenario: Vérification de la minimisation des PII dans les logs
+  Given La collecte des logs PostgreSQL et pgAdmin est activée
+  When Je consulte un échantillon de logs dans la plateforme de monitoring
+  Then Je ne vois pas de données personnelles non nécessaires (ex. adresse, contenu métier)
+  And Les identifiants d’utilisateurs sensibles sont pseudonymisés ou limités
+</code></pre>
+
+    <h3>8.4 Alertes sur erreurs critiques</h3>
+    <pre><code>Scenario: Génération d’une alerte sur erreur critique PostgreSQL
+  Given Une règle d’alerte est configurée pour les erreurs PostgreSQL de niveau "ERROR" ou supérieur
+  And PostgreSQL envoie ses logs à l’infrastructure de monitoring
+  When Une erreur critique "out of disk space" est générée
+  Then Un événement de log est stocké dans la plateforme de monitoring
+  And Une alerte est déclenchée vers les canaux définis (ex. email, Teams, Pager)
+</code></pre>
+  </section>
+
+</main>
+</body>
+</html>
