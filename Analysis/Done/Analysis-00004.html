@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Spécification – Intégration de Keycloak dans l’infrastructure (PostgreSQL / pgAdmin / NGINX / Monitoring)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body>
+<main>
+  <h1>Spécification – Intégration de Keycloak dans l’infrastructure</h1>
+
+  <!-- Résumé exécutif -->
+  <section id="resume-executif">
+    <h2>Résumé exécutif</h2>
+    <p>
+      Cette spécification décrit l’intégration de <strong>Keycloak</strong> comme fournisseur d’identité et de gestion des accès (IdP)
+      au sein de l’infrastructure existante : <strong>PostgreSQL</strong>, <strong>pgAdmin</strong>, <strong>NGINX</strong> (reverse proxy)
+      et <strong>monitoring</strong>.
+    </p>
+    <p>
+      L’objectif est de centraliser l’authentification (SSO), la gestion des rôles et des permissions, et de renforcer la sécurité
+      et la conformité (Loi&nbsp;25, exigences internes), tout en gardant une intégration simple pour les admins (pgAdmin) et les outils
+      de supervision (Grafana, plateformes de logs).
+    </p>
+    <p>
+      Keycloak deviendra la brique d’<strong>Identity &amp; Access Management</strong> pour les composants exposés via NGINX
+      (pgAdmin, éventuellement Grafana, consoles internes), avec journalisation des événements de sécurité vers l’infra de monitoring.
+    </p>
+  </section>
+
+  <!-- Contexte & objectifs -->
+  <section id="contexte-objectifs">
+    <h2>1. Contexte &amp; objectifs</h2>
+
+    <h3>Contexte</h3>
+    <ul>
+      <li>Infra existante avec PostgreSQL et pgAdmin derrière un reverse proxy NGINX.</li>
+      <li>Logs PostgreSQL/pgAdmin déjà envoyés vers une infrastructure de monitoring centralisée.</li>
+      <li>Besoins croissants en <strong>SSO</strong>, gestion centralisée des rôles et durcissement des accès administratifs.</li>
+    </ul>
+
+    <h3>Objectifs</h3>
+    <ul>
+      <li>O1 – Introduire <strong>Keycloak</strong> comme IdP central pour les services d’administration (pgAdmin, etc.).</li>
+      <li>O2 – Offrir un <strong>SSO</strong> cohérent et sécurisé aux administrateurs et opérateurs.</li>
+      <li>O3 – Centraliser la gestion des rôles et des groupes (RBAC) pour les accès aux outils d’admin BD et de monitoring.</li>
+      <li>O4 – Améliorer la traçabilité des connexions (qui se connecte, quand, à quoi) en cohérence avec la Loi&nbsp;25.</li>
+    </ul>
+  </section>
+
+  <!-- Hypothèses -->
+  <section id="hypotheses">
+    <h2>2. Hypothèses (à confirmer)</h2>
+    <ul>
+      <li>H1 : Keycloak sera déployé sur la même infra (cluster de containers, VM, ou Kubernetes) que les autres composants.</li>
+      <li>H2 : NGINX supporte les intégrations OIDC/OAuth2/OpenID Connect (via modules ou sidecar auth).</li>
+      <li>H3 : L’orga dispose d’une source d’identités (AD/LDAP/Entra ID) pouvant être intégrée à Keycloak en tant qu’identity provider.</li>
+      <li>H4 : Les utilisateurs administratifs (DBA, DevOps, OPS) sont clairement identifiés et peuvent être mappés à des <strong>groupes Keycloak</strong>.</li>
+      <li>H5 : L’infra de monitoring peut recevoir des logs de sécurité supplémentaires (logs Keycloak, NGINX auth, etc.).</li>
+    </ul>
+  </section>
+
+  <!-- Exigences business -->
+  <section id="br">
+    <h2>3. Exigences business (BR)</h2>
+    <ul>
+      <li>
+        <strong>BR-KC-001 – Sécurité renforcée des accès admin</strong><br />
+        Les accès aux consoles sensibles (pgAdmin, éventuellement Grafana et autres outils) doivent être protégés par une
+        authentification centralisée, robuste et traçable.
+      </li>
+      <li>
+        <strong>BR-KC-002 – Expérience utilisateur unifiée (SSO)</strong><br />
+        Les admins doivent pouvoir se connecter une seule fois (SSO) pour accéder aux différents outils d’admin autorisés.
+      </li>
+      <li>
+        <strong>BR-KC-003 – Gouvernance des rôles</strong><br />
+        Les permissions doivent être gérées de façon centralisée via des groupes/rôles Keycloak, et non individuellement dans chaque outil.
+      </li>
+      <li>
+        <strong>BR-KC-004 – Conformité &amp; traçabilité</strong><br />
+        Les événements de connexion/déconnexion et d’échec d’authentification doivent être journalisés pour répondre aux besoins d’audit et de conformité.
+      </li>
+    </ul>
+  </section>
+
+  <!-- Exigences fonctionnelles -->
+  <section id="fr">
+    <h2>4. Exigences fonctionnelles (FR)</h2>
+
+    <h3>4.1 Déploiement &amp; exposition de Keycloak</h3>
+    <ul>
+      <li>
+        <strong>FR-KC-001 – Instance Keycloak dédiée</strong><br />
+        Une instance Keycloak doit être déployée pour gérer l’authentification des outils d’administration de l’infra BD et de monitoring.
+      </li>
+      <li>
+        <strong>FR-KC-002 – URL d’accès Keycloak</strong><br />
+        Keycloak doit être accessible via une URL claire, par exemple :
+        <ul>
+          <li><code>https://auth.intra.mondomaine.local/</code>, ou</li>
+          <li><code>https://keycloak.mondomaine.local/</code>.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-KC-003 – Intégration NGINX &rarr; Keycloak</strong><br />
+        NGINX doit être configuré comme <strong>client OIDC/OAuth2</strong> de Keycloak ou utiliser un module d’auth externe
+        afin de rediriger vers Keycloak pour l’authentification des ressources protégées (ex. <code>/pgadmin/</code>, <code>/grafana/</code>).
+      </li>
+    </ul>
+
+    <h3>4.2 Realms, clients et rôles Keycloak</h3>
+    <ul>
+      <li>
+        <strong>FR-KC-004 – Realm dédié</strong><br />
+        Un <strong>realm Keycloak</strong> dédié à l’infra (ex. <code>infra-admin</code>) doit être créé pour isoler la configuration.
+      </li>
+      <li>
+        <strong>FR-KC-005 – Clients Keycloak</strong><br />
+        Des clients Keycloak doivent être créés pour chaque application intégrée, par exemple :
+        <ul>
+          <li><code>pgadmin-client</code></li>
+          <li><code>grafana-client</code> (si Grafana est aussi intégré)</li>
+          <li>éventuellement <code>nginx-admin-proxy</code> ou équivalent</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-KC-006 – Rôles &amp; groupes</strong><br />
+        Des rôles et/ou groupes doivent être définis, par exemple :
+        <ul>
+          <li><code>ROLE_DBA</code></li>
+          <li><code>ROLE_DEVOPS</code></li>
+          <li><code>ROLE_READONLY_MONITORING</code></li>
+        </ul>
+        Ces rôles doivent être utilisables pour contrôler l’accès aux applications cibles.
+      </li>
+    </ul>
+
+    <h3>4.3 Intégration avec pgAdmin (via NGINX)</h3>
+    <ul>
+      <li>
+        <strong>FR-KC-007 – Protection de /pgadmin/</strong><br />
+        L’URL exposant pgAdmin (ex. <code>https://intra.mondomaine.local/pgadmin/</code>) doit être protégée par une
+        authentification Keycloak (SSO), via NGINX comme point d’auth.
+      </li>
+      <li>
+        <strong>FR-KC-008 – Mapping des rôles</strong><br />
+        L’accès à pgAdmin doit être conditionné à des rôles/grp Keycloak (ex. <code>ROLE_DBA</code>), via des règles NGINX
+        (ou configuration pgAdmin si intégré au SSO).
+      </li>
+      <li>
+        <strong>FR-KC-009 – Gestion de la session</strong><br />
+        La session utilisateur doit être gérée par Keycloak (token OIDC) avec redirection vers la page de login Keycloak si la session est expirée.
+      </li>
+    </ul>
+
+    <h3>4.4 Intégration avec les autres composants (optionnel/évolutif)</h3>
+    <ul>
+      <li>
+        <strong>FR-KC-010 – Intégration avec Grafana</strong><br />
+        Si Grafana est présent, il doit pouvoir être configuré comme <strong>client OIDC Keycloak</strong> pour bénéficier du SSO et
+        des rôles centralisés.
+      </li>
+      <li>
+        <strong>FR-KC-011 – Intégration avec la plateforme de monitoring</strong><br />
+        Si la plateforme de monitoring offre une interface Web d’administration, celle-ci doit également pouvoir s’intégrer à Keycloak pour harmoniser les accès.
+      </li>
+    </ul>
+
+    <h3>4.5 Journalisation &amp; audit</h3>
+    <ul>
+      <li>
+        <strong>FR-KC-012 – Logs Keycloak vers monitoring</strong><br />
+        Les logs d’authentification Keycloak (succès, échecs, verrous de compte, etc.) doivent être envoyés vers l’infra de monitoring.
+      </li>
+      <li>
+        <strong>FR-KC-013 – Corrélation des événements</strong><br />
+        Les logs Keycloak doivent permettre la corrélation avec les logs NGINX, pgAdmin, PostgreSQL via des champs communs
+        (timestamp, host, userId/subjectId anonymisé ou pseudonymisé si nécessaire).
+      </li>
+      <li>
+        <strong>FR-KC-014 – Événements de sécurité</strong><br />
+        Les événements de sécurité (ex. multiples échecs de login, comptes désactivés) doivent pouvoir être filtrés et faire l’objet d’alertes.
+      </li>
+    </ul>
+  </section>
+
+  <!-- NFR -->
+  <section id="nfr">
+    <h2>5. Exigences non fonctionnelles (NFR)</h2>
+    <ul>
+      <li>
+        <strong>NFR-KC-001 – Disponibilité</strong><br />
+        Keycloak doit être dimensionné et configuré pour assurer une disponibilité suffisante pour les besoins d’administration (ex. &gt; 99&nbsp;% en heures ouvrables).
+      </li>
+      <li>
+        <strong>NFR-KC-002 – Performance</strong><br />
+        Les redirections d’auth OIDC ne doivent pas dégrader significativement l’expérience utilisateur (temps de login acceptable).
+      </li>
+      <li>
+        <strong>NFR-KC-003 – Sécurité</strong><br />
+        Les communications entre NGINX, Keycloak et les clients doivent être chiffrées (HTTPS/TLS) et les secrets clients conservés de manière sécurisée.
+      </li>
+      <li>
+        <strong>NFR-KC-004 – Résilience</strong><br />
+        La perte temporaire de Keycloak ne doit pas entraîner de corruption de sessions, et la reprise doit être automatique (haute dispo si nécessaire).
+      </li>
+      <li>
+        <strong>NFR-KC-005 – Conformité Loi&nbsp;25</strong><br />
+        Les informations personnelles utilisées pour l’authentification doivent être limitées au strict nécessaire, avec des politiques de rétention et d’accès configurées dans Keycloak.
+      </li>
+    </ul>
+  </section>
+
+  <!-- Data -->
+  <section id="data">
+    <h2>6. Exigences de données (Data)</h2>
+    <ul>
+      <li>
+        <strong>DATA-KC-001 – Attributs d’identité</strong><br />
+        Les attributs transmis dans les tokens OIDC (ID token / access token) doivent être limités :
+        <ul>
+          <li>Identifiant technique (sub, userId).</li>
+          <li>Rôles / groupes (ex. <code>ROLE_DBA</code>, <code>ROLE_DEVOPS</code>).</li>
+          <li>Éventuellement email professionnel si nécessaire pour l’audit (à valider en conformité).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>DATA-KC-002 – Mapping des rôles</strong><br />
+        Un mapping documenté doit exister entre :
+        <ul>
+          <li>Les rôles/groupes Keycloak.</li>
+          <li>Les permissions dans pgAdmin, Grafana, et autres outils (ex. admin, read-only).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>DATA-KC-003 – Logs d’authentification</strong><br />
+        Les logs Keycloak doivent contenir au minimum :
+        <ul>
+          <li><code>timestamp</code>, <code>userId/sub</code>, <code>clientId</code>, <code>result</code> (success/failure).</li>
+          <li>Adresse IP source (si pertinent pour la sécurité).</li>
+          <li>Code d’erreur en cas d’échec (sans contenir de PII inutile).</li>
+        </ul>
+      </li>
+    </ul>
+  </section>
+
+  <!-- User stories -->
+  <section id="user-stories">
+    <h2>7. User Stories (pour Dev/DevOps AI)</h2>
+    <table border="1" cellpadding="6" cellspacing="0">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Titre</th>
+          <th>Description</th>
+          <th>Priorité</th>
+          <th>Système</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>US-KC-001</td>
+          <td>Déployer Keycloak</td>
+          <td>En tant que DevOps, je veux déployer une instance Keycloak pour gérer l’authentification des outils d’admin.</td>
+          <td>Haute</td>
+          <td>Keycloak</td>
+        </tr>
+        <tr>
+          <td>US-KC-002</td>
+          <td>Protéger pgAdmin par Keycloak</td>
+          <td>En tant que DBA, je veux accéder à pgAdmin via SSO Keycloak pour sécuriser mes connexions.</td>
+          <td>Haute</td>
+          <td>NGINX / pgAdmin / Keycloak</td>
+        </tr>
+        <tr>
+          <td>US-KC-003</td>
+          <td>Gérer les rôles centraux</td>
+          <td>En tant que responsable sécurité, je veux centraliser les rôles (DBA, DevOps, lecture seule) dans Keycloak.</td>
+          <td>Haute</td>
+          <td>Keycloak</td>
+        </tr>
+        <tr>
+          <td>US-KC-004</td>
+          <td>Envoyer les logs Keycloak au monitoring</td>
+          <td>En tant qu’OPS, je veux envoyer les logs d’authentification Keycloak vers la plateforme de monitoring pour audit et alertes.</td>
+          <td>Moyenne</td>
+          <td>Keycloak / Monitoring</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Gherkin -->
+  <section id="gherkin">
+    <h2>8. Scénarios Gherkin (acceptation)</h2>
+
+    <h3>8.1 SSO vers pgAdmin via Keycloak</h3>
+    <pre><code>Scenario: Accès à pgAdmin via SSO Keycloak
+  Given Keycloak est déployé et accessible à "https://auth.intra.mondomaine.local/"
+  And Un client "pgadmin-client" est configuré dans le realm "infra-admin"
+  And NGINX protège l’URL "https://intra.mondomaine.local/pgadmin/" via OIDC Keycloak
+  And Je suis un utilisateur avec le rôle "ROLE_DBA" dans Keycloak
+  When J’ouvre l’URL "https://intra.mondomaine.local/pgadmin/"
+  Then Je suis redirigé vers la page de login Keycloak si je ne suis pas déjà authentifié
+  And Après authentification réussie, l’interface pgAdmin s’affiche
+</code></pre>
+
+    <h3>8.2 Refus d’accès pour utilisateur sans rôle</h3>
+    <pre><code>Scenario: Refus d’accès à pgAdmin pour un utilisateur sans rôle adéquat
+  Given NGINX protège "https://intra.mondomaine.local/pgadmin/" via OIDC Keycloak
+  And Je suis authentifié dans Keycloak sans le rôle "ROLE_DBA"
+  When J’essaie d’accéder à "https://intra.mondomaine.local/pgadmin/"
+  Then L’accès m’est refusé
+  And Je vois un message indiquant que je ne suis pas autorisé
+</code></pre>
+
+    <h3>8.3 Logs d’authentification Keycloak envoyés au monitoring</h3>
+    <pre><code>Scenario: Journaux d’authentification Keycloak dans l’infra de monitoring
+  Given Keycloak produit des logs d’authentification
+  And Un agent ou connecteur envoie ces logs vers la plateforme de monitoring
+  When Un utilisateur se connecte à pgAdmin via Keycloak
+  Then Un événement de log Keycloak "login success" est présent dans la plateforme de monitoring
+  And L’événement contient le timestamp, le clientId, le userId et l’environnement
+</code></pre>
+
+    <h3>8.4 Alerte sur échecs répétés de connexion</h3>
+    <pre><code>Scenario: Alerte en cas d’échecs répétés de connexion
+  Given Une règle d’alerte est configurée sur l’infra de monitoring pour les échecs d’authentification Keycloak
+  And Un utilisateur ou attaquant tente de se connecter avec de mauvais identifiants plusieurs fois
+  When Le nombre d’échecs dépasse le seuil configuré (par exemple 5 en 5 minutes)
+  Then Une alerte est générée vers les canaux définis (email, Teams, etc.)
+</code></pre>
+  </section>
+
+</main>
+</body>
+</html>

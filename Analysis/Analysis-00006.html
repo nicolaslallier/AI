@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Spécification – Intégration des consoles (Grafana, pgAdmin, Keycloak, Tempo, Loki, Prometheus) dans le front-end SPA</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body>
+<main>
+  <h1>Spécification – Intégration des consoles (Grafana, pgAdmin, Keycloak, Tempo, Loki, Prometheus) dans le front-end SPA</h1>
+
+  <!-- Résumé exécutif -->
+  <section id="resume-executif">
+    <h2>Résumé exécutif</h2>
+    <p>
+      Cette analyse décrit comment intégrer, dans le <strong>front-end micro front end SPA</strong>, les consoles suivantes 
+      de façon cohérente avec Grafana : <strong>pgAdmin</strong>, <strong>Keycloak</strong>, <strong>Tempo</strong>, 
+      <strong>Loki</strong> et <strong>Prometheus</strong>.
+    </p>
+    <p>
+      Chaque console est accessible via une <strong>entrée de menu</strong> dédiée, s’affiche dans la zone de contenu centrale
+      (shell conservé : header, menu, footer) et est protégée par <strong>Keycloak/SSO</strong> et le reverse proxy (NGINX).
+    </p>
+    <p>
+      L’objectif est de créer un “hub” d’outils d’admin/observabilité entièrement intégré au front SPA, avec gestion des rôles,
+      UX homogène, gestion des erreurs et conformité (sécurité, Loi&nbsp;25).
+    </p>
+  </section>
+
+  <!-- Contexte & objectifs -->
+  <section id="contexte-objectifs">
+    <h2>1. Contexte &amp; objectifs</h2>
+
+    <h3>Contexte</h3>
+    <ul>
+      <li>Front-end existant en <strong>SPA micro front end</strong> avec intégration déjà prévue/pensée pour Grafana.</li>
+      <li>Backend et consoles d’admin exposés derrière un <strong>reverse proxy NGINX</strong> et sécurisés via <strong>Keycloak</strong>.</li>
+      <li>Stack d’observabilité : Grafana, Tempo (traces), Loki (logs), Prometheus (metrics).</li>
+      <li>Admin BD : pgAdmin, Console IAM : Keycloak admin console.</li>
+    </ul>
+
+    <h3>Objectifs</h3>
+    <ul>
+      <li>O1 – Offrir un point d’entrée unique dans le front vers toutes les consoles : Grafana, pgAdmin, Keycloak, Tempo, Loki, Prometheus.</li>
+      <li>O2 – Conserver le shell SPA (header, menu, layout) pour toutes ces vues, comme pour Grafana.</li>
+      <li>O3 – Appliquer une gestion des rôles fine (Keycloak) pour contrôler l’accès à chaque console.</li>
+      <li>O4 – Gérer les erreurs (indisponibilité d’une console) sans casser le reste du front.</li>
+    </ul>
+  </section>
+
+  <!-- Hypothèses -->
+  <section id="hypotheses">
+    <h2>2. Hypothèses (à confirmer)</h2>
+    <ul>
+      <li>H1 : Toutes les consoles sont déjà accessibles derrière NGINX (URL internes du type <code>http(s)://.../grafana/</code>, <code>/pgadmin/</code>, <code>/keycloak/</code>, <code>/prometheus/</code>, <code>/loki/</code>, <code>/tempo/</code>).</li>
+      <li>H2 : L’authentification et l’autorisation sont gérées via Keycloak (SSO), soit directement (OIDC) soit via NGINX.</li>
+      <li>H3 : Le front-end SPA dispose d’un système de routing permettant d’ajouter des routes comme <code>/grafana</code>, <code>/pgadmin</code>, <code>/keycloak</code>, <code>/metrics</code>, <code>/logs</code>, <code>/traces</code>.</li>
+      <li>H4 : Les rôles Keycloak nécessaires (ex. <code>ROLE_DBA</code>, <code>ROLE_DEVOPS</code>, <code>ROLE_SECOPS</code>) sont ou seront disponibles.</li>
+      <li>H5 : Le pattern choisi pour Grafana (iframe ou micro front end distant) est réutilisable pour les autres consoles.</li>
+    </ul>
+  </section>
+
+  <!-- Exigences business -->
+  <section id="br">
+    <h2>3. Exigences business (BR)</h2>
+    <ul>
+      <li>
+        <strong>BR-MENU-001 – Hub d’admin/observabilité unique</strong><br />
+        Les équipes (DBA, DevOps, SecOps, Architectes) doivent disposer d’un point d’accès central, via le front, à l’ensemble des consoles techniques.
+      </li>
+      <li>
+        <strong>BR-MENU-002 – Expérience utilisateur homogène</strong><br />
+        L’accès aux consoles doit se faire sans “casser” l’expérience (même shell, même thème, navigation cohérente).
+      </li>
+      <li>
+        <strong>BR-MENU-003 – Sécurité &amp; conformité</strong><br />
+        L’accès à chaque console doit être contrôlé par les rôles Keycloak et les règles NGINX, avec traçabilité des accès.
+      </li>
+    </ul>
+  </section>
+
+  <!-- Exigences fonctionnelles -->
+  <section id="fr">
+    <h2>4. Exigences fonctionnelles (FR)</h2>
+
+    <h3>4.1 Menu &amp; navigation front-end</h3>
+    <ul>
+      <li>
+        <strong>FR-MENU-001 – Section “Administration / Observabilité”</strong><br />
+        Le front doit proposer une section de menu regroupant les consoles techniques, par exemple :
+        <ul>
+          <li>“Monitoring &amp; Admin” ou “Ops / Observabilité”.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-MENU-002 – Entrées de menu dédiées</strong><br />
+        Sous cette section, les entrées suivantes doivent être disponibles (selon les rôles) :
+        <ul>
+          <li><strong>Grafana</strong> – dashboards.</li>
+          <li><strong>pgAdmin</strong> – administration BD.</li>
+          <li><strong>Keycloak</strong> – gestion IAM.</li>
+          <li><strong>Prometheus</strong> – metrics / status.</li>
+          <li><strong>Loki</strong> – logs.</li>
+          <li><strong>Tempo</strong> – traces distribuées.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-MENU-003 – Routes SPA associées</strong><br />
+        Chaque entrée de menu doit correspondre à une route SPA :
+        <ul>
+          <li><code>/grafana</code></li>
+          <li><code>/pgadmin</code></li>
+          <li><code>/keycloak</code></li>
+          <li><code>/metrics</code> (Prometheus)</li>
+          <li><code>/logs</code> (Loki)</li>
+          <li><code>/traces</code> (Tempo)</li>
+        </ul>
+        La navigation doit être <strong>sans rechargement complet</strong> de la page (SPA).
+      </li>
+      <li>
+        <strong>FR-MENU-004 – Conservation du shell</strong><br />
+        Pour chaque route ci-dessus, le shell front (header, menu, footer) doit rester affiché ; seule la zone de contenu centrale change pour afficher la console ciblée.
+      </li>
+    </ul>
+
+    <h3>4.2 Intégration des consoles (iframe / micro front end)</h3>
+    <ul>
+      <li>
+        <strong>FR-CONSOLE-001 – Mode d’intégration</strong><br />
+        Chaque console doit être intégrée dans le front via :
+        <ul>
+          <li>un <code>&lt;iframe&gt;</code> cible (URL NGINX : ex. <code>/proxy/grafana/</code>, <code>/proxy/pgadmin/</code>), ou</li>
+          <li>un micro front end distant (module federation/autre) si l’architecture le supporte, en conservant le même comportement UX.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-CONSOLE-002 – Comportement de chargement</strong><br />
+        Lors du chargement d’une console dans la zone centrale, le front doit :
+        <ul>
+          <li>afficher un indicateur de chargement (spinner, message “Chargement de &lt;Console&gt;…”)</li>
+          <li>masquer l’indicateur dès que la console est prête ou l’iframe a terminé de charger.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-CONSOLE-003 – Gestion des erreurs</strong><br />
+        En cas d’indisponibilité (timeout, HTTP 4xx/5xx) d’une console :
+        <ul>
+          <li>afficher un message d’erreur lisible (ex. “La console &lt;Nom&gt; est temporairement indisponible.”) ;</li>
+          <li>ne pas casser les autres menus ni le reste de l’application.</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.3 Rôles &amp; contrôle d’accès UI</h3>
+    <ul>
+      <li>
+        <strong>FR-ROLE-001 – Visibilité des menus selon les rôles</strong><br />
+        La visibilité de chaque entrée de menu doit dépendre des rôles Keycloak de l’utilisateur, par exemple :
+        <ul>
+          <li><strong>pgAdmin</strong> : <code>ROLE_DBA</code>, <code>ROLE_DB_ADMIN</code>.</li>
+          <li><strong>Keycloak</strong> : <code>ROLE_IAM_ADMIN</code> ou rôle équivalent très restreint.</li>
+          <li><strong>Grafana / Loki / Tempo / Prometheus</strong> : rôles <code>ROLE_DEVOPS</code>, <code>ROLE_SECOPS</code>, <code>ROLE_OBS_VIEWER</code> selon granularité.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-ROLE-002 – Protection des routes</strong><br />
+        Les routes correspondantes (<code>/pgadmin</code>, <code>/keycloak</code>, etc.) doivent être protégées par des <em>guards</em> côté front :
+        <ul>
+          <li>si non authentifié : redirection vers le login Keycloak ;</li>
+          <li>si authentifié mais rôle insuffisant : message “non autorisé” et redirection éventuelle vers la page d’accueil.</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.4 Authentification & SSO (Keycloak)</h3>
+    <ul>
+      <li>
+        <strong>FR-AUTH-001 – Session front & consoles cohérente</strong><br />
+        Le front doit s’assurer que l’utilisateur est authentifié via Keycloak avant d’afficher les consoles intégrées :
+        <ul>
+          <li>si la session front est valide (tokens Keycloak), l’accès aux iframes proxifiées doit fonctionner sans relogin ;</li>
+          <li>dans le cas contraire, redirection vers Keycloak (SSO) avant d’accéder à la route de la console.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-AUTH-002 – Logout unifié</strong><br />
+        Une action “Déconnexion” dans le front doit :
+        <ul>
+          <li>supprimer les tokens locaux ;</li>
+          <li>appeler le logout Keycloak ;</li>
+          <li>invalider de facto l’accès aux consoles intégrées.</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.5 Navigation & ergonomie</h3>
+    <ul>
+      <li>
+        <strong>FR-UX-001 – Indicateur de contexte</strong><br />
+        La page doit indiquer clairement dans quel outil l’utilisateur se trouve (titre, breadcrumb, icône).
+      </li>
+      <li>
+        <strong>FR-UX-002 – Retour rapide au front</strong><br />
+        L’utilisateur doit pouvoir revenir à la page d’accueil ou à d’autres sections du front en un clic, sans blocage par l’iframe.
+      </li>
+    </ul>
+  </section>
+
+  <!-- NFR -->
+  <section id="nfr">
+    <h2>5. Exigences non fonctionnelles (NFR)</h2>
+    <ul>
+      <li>
+        <strong>NFR-MENU-001 – Performance</strong><br />
+        Le chargement de la route (shell + conteneur de la console) doit rester rapide (&lt; ~2&nbsp;s), même si la console interne peut prendre plus de temps.
+      </li>
+      <li>
+        <strong>NFR-MENU-002 – Sécurité</strong><br />
+        Aucun token ou secret ne doit être exposé dans les URLs ou logs du front ; les consoles sont protégées par NGINX/Keycloak.
+      </li>
+      <li>
+        <strong>NFR-MENU-003 – Résilience</strong><br />
+        L’indisponibilité d’une console ne doit pas rendre l’application front indisponible : seul le panneau central de la console concernée affiche une erreur.
+      </li>
+      <li>
+        <strong>NFR-MENU-004 – Compatibilité</strong><br />
+        L’UX doit fonctionner sur les navigateurs supportés (Edge/Chromium, etc.) en tenant compte des politiques de sécurité (CSP, X-Frame-Options, etc. à ajuster côté NGINX/consoles).
+      </li>
+    </ul>
+  </section>
+
+  <!-- Data -->
+  <section id="data">
+    <h2>6. Exigences de données (Data)</h2>
+    <ul>
+      <li>
+        <strong>DATA-MENU-001 – Configuration des URLs par environnement</strong><br />
+        Les URLs internes des consoles (cibles des iframes ou micro front ends) doivent être configurables par environnement (DEV, PPE, PRD) via une configuration centralisée.
+      </li>
+      <li>
+        <strong>DATA-MENU-002 – Mapping rôles & menus</strong><br />
+        Un mapping (documentation/config) doit définir, pour chaque entrée de menu, la liste des rôles Keycloak autorisés.
+      </li>
+      <li>
+        <strong>DATA-MENU-003 – Pas de données métier</strong><br />
+        Le front ne doit pas stocker ni manipuler de données métier sensibles dans ces écrans – ce sont des consoles techniques ; seules les infos d’identité (id, rôles) sont utilisées pour l’accès.
+      </li>
+    </ul>
+  </section>
+
+  <!-- User stories -->
+  <section id="user-stories">
+    <h2>7. User Stories (pour Dev AI)</h2>
+    <table border="1" cellpadding="6" cellspacing="0">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Titre</th>
+          <th>Description</th>
+          <th>Priorité</th>
+          <th>Système</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>US-HUB-001</td>
+          <td>Menu hub d’admin/observabilité</td>
+          <td>En tant qu’OPS/DBA, je veux un menu “Monitoring &amp; Admin” pour accéder à toutes les consoles techniques depuis le front.</td>
+          <td>Haute</td>
+          <td>Front-end SPA</td>
+        </tr>
+        <tr>
+          <td>US-HUB-002</td>
+          <td>Intégration pgAdmin</td>
+          <td>En tant que DBA, je veux ouvrir pgAdmin dans le front (route /pgadmin) avec le shell conservé.</td>
+          <td>Haute</td>
+          <td>Front-end SPA</td>
+        </tr>
+        <tr>
+          <td>US-HUB-003</td>
+          <td>Intégration Keycloak console</td>
+          <td>En tant qu’admin IAM, je veux ouvrir la console Keycloak depuis le front, seulement si j’ai les rôles adéquats.</td>
+          <td>Haute</td>
+          <td>Front-end SPA</td>
+        </tr>
+        <tr>
+          <td>US-HUB-004</td>
+          <td>Intégration Loki/Tempo/Prometheus</td>
+          <td>En tant que DevOps, je veux accéder aux écrans logs (Loki), traces (Tempo) et metrics (Prometheus) via le front comme pour Grafana.</td>
+          <td>Haute</td>
+          <td>Front-end SPA</td>
+        </tr>
+        <tr>
+          <td>US-HUB-005</td>
+          <td>Contrôle d’accès par rôles</td>
+          <td>En tant que responsable sécurité, je veux que chaque console soit visible et accessible seulement pour les rôles autorisés.</td>
+          <td>Haute</td>
+          <td>Front-end SPA / Keycloak</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Gherkin -->
+  <section id="gherkin">
+    <h2>8. Scénarios Gherkin (acceptation)</h2>
+
+    <h3>8.1 Accès à pgAdmin via le front</h3>
+    <pre><code>Scenario: Accès à pgAdmin pour un utilisateur DBA
+  Given Je suis authentifié via Keycloak avec le rôle "ROLE_DBA"
+  And Je suis sur le front principal
+  When Je clique sur le menu "Monitoring &amp; Admin" puis "pgAdmin"
+  Then L’URL du navigateur devient "/pgadmin"
+  And Le shell (header, menu) reste affiché
+  And La zone centrale affiche pgAdmin via l’intégration prévue (iframe ou micro front end)
+</code></pre>
+
+    <h3>8.2 Accès refusé à pgAdmin sans rôle DBA</h3>
+    <pre><code>Scenario: Refus d’accès à pgAdmin pour un utilisateur sans rôle DBA
+  Given Je suis authentifié via Keycloak sans le rôle "ROLE_DBA"
+  When L’interface principale se charge
+  Then Le menu "pgAdmin" n’est pas visible dans la section "Monitoring &amp; Admin"
+  And Toute tentative d’accès direct à "/pgadmin" affiche un message "non autorisé"
+</code></pre>
+
+    <h3>8.3 Accès aux consoles Loki / Tempo / Prometheus</h3>
+    <pre><code>Scenario: Accès aux consoles de logs/traces/metrics
+  Given Je suis authentifié avec le rôle "ROLE_DEVOPS"
+  When Je clique sur "Logs (Loki)" dans la section "Monitoring &amp; Admin"
+  Then L’URL devient "/logs"
+  And La zone centrale affiche l’interface Loki intégrée
+
+  When Je clique sur "Traces (Tempo)"
+  Then L’URL devient "/traces"
+  And La zone centrale affiche l’interface Tempo intégrée
+
+  When Je clique sur "Metrics (Prometheus)"
+  Then L’URL devient "/metrics"
+  And La zone centrale affiche l’interface Prometheus intégrée
+</code></pre>
+
+    <h3>8.4 Indisponibilité d’une console</h3>
+    <pre><code>Scenario: Gestion de l’indisponibilité de Grafana (ou autre console)
+  Given La console Grafana n’est pas disponible (erreur HTTP ou timeout)
+  And Je clique sur "Grafana" dans le menu
+  When La route "/grafana" est chargée
+  Then Un message d’erreur lisible s’affiche dans la zone centrale
+  And Le shell reste fonctionnel
+  And Je peux naviguer vers les autres menus du front
+</code></pre>
+
+    <h3>8.5 SSO Keycloak et navigation entre consoles</h3>
+    <pre><code>Scenario: SSO entre front et consoles intégrées
+  Given Je suis authentifié via Keycloak dans le front
+  And Les consoles sont protégées par NGINX/Keycloak
+  When Je navigue successivement vers "/grafana", "/logs", "/metrics" et "/pgadmin"
+  Then Je n’ai pas besoin de ressaisir mes identifiants
+  And Chaque console s’ouvre dans la zone centrale avec le shell conservé
+</code></pre>
+  </section>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,301 @@
+╔════════════════════════════════════════════════════════════════════════════════════════╗
+║                          AI INFRASTRUCTURE ARCHITECTURE                                 ║
+╚════════════════════════════════════════════════════════════════════════════════════════╝
+
+                                    INTERNET / CLIENTS
+                                           │
+                                           │
+                    ┌──────────────────────┴──────────────────────┐
+                    │                                              │
+┌───────────────────▼────────────────────┐      ┌──────────────────▼─────────────────┐
+│     FRONTEND NETWORK (172.20.0.0/24)   │      │  MONITORING NETWORK (172.23.0.0/24) │
+│                                         │      │                                     │
+│  ┌──────────────┐    ┌──────────────┐  │      │  ┌──────────────┐                  │
+│  │   Grafana    │    │  Python API  │  │      │  │  Prometheus  │                  │
+│  │   :3000      │    │   :8000      │  │      │  │    :9090     │                  │
+│  └──────────────┘    └──────────────┘  │      │  └──────┬───────┘                  │
+│                                         │      │         │ Scrapes Metrics          │
+│  ┌──────────────┐                      │      │         │                          │
+│  │ Node.js API  │                      │      │  ┌──────▼───────────────────────┐  │
+│  │   :3001      │                      │      │  │  Exporters:                  │  │
+│  └──────────────┘                      │      │  │  - Node Exporter   :9100    │  │
+└─────────────────┬───────────────────────┘      │  │  - Postgres Exp    :9187    │  │
+                  │                              │  │  - Redis Exporter  :9121    │  │
+                  │                              │  └─────────────────────────────┘  │
+                  │                              └────────────────────────────────────┘
+                  │                                         │
+                  │                                         │ Monitors All Services
+┌─────────────────▼────────────────────┐                   │
+│     BACKEND NETWORK (172.21.0.0/24)  │◄──────────────────┘
+│                                       │
+│  ┌──────────────┐    ┌────────────┐  │
+│  │  RabbitMQ    │    │Elasticsearch│  │
+│  │  :5672       │    │   :9200    │  │
+│  │  Mgmt: 15672 │    │   :9300    │  │
+│  └──────┬───────┘    └────────────┘  │
+│         │                             │
+│         │ Message Queue               │
+│         │                             │
+└─────────┼─────────────────────────────┘
+          │
+          │
+┌─────────▼──────────────────────────┐
+│     DATA NETWORK (172.22.0.0/24)   │
+│                                     │
+│  ┌──────────────┐  ┌─────────────┐ │
+│  │ PostgreSQL   │  │   Redis     │ │
+│  │   :5432      │  │   :6379     │ │
+│  │              │  │             │ │
+│  │ - ACID DB    │  │ - Cache     │ │
+│  │ - Relational │  │ - Sessions  │ │
+│  │ - FTS        │  │ - Pub/Sub   │ │
+│  └──────────────┘  └─────────────┘ │
+│                                     │
+└─────────────────────────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+
+                              DATA FLOW PATTERNS
+
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  SYNCHRONOUS REQUEST FLOW (REST API)                                            │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+   Client
+     │
+     │ HTTP Request
+     ▼
+  Python/Node API
+     │
+     ├──────────────┐
+     │              │
+     ▼              ▼
+  Redis Cache    PostgreSQL
+  (Check)        (On Cache Miss)
+     │              │
+     │              │ Data
+     │◄─────────────┘
+     │
+     │ Update Cache
+     ▼
+  Response to Client
+
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  ASYNCHRONOUS TASK FLOW (Message Queue)                                         │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+   Client Request
+         │
+         ▼
+    API Service ──────► RabbitMQ ──────► Worker Service
+         │               Queue              │
+         │                                  ▼
+         │                           Process Task
+         │                                  │
+         ▼                                  ▼
+    Immediate                          PostgreSQL
+    Response                           (Store Result)
+                                           │
+                                           ▼
+                                     Notification
+                                      (Optional)
+
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  SEARCH FLOW (Full-Text Search)                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+   Client Search Query
+         │
+         ▼
+    API Service
+         │
+         ├──────────────┐
+         │              │
+         ▼              ▼
+  Elasticsearch    PostgreSQL
+  (FTS Query)      (Structured Query)
+         │              │
+         └──────┬───────┘
+                │
+                ▼
+         Merged Results
+                │
+                ▼
+         Client Response
+
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  EVENT-DRIVEN FLOW (Pub/Sub)                                                    │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+   Service A (Publisher)
+         │
+         │ Publish Event
+         ▼
+    RabbitMQ Exchange
+      (Topic/Fanout)
+         │
+    ┌────┼────┬─────────┐
+    │    │    │         │
+    ▼    ▼    ▼         ▼
+  Svc B Svc C Svc D  Svc E
+  (Subscriber Services)
+    │    │    │         │
+    └────┴────┴─────────┘
+         │
+         ▼
+    Parallel Processing
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+
+                           MONITORING & OBSERVABILITY
+
+═══════════════════════════════════════════════════════════════════════════════════
+
+                         ┌──────────────────────┐
+                         │    Grafana (UI)      │
+                         │  Dashboards & Alerts │
+                         └──────────┬───────────┘
+                                    │
+                                    │ Queries
+                                    ▼
+                         ┌──────────────────────┐
+                         │     Prometheus       │
+                         │  Metrics Database    │
+                         └──────────┬───────────┘
+                                    │
+                    ┌───────────────┼───────────────┐
+                    │               │               │
+                    ▼               ▼               ▼
+            ┌──────────────┐ ┌──────────┐ ┌──────────────┐
+            │  Exporters   │ │ Services │ │  Databases   │
+            │  - Node      │ │ /metrics │ │  Exporters   │
+            │  - Custom    │ │ Endpoint │ │  - PG, Redis │
+            └──────────────┘ └──────────┘ └──────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+
+                               SERVICE DEPENDENCIES
+
+═══════════════════════════════════════════════════════════════════════════════════
+
+                    Python Service          Node.js Service
+                         │                        │
+         ┌───────────────┼────────────────────────┼──────────────┐
+         │               │                        │              │
+         │               │                        │              │
+         ▼               ▼                        ▼              ▼
+   PostgreSQL         Redis                 RabbitMQ      Elasticsearch
+   (Primary DB)   (Cache/Session)          (Async Tasks)   (Search/FTS)
+         │               │                        │              │
+         │               │                        │              │
+         └───────────────┴────────────────────────┴──────────────┘
+                                    │
+                              Monitoring
+                         (Prometheus + Grafana)
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+
+                              STORAGE & PERSISTENCE
+
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  DOCKER VOLUMES (Named Volumes)                                                 │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  postgres_data         → /var/lib/postgresql/data          (Database)          │
+│  redis_data           → /data                              (Cache Persist)     │
+│  rabbitmq_data        → /var/lib/rabbitmq                  (Queue Persist)     │
+│  elasticsearch_data   → /usr/share/elasticsearch/data      (Search Index)      │
+│  prometheus_data      → /prometheus                         (Metrics DB)       │
+│  grafana_data         → /var/lib/grafana                   (Dashboards)        │
+│  python_venv          → /app/.venv                          (Python Deps)      │
+│  nodejs_modules       → /app/node_modules                   (Node Deps)        │
+│                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+
+                           SCALABILITY & HIGH AVAILABILITY
+
+═══════════════════════════════════════════════════════════════════════════════════
+
+Current Setup:                    Future Scaling:
+─────────────                     ───────────────
+
+  Load Balancer                     Load Balancer (HAProxy/Nginx)
+       │                                   │
+       │                            ┌──────┴──────┬──────────┐
+       ▼                            ▼             ▼          ▼
+   API Service                  API (x3)      API (x3)   API (x3)
+       │                            │             │          │
+       ▼                            └──────┬──────┴──────────┘
+   PostgreSQL                              ▼
+       │                            PostgreSQL Cluster
+       ▼                         (Primary + Read Replicas)
+    Redis                                  │
+       │                                   ▼
+       ▼                              Redis Cluster
+  RabbitMQ                           (Sentinel HA)
+       │                                   │
+       ▼                                   ▼
+ Elasticsearch                      RabbitMQ Cluster
+                                    (Multiple Nodes)
+                                           │
+                                           ▼
+                                   Elasticsearch Cluster
+                                    (3+ Node Cluster)
+
+
+═══════════════════════════════════════════════════════════════════════════════════
+
+                              KEY TECHNICAL DETAILS
+
+═══════════════════════════════════════════════════════════════════════════════════
+
+Networks:
+  • frontend-net:    172.20.0.0/24  (Client-facing)
+  • backend-net:     172.21.0.0/24  (Internal services)
+  • data-net:        172.22.0.0/24  (Data stores)
+  • monitoring-net:  172.23.0.0/24  (Observability)
+
+Resource Allocation:
+  • PostgreSQL:     2 CPU, 2GB RAM
+  • Elasticsearch:  2 CPU, 2GB RAM
+  • Redis:          1 CPU, 1GB RAM
+  • RabbitMQ:       1 CPU, 1GB RAM
+  • Services:       2 CPU, 1GB RAM each
+  • Monitoring:     1 CPU, 512MB RAM each
+
+Health Checks:
+  • Interval:       30 seconds
+  • Timeout:        10 seconds
+  • Retries:        3
+  • Start Period:   5 seconds
+
+Backup Schedule:
+  • PostgreSQL:     Daily at 2 AM
+  • Redis:          On-demand + periodic RDB
+  • Retention:      7 days (configurable)
+
+═══════════════════════════════════════════════════════════════════════════════════
+
+This architecture provides:
+  ✓ Scalability through horizontal scaling
+  ✓ Reliability through health checks and monitoring
+  ✓ Security through network isolation
+  ✓ Performance through caching and async processing
+  ✓ Observability through comprehensive metrics
+
+═══════════════════════════════════════════════════════════════════════════════════
+
