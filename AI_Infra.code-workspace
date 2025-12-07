@@ -5,6 +5,15 @@
 		},
 		{
 			"path": "."
+		},
+		{
+			"path": "../AI_Front"
+		},
+		{
+			"path": "../AI_Middle"
+		},
+		{
+			"path": "../AI_Backend"
 		}
 	],
 	"settings": {}

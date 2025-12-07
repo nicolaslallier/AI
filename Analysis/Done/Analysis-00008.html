@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Spécification – Intégration de la console MinIO dans le front-end SPA</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body>
+<main>
+  <h1>Spécification – Intégration de la console MinIO dans le front-end SPA</h1>
+
+  <!-- Résumé exécutif -->
+  <section id="resume-executif">
+    <h2>Résumé exécutif</h2>
+    <p>
+      Cette analyse décrit comment intégrer la <strong>console MinIO</strong> (UI d’administration du stockage objet)
+      dans le <strong>front-end micro front end SPA</strong>, de la même façon que Grafana, pgAdmin, Keycloak, etc.
+    </p>
+    <p>
+      L’objectif est d’ajouter une entrée de menu “MinIO” qui charge la console dans la zone de contenu centrale
+      (shell conservé : header, menu, footer), en s’appuyant sur NGINX comme reverse proxy et Keycloak pour le contrôle d’accès.
+    </p>
+    <p>
+      L’intégration doit respecter les exigences de sécurité (rôles, SSO, pas de secrets en clair), de conformité
+      (Loi&nbsp;25) et de résilience (gestion des erreurs si MinIO est indisponible), tout en étant suffisamment précise
+      pour que le Dev/DevOps AI génère le code front (route, menu, guard, composant d’intégration).
+    </p>
+  </section>
+
+  <!-- Contexte & objectifs -->
+  <section id="contexte-objectifs">
+    <h2>1. Contexte &amp; objectifs</h2>
+
+    <h3>Contexte</h3>
+    <ul>
+      <li>Front-end existant en <strong>SPA micro front end</strong> (shell + micro apps) avec intégration de Grafana et autres consoles.</li>
+      <li>Infra de stockage objet <strong>MinIO</strong> déjà déployée derrière <strong>NGINX</strong> (API S3 + console web).</li>
+      <li>Authentification centralisée via <strong>Keycloak</strong> pour les utilisateurs administratifs (DBA, DevOps, Ops, etc.).</li>
+      <li>Infra de monitoring (Grafana, Loki, Tempo, Prometheus) déjà en place.</li>
+    </ul>
+
+    <h3>Objectifs</h3>
+    <ul>
+      <li>O1 – Permettre l’accès à la <strong>console MinIO</strong> directement depuis le front-end, via une entrée de menu.</li>
+      <li>O2 – Conserver le shell SPA (header, menu, footer) lors de l’affichage de la console MinIO, comme pour Grafana.</li>
+      <li>O3 – Restreindre l’accès à la console MinIO à des rôles spécifiques (Keycloak) via guards front + règles NGINX.</li>
+      <li>O4 – Gérer proprement les erreurs (console inaccessible) sans casser le reste du front.</li>
+    </ul>
+  </section>
+
+  <!-- Hypothèses -->
+  <section id="hypotheses">
+    <h2>2. Hypothèses (à confirmer)</h2>
+    <ul>
+      <li>H1 : MinIO est exposé derrière NGINX via une URL interne du type <code>https://storage.intra.local/minio/</code>.</li>
+      <li>H2 : NGINX applique déjà ou appliquera l’authentification/autorisation via Keycloak (SSO) pour la console MinIO.</li>
+      <li>H3 : Le front dispose d’un router SPA et d’un mécanisme de guards (auth/rôles) déjà utilisé pour d’autres consoles.</li>
+      <li>H4 : Les rôles Keycloak nécessaires (ex. <code>ROLE_MINIO_ADMIN</code>, <code>ROLE_MINIO_READONLY</code>) seront définis.</li>
+      <li>H5 : Les politiques de sécurité (CSP, X-Frame-Options, etc.) côté NGINX/MinIO peuvent être ajustées pour autoriser l’intégration en <code>&lt;iframe&gt;</code> si cette option est retenue.</li>
+    </ul>
+  </section>
+
+  <!-- Exigences business -->
+  <section id="br">
+    <h2>3. Exigences business (BR)</h2>
+    <ul>
+      <li>
+        <strong>BR-MINIO-FE-001 – Hub d’administration unifié</strong><br />
+        Les équipes d’exploitation doivent pouvoir accéder à la console MinIO depuis le même hub d’admin/observabilité
+        que Grafana, pgAdmin, Keycloak, etc., pour réduire la fragmentation des outils.
+      </li>
+      <li>
+        <strong>BR-MINIO-FE-002 – Sécurité renforcée</strong><br />
+        L’accès à la console MinIO (stockage objet potentiellement sensible) doit être strictement limité à des profils autorisés,
+        avec traçabilité des accès.
+      </li>
+      <li>
+        <strong>BR-MINIO-FE-003 – Expérience utilisateur cohérente</strong><br />
+        L’utilisateur ne doit pas avoir l’impression de “sortir” du portail ; le shell et la navigation doivent rester uniformes.
+      </li>
+    </ul>
+  </section>
+
+  <!-- Exigences fonctionnelles -->
+  <section id="fr">
+    <h2>4. Exigences fonctionnelles (FR)</h2>
+
+    <h3>4.1 Menu &amp; navigation front-end</h3>
+    <ul>
+      <li>
+        <strong>FR-MINIO-FE-001 – Entrée de menu “MinIO”</strong><br />
+        Le front doit ajouter une entrée de menu “MinIO” (ou “Storage / MinIO”) dans la section “Monitoring &amp; Admin”
+        ou équivalent.
+      </li>
+      <li>
+        <strong>FR-MINIO-FE-002 – Route SPA dédiée</strong><br />
+        Le clic sur l’entrée de menu “MinIO” doit :
+        <ul>
+          <li>mettre à jour l’URL du navigateur vers une route SPA, par ex. <code>/minio</code> ;</li>
+          <li>charger la vue correspondante <strong>sans rechargement complet</strong> de la page (SPA).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-MINIO-FE-003 – Conservation du shell</strong><br />
+        Sur la route <code>/minio</code>, le shell global (header, menu, footer) doit rester affiché ; la console MinIO
+        s’affiche uniquement dans la zone de contenu centrale.
+      </li>
+    </ul>
+
+    <h3>4.2 Intégration de la console MinIO</h3>
+    <ul>
+      <li>
+        <strong>FR-MINIO-FE-004 – Mode d’intégration</strong><br />
+        La console MinIO doit être intégrée dans le front :
+        <ul>
+          <li>soit via un <code>&lt;iframe&gt;</code> pointant vers l’URL proxifiée par NGINX (ex. <code>https://storage.intra.local/minio/</code>) ;</li>
+          <li>soit via un micro front end dédié si l’architecture le permet, avec le même résultat UX.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-MINIO-FE-005 – Indicateur de chargement</strong><br />
+        Lors du chargement de la route <code>/minio</code> :
+        <ul>
+          <li>le front doit afficher un spinner / message “Chargement de la console MinIO…” ;</li>
+          <li>l’indicateur disparaît lorsque l’iframe ou le micro front end signale que l’affichage est prêt.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-MINIO-FE-006 – Gestion des erreurs</strong><br />
+        Si la console MinIO est indisponible (timeout, erreur réseau, HTTP 4xx/5xx) :
+        <ul>
+          <li>un message lisible doit s’afficher dans la zone centrale (ex. “La console MinIO est temporairement indisponible.”) ;</li>
+          <li>le reste du front (shell, autres menus) doit rester pleinement utilisable.</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.3 Rôles &amp; contrôle d’accès UI</h3>
+    <ul>
+      <li>
+        <strong>FR-MINIO-FE-007 – Visibilité conditionnelle du menu</strong><br />
+        L’entrée de menu “MinIO” doit être visible uniquement pour les utilisateurs ayant les rôles Keycloak adéquats, par ex. :
+        <ul>
+          <li><code>ROLE_MINIO_ADMIN</code> pour les admins ;</li>
+          <li>éventuellement un rôle <code>ROLE_MINIO_READONLY</code> pour un accès lecture seule.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-MINIO-FE-008 – Protection de la route /minio</strong><br />
+        La route <code>/minio</code> doit être protégée par un <em>route guard</em> :
+        <ul>
+          <li>si l’utilisateur n’est pas authentifié → redirection vers Keycloak pour login ;</li>
+          <li>si l’utilisateur est authentifié mais n’a pas le rôle requis → message “Accès non autorisé” + redirection possible vers une page d’accueil ou d’erreur.</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.4 Authentification & SSO (Keycloak + NGINX)</h3>
+    <ul>
+      <li>
+        <strong>FR-MINIO-FE-009 – SSO cohérent</strong><br />
+        Le front doit s’appuyer sur la session Keycloak déjà en place :
+        <ul>
+          <li>si l’utilisateur est déjà connecté au front via Keycloak, l’accès à la console MinIO via l’iframe doit fonctionner sans relogin (SSO via NGINX/Keycloak) ;</li>
+          <li>sinon, le front doit déclencher le flux d’auth Keycloak avant d’accéder à <code>/minio</code>.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-MINIO-FE-010 – Déconnexion</strong><br />
+        La déconnexion depuis le front doit :
+        <ul>
+          <li>supprimer les tokens front (session locale) ;</li>
+          <li>appeler le logout Keycloak ;</li>
+          <li>implicitement invalider l’accès à la console MinIO (et autres consoles) dans de nouveaux onglets/onglets existants après refresh.</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.5 UX & ergonomie</h3>
+    <ul>
+      <li>
+        <strong>FR-MINIO-FE-011 – Indication de contexte</strong><br />
+        Le front doit afficher clairement que l’utilisateur est dans la zone “MinIO” (titre de page, breadcrumb, icône “storage”).
+      </li>
+      <li>
+        <strong>FR-MINIO-FE-012 – Navigation entre consoles</strong><br />
+        L’utilisateur doit pouvoir passer facilement de MinIO à d’autres consoles (Grafana, logs, etc.) via le menu sans effet de “piège” dans l’iframe.
+      </li>
+    </ul>
+  </section>
+
+  <!-- NFR -->
+  <section id="nfr">
+    <h2>5. Exigences non fonctionnelles (NFR)</h2>
+    <ul>
+      <li>
+        <strong>NFR-MINIO-FE-001 – Performance</strong><br />
+        Le chargement de la route <code>/minio</code> (shell + iframe/micro front end) doit être rapide (&lt; ~2&nbsp;s) en conditions normales de réseau interne, indépendamment du temps de chargement interne de la console MinIO.
+      </li>
+      <li>
+        <strong>NFR-MINIO-FE-002 – Sécurité</strong><br />
+        Aucune clé d’accès MinIO, secret ou token ne doit être visible dans le code front, les URLs ou les logs du navigateur.
+      </li>
+      <li>
+        <strong>NFR-MINIO-FE-003 – Compatibilité</strong><br />
+        L’intégration doit fonctionner sur les navigateurs supportés (Edge/Chromium, etc.), en tenant compte des politiques de sécurité (CSP, X-Frame-Options adaptés côté MinIO/NGINX si iframe).
+      </li>
+      <li>
+        <strong>NFR-MINIO-FE-004 – Résilience</strong><br />
+        Une panne de MinIO ne doit pas rendre le front indisponible : seul le panneau de la console affiche un message d’erreur, le reste de l’application reste navigable.
+      </li>
+      <li>
+        <strong>NFR-MINIO-FE-005 – Conformité Loi&nbsp;25</strong><br />
+        Les informations d’identité utilisées pour contrôler l’accès (rôles, userId) doivent respecter les principes de minimisation et ne pas être exposées inutilement dans les logs front.
+      </li>
+    </ul>
+  </section>
+
+  <!-- Data -->
+  <section id="data">
+    <h2>6. Exigences de données (Data)</h2>
+    <ul>
+      <li>
+        <strong>DATA-MINIO-FE-001 – Configuration des URLs par environnement</strong><br />
+        L’URL de la console MinIO doit être configurable par environnement (DEV/PPE/PRD), par ex. :
+        <ul>
+          <li><code>https://storage-dev.intra.local/minio/</code></li>
+          <li><code>https://storage-ppe.intra.local/minio/</code></li>
+          <li><code>https://storage-prd.intra.local/minio/</code></li>
+        </ul>
+      </li>
+      <li>
+        <strong>DATA-MINIO-FE-002 – Mapping rôles &amp; accès UI</strong><br />
+        Un mapping documenté doit préciser :
+        <ul>
+          <li>les rôles Keycloak autorisés à voir le menu “MinIO” ;</li>
+          <li>les rôles autorisés à accéder effectivement à la console (NGINX/Keycloak côté back).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>DATA-MINIO-FE-003 – Journaux d’accès (back, pas front)</strong><br />
+        Le front ne doit <strong>pas</strong> journaliser les détails des opérations MinIO ; seule la partie back (MinIO, NGINX, Keycloak, monitoring) journalise les accès pour audit.
+      </li>
+    </ul>
+  </section>
+
+  <!-- User stories -->
+  <section id="user-stories">
+    <h2>7. User Stories (pour Dev/DevOps AI)</h2>
+    <table border="1" cellpadding="6" cellspacing="0">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Titre</th>
+          <th>Description</th>
+          <th>Priorité</th>
+          <th>Système</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>US-MINIO-FE-001</td>
+          <td>Entrée de menu MinIO</td>
+          <td>En tant que OPS/DBA autorisé, je veux voir un menu “MinIO” dans le front pour accéder à la console de stockage objet.</td>
+          <td>Haute</td>
+          <td>Front-end SPA</td>
+        </tr>
+        <tr>
+          <td>US-MINIO-FE-002</td>
+          <td>Route /minio intégrée</td>
+          <td>En tant qu’utilisateur autorisé, je veux que la console MinIO s’affiche dans la zone centrale du front sur la route "/minio" en conservant le shell.</td>
+          <td>Haute</td>
+          <td>Front-end SPA</td>
+        </tr>
+        <tr>
+          <td>US-MINIO-FE-003</td>
+          <td>Contrôle d’accès par rôles</td>
+          <td>En tant que responsable sécurité, je veux que seuls les utilisateurs avec des rôles spécifiques puissent voir/accéder à la console MinIO.</td>
+          <td>Haute</td>
+          <td>Front-end SPA / Keycloak</td>
+        </tr>
+        <tr>
+          <td>US-MINIO-FE-004</td>
+          <td>Gestion des erreurs MinIO</td>
+          <td>En tant qu’utilisateur, je veux un message clair si la console MinIO est indisponible, sans interrompre le reste de l’application.</td>
+          <td>Moyenne</td>
+          <td>Front-end SPA</td>
+        </tr>
+        <tr>
+          <td>US-MINIO-FE-005</td>
+          <td>SSO vers la console MinIO</td>
+          <td>En tant qu’utilisateur connecté via Keycloak, je veux accéder à MinIO depuis le front sans devoir me reconnecter.</td>
+          <td>Haute</td>
+          <td>Front-end SPA / NGINX / Keycloak</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Gherkin -->
+  <section id="gherkin">
+    <h2>8. Scénarios Gherkin (acceptation)</h2>
+
+    <h3>8.1 Accès à la console MinIO pour un utilisateur autorisé</h3>
+    <pre><code>Scenario: Accès à MinIO depuis le front pour un utilisateur avec rôle autorisé
+  Given Je suis authentifié via Keycloak
+  And Je possède le rôle "ROLE_MINIO_ADMIN"
+  And Je suis sur la page principale du front
+  When Je clique sur le menu "Monitoring &amp; Admin" puis "MinIO"
+  Then L’URL du navigateur devient "/minio"
+  And Le shell (header, menu, footer) reste visible
+  And La zone centrale affiche la console MinIO intégrée (iframe ou micro front end)
+</code></pre>
+
+    <h3>8.2 Accès refusé pour un utilisateur sans rôle MinIO</h3>
+    <pre><code>Scenario: Refus d’accès à la route /minio sans rôle adéquat
+  Given Je suis authentifié via Keycloak
+  And Je ne possède pas le rôle "ROLE_MINIO_ADMIN" ni "ROLE_MINIO_READONLY"
+  When L’interface principale se charge
+  Then Le menu "MinIO" n’est pas visible
+  When Je tente d’accéder directement à l’URL "/minio"
+  Then Un message "Accès non autorisé" s’affiche
+  And Je suis redirigé vers la page d’accueil ou une page d’erreur contrôlée
+</code></pre>
+
+    <h3>8.3 Indisponibilité de la console MinIO</h3>
+    <pre><code>Scenario: Gestion de l’indisponibilité de MinIO
+  Given MinIO ou le reverse proxy vers MinIO est indisponible
+  And Je suis un utilisateur avec le rôle "ROLE_MINIO_ADMIN"
+  When Je clique sur "MinIO" dans le menu
+  Then L’URL devient "/minio"
+  And Un message d’erreur lisible s’affiche dans la zone centrale indiquant que MinIO est indisponible
+  And Le reste de la navigation du front reste pleinement fonctionnel
+</code></pre>
+
+    <h3>8.4 SSO cohérent entre front et MinIO</h3>
+    <pre><code>Scenario: SSO entre front et console MinIO
+  Given Je suis déjà authentifié via Keycloak dans le front
+  And NGINX protège la console MinIO avec la même instance Keycloak
+  When Je navigue vers "/minio"
+  Then La console MinIO s’affiche sans me demander de ressaisir mes identifiants
+</code></pre>
+
+    <h3>8.5 Déconnexion globale</h3>
+    <pre><code>Scenario: Déconnexion globale depuis le front
+  Given Je suis authentifié dans le front via Keycloak
+  And J’ai ouvert la console MinIO depuis le front
+  When Je clique sur "Déconnexion" dans le front
+  Then Ma session locale est supprimée
+  And Un logout Keycloak est effectué
+  And Toute nouvelle tentative d’accès à "/minio" redirige vers le login Keycloak
+</code></pre>
+  </section>
+
+</main>
+</body>
+</html>

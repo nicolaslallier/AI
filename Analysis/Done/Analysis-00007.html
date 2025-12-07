@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Spécification – Infrastructure MinIO (Object Storage S3-Compatible)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body>
+<main>
+  <h1>Spécification – Infrastructure MinIO (Object Storage S3-Compatible)</h1>
+
+  <!-- Résumé exécutif -->
+  <section id="resume-executif">
+    <h2>Résumé exécutif</h2>
+    <p>
+      Cette analyse définit l’infrastructure <strong>MinIO</strong> comme solution de stockage d’objets
+      compatible S3 pour l’écosystème technique (PostgreSQL, Grafana, Loki, Tempo, Prometheus, pgAdmin,
+      Keycloak, front-end SPA, etc.).
+    </p>
+    <p>
+      MinIO sera déployé derrière le reverse proxy <strong>NGINX</strong>, avec une gestion des accès 
+      sécurisé (IAM MinIO + intégration Keycloak ou comptes de service), logging vers l’infra de monitoring,
+      et politiques de rétention conformes (Loi&nbsp;25).
+    </p>
+    <p>
+      L’objectif est de fournir un <strong>stockage objet centralisé</strong> pour : fichiers applicatifs,
+      artefacts techniques, backups, logs exportés, tout en assurant performance, résilience, chiffrement 
+      et traçabilité.
+    </p>
+  </section>
+
+  <!-- Contexte & objectifs -->
+  <section id="contexte-objectifs">
+    <h2>1. Contexte &amp; objectifs</h2>
+
+    <h3>Contexte</h3>
+    <ul>
+      <li>Infra existante : PostgreSQL, pgAdmin, NGINX, Keycloak, Grafana, Loki, Tempo, Prometheus, front-end SPA.</li>
+      <li>Besoin d’un stockage <strong>objet</strong> pour :
+        <ul>
+          <li>Backups (BD, configs, etc.).</li>
+          <li>Exports de logs, rapports, artefacts techniques.</li>
+          <li>Fichiers applicatifs (documents, fichiers d’entrée/sortie, etc.).</li>
+        </ul>
+      </li>
+      <li>Choix de <strong>MinIO</strong> pour sa compatibilité S3, sa simplicité de déploiement et sa capacité à tourner on-prem / container.</li>
+    </ul>
+
+    <h3>Objectifs</h3>
+    <ul>
+      <li>O1 – Fournir un <strong>object storage S3-compatible</strong> interne pour les systèmes/applications.</li>
+      <li>O2 – Protéger MinIO derrière NGINX (TLS, contrôle d’accès) et intégrer l’authentification avec Keycloak ou IAM MinIO.</li>
+      <li>O3 – Mettre en place des <strong>buckets</strong> dédiés par usage (backups, logs, fichiers métiers, etc.) avec politiques de rétention.</li>
+      <li>O4 – Envoyer les logs MinIO vers l’infrastructure de monitoring (Loki, Grafana, alerte) pour observabilité et audit.</li>
+    </ul>
+  </section>
+
+  <!-- Hypothèses -->
+  <section id="hypotheses">
+    <h2>2. Hypothèses (à confirmer)</h2>
+    <ul>
+      <li>H1 : L’infra utilise déjà des containers (Docker/Compose/Kubernetes) ou des VMs pour déployer les composants.</li>
+      <li>H2 : NGINX est le point d’entrée unique exposé (port 80/443) et peut faire du reverse proxy vers MinIO.</li>
+      <li>H3 : L’infra de monitoring (Loki, Grafana, etc.) accepte les logs MinIO via fichiers/agents/forwarders.</li>
+      <li>H4 : Il existe ou existera un mécanisme central de gestion des secrets (vault, variables sécurisées, KeyVault, etc.).</li>
+      <li>H5 : Les besoins de stockage sont initialement “modestes” (POC/petite prod) mais doivent pouvoir monter en capacité.</li>
+    </ul>
+  </section>
+
+  <!-- Exigences business -->
+  <section id="br">
+    <h2>3. Exigences business (BR)</h2>
+    <ul>
+      <li>
+        <strong>BR-MINIO-001 – Stockage centralisé fiable</strong><br />
+        Les équipes doivent disposer d’un stockage objet central, fiable et durable pour les backups, données techniques et fichiers applicatifs.
+      </li>
+      <li>
+        <strong>BR-MINIO-002 – Sécurité &amp; conformité</strong><br />
+        Les données stockées (incluant potentiellement des PII) doivent être protégées (chiffrement, accès restreint, traçabilité) et respecter la Loi&nbsp;25.
+      </li>
+      <li>
+        <strong>BR-MINIO-003 – Intégration applicative simple</strong><br />
+        Les applications doivent pouvoir consommer MinIO via l’API S3 (SDKs AWS, CLI, etc.) sans complexité excessive.
+      </li>
+      <li>
+        <strong>BR-MINIO-004 – Observabilité &amp; audit</strong><br />
+        Les opérations de lecture/écriture, erreurs et événements d’admin doivent être visibles dans l’infra de monitoring pour diagnostic et audit.
+      </li>
+    </ul>
+  </section>
+
+  <!-- Exigences fonctionnelles -->
+  <section id="fr">
+    <h2>4. Exigences fonctionnelles (FR)</h2>
+
+    <h3>4.1 Architecture réseau & exposition</h3>
+    <ul>
+      <li>
+        <strong>FR-MINIO-001 – Déploiement MinIO</strong><br />
+        MinIO doit être déployé sur un ou plusieurs nœuds (standalone ou distributed) dans le réseau interne (subnet privé).
+      </li>
+      <li>
+        <strong>FR-MINIO-002 – Reverse proxy NGINX</strong><br />
+        L’accès à MinIO (API S3 + console web MinIO) doit se faire via NGINX :
+        <ul>
+          <li>ex. <code>https://storage.intra.local/</code> pour l’API S3 ;</li>
+          <li>ex. <code>https://storage.intra.local/minio/</code> pour la console UI.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-MINIO-003 – Ports internes</strong><br />
+        MinIO ne doit <strong>pas</strong> être exposé directement sur une IP publique ; il écoute seulement sur le réseau interne et/ou bridge container.
+      </li>
+    </ul>
+
+    <h3>4.2 Gestion des comptes & IAM</h3>
+    <ul>
+      <li>
+        <strong>FR-MINIO-004 – Comptes de service</strong><br />
+        Les applications (front/back, ETL, monitoring, etc.) doivent utiliser des <strong>comptes de service MinIO</strong> (access key / secret key) avec permissions minimales (principe de moindre privilège).
+      </li>
+      <li>
+        <strong>FR-MINIO-005 – Comptes d’administration</strong><br />
+        L’administration MinIO doit se faire via :
+        <ul>
+          <li>un compte admin MinIO interne fortement protégé, et/ou</li>
+          <li>une intégration IAM externe (ex. Keycloak/OIDC) pour la console d’administration.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-MINIO-006 – Politiques IAM</strong><br />
+        Des politiques IAM doivent être définies pour contrôler l’accès par bucket ou préfixe (read-only, read-write, admin, etc.).
+      </li>
+    </ul>
+
+    <h3>4.3 Buckets & usages</h3>
+    <ul>
+      <li>
+        <strong>FR-MINIO-007 – Buckets par usage</strong><br />
+        Les buckets doivent être organisés par usage, par ex. :
+        <ul>
+          <li><code>backups-postgresql</code> – sauvegardes BD.</li>
+          <li><code>logs-exports</code> – exports de logs agrégés.</li>
+          <li><code>app-files</code> – fichiers applicatifs.</li>
+          <li><code>temp-uploads</code> – zone temporaire pour uploads.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-MINIO-008 – Politiques de rétention</strong><br />
+        Chaque bucket doit avoir une politique de rétention / lifecycle documentée (ex. suppression des objets après X jours pour <code>temp-uploads</code>).
+      </li>
+      <li>
+        <strong>FR-MINIO-009 – Versioning (si requis)</strong><br />
+        Pour les buckets critiques (backups, documents sensibles), le versioning doit pouvoir être activé si l’usage le justifie.
+      </li>
+    </ul>
+
+    <h3>4.4 Intégration avec les autres composants</h3>
+    <ul>
+      <li>
+        <strong>FR-MINIO-010 – Backups PostgreSQL</strong><br />
+        Les processus de backup PostgreSQL doivent pouvoir écrire les fichiers de dump (ou archives WAL) vers le bucket <code>backups-postgresql</code> via l’API S3 MinIO.
+      </li>
+      <li>
+        <strong>FR-MINIO-011 – Exports de logs / monitoring</strong><br />
+        L’infra de monitoring (Loki/Tempo/Prometheus ou pipelines) doit pouvoir :
+        <ul>
+          <li>exporter des archives de logs / traces / métriques vers MinIO (long-term storage) ;</li>
+          <li>lire ces archives si des outils le supportent.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-MINIO-012 – Usage par les applications</strong><br />
+        Les applications front/back doivent pouvoir :
+        <ul>
+          <li>uploader des fichiers (ex. documents, CSV) dans un bucket dédié ;</li>
+          <li>générer des URLs signées (pre-signed URLs) si nécessaire pour téléchargement sécurisé.</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.5 Logs MinIO & monitoring</h3>
+    <ul>
+      <li>
+        <strong>FR-MINIO-013 – Logs techniques</strong><br />
+        MinIO doit produire des logs de :
+        <ul>
+          <li>requêtes (PUT/GET/DELETE, erreurs) ;</li>
+          <li>événements d’admin (création de bucket, modification de policy, etc.).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-MINIO-014 – Envoi vers l’infra de monitoring</strong><br />
+        Les logs MinIO doivent être collectés (fichiers ou stdout) par un agent/forwarder et envoyés à l’infra de monitoring (ex. Loki + Grafana) pour :
+        <ul>
+          <li>visualisation ;</li>
+          <li>alertes (ex. erreurs fréquentes, accès refusés, etc.).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-MINIO-015 – Métriques</strong><br />
+        Si possible, MinIO doit exposer des métriques (Prometheus) pour le suivi de l’état (disque, requêtes, erreurs) et être intégré au stack observabilité.
+      </li>
+    </ul>
+  </section>
+
+  <!-- NFR -->
+  <section id="nfr">
+    <h2>5. Exigences non fonctionnelles (NFR)</h2>
+    <ul>
+      <li>
+        <strong>NFR-MINIO-001 – Performance</strong><br />
+        L’infra MinIO doit supporter les charges de lecture/écriture attendues, avec des temps de réponse acceptables pour les principaux usages (backups, uploads, téléchargements).
+      </li>
+      <li>
+        <strong>NFR-MINIO-002 – Résilience &amp; durabilité</strong><br />
+        Les données doivent être protégées contre la perte :
+        <ul>
+          <li>par réplication/distribution MinIO interne (si mode distributed) ;</li>
+          <li>ou par mécanisme de backup secondaire vers un autre stockage si nécessaire.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>NFR-MINIO-003 – Sécurité</strong><br />
+        Les communications vers MinIO (via NGINX) doivent être chiffrées (HTTPS/TLS), les secrets doivent être protégés, et aucune clé d’accès ne doit être loggée en clair.
+      </li>
+      <li>
+        <strong>NFR-MINIO-004 – Conformité Loi&nbsp;25</strong><br />
+        La rétention et le type de données stockées doivent respecter la Loi&nbsp;25 (minimisation, durée limitée, droit à l’effacement pour les PII si applicable).
+      </li>
+      <li>
+        <strong>NFR-MINIO-005 – Scalabilité</strong><br />
+        L’architecture doit permettre d’augmenter la capacité (espace, nœuds) sans redesign complet (ajout de disques/nœuds MinIO).
+      </li>
+    </ul>
+  </section>
+
+  <!-- Data -->
+  <section id="data">
+    <h2>6. Exigences de données (Data)</h2>
+    <ul>
+      <li>
+        <strong>DATA-MINIO-001 – Classification des données</strong><br />
+        Les données stockées dans MinIO doivent être classées (technique vs métier, sensible vs non sensible) pour ajuster :
+        <ul>
+          <li>les droits d’accès ;</li>
+          <li>les politiques de rétention ;</li>
+          <li>le niveau de chiffrement.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>DATA-MINIO-002 – Chiffrement</strong><br />
+        Le chiffrement au repos (server-side encryption) doit être activé pour les buckets contenant des données sensibles (PII, données métier critiques).
+      </li>
+      <li>
+        <strong>DATA-MINIO-003 – Métadonnées</strong><br />
+        Les métadonnées des objets (tags, content-type, etc.) doivent être utilisées pour faciliter :
+        <ul>
+          <li>le tri / filtrage ;</li>
+          <li>la gestion des lifecycle policies ;</li>
+          <li>la corrélation avec d’autres systèmes (via IDs / correlationId si nécessaire).</li>
+        </ul>
+      </li>
+    </ul>
+  </section>
+
+  <!-- User stories -->
+  <section id="user-stories">
+    <h2>7. User Stories (pour Dev/DevOps AI)</h2>
+    <table border="1" cellpadding="6" cellspacing="0">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Titre</th>
+          <th>Description</th>
+          <th>Priorité</th>
+          <th>Système</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>US-MINIO-001</td>
+          <td>Déployer MinIO sécurisé</td>
+          <td>En tant que DevOps, je veux déployer MinIO derrière NGINX pour offrir un object storage S3 interne sécurisé.</td>
+          <td>Haute</td>
+          <td>MinIO / NGINX</td>
+        </tr>
+        <tr>
+          <td>US-MINIO-002</td>
+          <td>Backups PostgreSQL vers MinIO</td>
+          <td>En tant que DBA, je veux que les backups PostgreSQL soient stockés dans un bucket MinIO dédié avec rétention contrôlée.</td>
+          <td>Haute</td>
+          <td>PostgreSQL / MinIO</td>
+        </tr>
+        <tr>
+          <td>US-MINIO-003</td>
+          <td>Buckets &amp; IAM par usage</td>
+          <td>En tant que architecte, je veux des buckets par usage avec des politiques IAM minimales pour limiter les risques.</td>
+          <td>Haute</td>
+          <td>MinIO</td>
+        </tr>
+        <tr>
+          <td>US-MINIO-004</td>
+          <td>Logs MinIO vers monitoring</td>
+          <td>En tant qu’OPS, je veux centraliser les logs MinIO dans l’infra de monitoring pour diagnostiquer les erreurs et auditer les accès.</td>
+          <td>Moyenne</td>
+          <td>MinIO / Monitoring</td>
+        </tr>
+        <tr>
+          <td>US-MINIO-005</td>
+          <td>Intégration applicative S3</td>
+          <td>En tant que développeur, je veux consommer MinIO via l’API S3 pour uploader et télécharger des fichiers sans changer de SDK.</td>
+          <td>Haute</td>
+          <td>Apps / MinIO</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Gherkin -->
+  <section id="gherkin">
+    <h2>8. Scénarios Gherkin (acceptation)</h2>
+
+    <h3>8.1 Stockage d’un backup PostgreSQL</h3>
+    <pre><code>Scenario: Stockage d’un backup PostgreSQL dans MinIO
+  Given MinIO est déployé et accessible via "https://storage.intra.local"
+  And Un bucket "backups-postgresql" existe avec les bonnes permissions
+  And Un compte de service PostgreSQL a des clés d’accès S3 valides
+  When Le job de backup PostgreSQL s’exécute
+  Then Le fichier de backup est chargé dans le bucket "backups-postgresql"
+  And Le statut du job indique un succès
+</code></pre>
+
+    <h3>8.2 Accès refusé à un bucket non autorisé</h3>
+    <pre><code>Scenario: Refus d’accès à un bucket MinIO non autorisé
+  Given Un compte de service est configuré avec une policy read-only sur le bucket "app-files"
+  When Il tente de supprimer un objet dans "app-files"
+  Then L’opération est refusée
+  And Un log MinIO "access denied" est généré
+</code></pre>
+
+    <h3>8.3 Export de logs vers MinIO</h3>
+    <pre><code>Scenario: Export périodique de logs vers MinIO
+  Given L’infra de monitoring est configurée pour exporter des archives de logs
+  And Un bucket "logs-exports" existe sur MinIO
+  When La tâche d’export s’exécute
+  Then Une archive de logs est créée dans "logs-exports"
+  And L’OPS peut la voir dans la console MinIO ou via l’API S3
+</code></pre>
+
+    <h3>8.4 Consultation des logs MinIO dans le monitoring</h3>
+    <pre><code>Scenario: Visualisation des logs MinIO dans l’infra de monitoring
+  Given MinIO produit des logs et un agent les envoie à l’infra de monitoring
+  When Une erreur d’accès ou de disque survient sur MinIO
+  Then Un événement correspondant apparaît dans la plateforme de monitoring
+  And Une alerte peut être configurée sur ce type d’événement
+</code></pre>
+  </section>
+
+</main>
+</body>
+</html>

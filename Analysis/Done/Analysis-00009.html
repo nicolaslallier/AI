@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Spécification – Dashboard Grafana pour MinIO (Storage, Santé, Sécurité)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body>
+<main>
+  <h1>Spécification – Dashboard Grafana pour MinIO</h1>
+
+  <!-- Résumé exécutif -->
+  <section id="resume-executif">
+    <h2>Résumé exécutif</h2>
+    <p>
+      Cette analyse définit le <strong>dashboard Grafana MinIO</strong> pour monitorer la capacité, la santé,
+      la performance et la sécurité de l’infrastructure MinIO (object storage S3-compatible).
+    </p>
+    <p>
+      Le dashboard s’appuie sur les métriques <strong>Prometheus</strong> exposées par MinIO, les logs
+      centralisés (via <strong>Loki</strong>) et, si disponible, les traces (<strong>Tempo</strong>) pour
+      offrir une vue complète : disponibilité, erreurs, latence, utilisation du stockage, activités suspectes.
+    </p>
+    <p>
+      L’objectif est de fournir un <strong>tableau de bord opérationnel et d’audit</strong> utilisable par
+      les équipes DevOps/OPS/Sécu, avec alertes et filtrage par environnement, instance et bucket.
+    </p>
+  </section>
+
+  <!-- Contexte & objectifs -->
+  <section id="contexte-objectifs">
+    <h2>1. Contexte &amp; objectifs</h2>
+
+    <h3>Contexte</h3>
+    <ul>
+      <li>Infra existante : MinIO derrière NGINX, logs vers Loki, métriques vers Prometheus, Grafana comme UI d’observabilité.</li>
+      <li>MinIO utilisé pour : backups PostgreSQL, fichiers applicatifs, exports de logs, etc.</li>
+      <li>Besoin d’une visibilité simple sur : espace disque, erreurs S3, temps de réponse, activités anormales.</li>
+    </ul>
+
+    <h3>Objectifs</h3>
+    <ul>
+      <li>O1 – Fournir une vue globale de l’état de santé MinIO (status, erreurs, saturation, capacité).</li>
+      <li>O2 – Permettre une analyse rapide d’incidents (erreurs 4xx/5xx, temps de réponse, nœuds en défaut).</li>
+      <li>O3 – Offrir une vue capacité/FinOps (utilisation stockage, tendance de croissance par bucket, prévision saturation).</li>
+      <li>O4 – Aider à la détection d’activités inhabituelles (trop de DELETE, access denied, scans suspects).</li>
+    </ul>
+  </section>
+
+  <!-- Hypothèses -->
+  <section id="hypotheses">
+    <h2>2. Hypothèses (à confirmer)</h2>
+    <ul>
+      <li>H1 : MinIO expose des métriques compatibles Prometheus (endpoint /minio/v2/metrics ou équivalent).</li>
+      <li>H2 : Un job Prometheus scrape déjà (ou scrappera) les endpoints MinIO avec des labels <code>instance</code>, <code>job</code>, <code>environment</code>.</li>
+      <li>H3 : Les logs MinIO (access log / error log) sont envoyés à Loki avec des labels <code>app="minio"</code>, <code>instance</code>, <code>environment</code>, <code>bucket</code>.</li>
+      <li>H4 : Grafana dispose de datasources configurées : <strong>Prometheus</strong>, <strong>Loki</strong> (et éventuellement <strong>Tempo</strong>).</li>
+      <li>H5 : Les dashboards sont versionnés (Git / provisioning Grafana) et déployés par DevOps.</li>
+    </ul>
+  </section>
+
+  <!-- Exigences business -->
+  <section id="br">
+    <h2>3. Exigences business (BR)</h2>
+    <ul>
+      <li>
+        <strong>BR-GRAF-MINIO-001 – Réduction MTTR</strong><br />
+        Les équipes OPS doivent pouvoir identifier rapidement d’où vient un incident MinIO (nœud, disque, bucket, type d’opération).
+      </li>
+      <li>
+        <strong>BR-GRAF-MINIO-002 – Prévention de saturation</strong><br />
+        Les équipes doivent anticiper les problèmes de capacité (disques pleins, quotas dépassés) pour éviter les interruptions de service.
+      </li>
+      <li>
+        <strong>BR-GRAF-MINIO-003 – Conformité &amp; sécurité</strong><br />
+        Les activités d’accès doivent être visibles (taux d’“access denied”, pics de DELETE, IP suspectes) pour investigation sécurité/audit.
+      </li>
+      <li>
+        <strong>BR-GRAF-MINIO-004 – Support au Capacity planning / FinOps</strong><br />
+        Le dashboard doit fournir des informations de volume/stocker utilisé par bucket, environnement, application.
+      </li>
+    </ul>
+  </section>
+
+  <!-- Exigences fonctionnelles : structure du dashboard -->
+  <section id="fr">
+    <h2>4. Exigences fonctionnelles (FR)</h2>
+
+    <h3>4.1 Structure générale du dashboard</h3>
+    <ul>
+      <li>
+        <strong>FR-GRAF-MINIO-001 – Variables de dashboard</strong><br />
+        Le dashboard doit définir des variables (dropdowns) :
+        <ul>
+          <li><code>$environment</code> : DEV, PPE, PRD, ALL.</li>
+          <li><code>$instance</code> : nœud / pod / VM MinIO.</li>
+          <li><code>$bucket</code> : bucket MinIO (all / liste dynamique depuis métriques ou logs).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-GRAF-MINIO-002 – Sections du dashboard</strong><br />
+        Le dashboard doit être organisé en 4 sections principales :
+        <ol>
+          <li>Vue d’ensemble &amp; santé.</li>
+          <li>Performance &amp; requêtes S3.</li>
+          <li>Capacité &amp; stockage.</li>
+          <li>Sécurité &amp; audit (logs Loki).</li>
+        </ol>
+      </li>
+    </ul>
+
+    <h3>4.2 Section 1 – Vue d’ensemble &amp; santé</h3>
+    <ul>
+      <li>
+        <strong>FR-GRAF-MINIO-003 – Statuts clés (row de “stat” panels)</strong><br />
+        Afficher des “SingleStat/Stat” (par défaut filtré sur <code>$environment</code>) :
+        <ul>
+          <li><em>Nombre de nœuds MinIO UP</em> / total.</li>
+          <li><em>Nombre d’alertes actives</em> (si intégration avec Alertmanager / métriques d’alertes).</li>
+          <li><em>Taux d’erreur global</em> sur les dernières 5–15 minutes (ratio 4xx/5xx / total requêtes).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-GRAF-MINIO-004 – État des instances</strong><br />
+        Graph ou tableau par <code>$instance</code> :
+        <ul>
+          <li>Uptime de chaque instance MinIO.</li>
+          <li>CPU (%) par instance.</li>
+          <li>RAM utilisée (%) par instance.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-GRAF-MINIO-005 – Timeline des erreurs</strong><br />
+        Graph “Erreurs dans le temps” :
+        <ul>
+          <li>Nombre de requêtes 4xx/5xx par minute dans le temps.</li>
+          <li>Stacked par code (403, 404, 500, etc.) si possible.</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.3 Section 2 – Performance &amp; requêtes S3</h3>
+    <ul>
+      <li>
+        <strong>FR-GRAF-MINIO-006 – Volume de requêtes</strong><br />
+        Graph “Requêtes S3 par seconde (RPS)” :
+        <ul>
+          <li>Lignes distinctes pour GET, PUT, DELETE, LIST, HEAD, autres opérations S3.</li>
+          <li>Filtrable par <code>$instance</code> et <code>$bucket</code> si métriques disponibles.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-GRAF-MINIO-007 – Latence</strong><br />
+        Graph “Latence des requêtes” :
+        <ul>
+          <li>P50, P90, P99 des temps de réponse sur les requêtes S3.</li>
+          <li>Possibilité de filtre par type d’opération (GET vs PUT) et par <code>$bucket</code>.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-GRAF-MINIO-008 – Top buckets / opérations</strong><br />
+        Tableau “Top N buckets par nombre d’opérations” :
+        <ul>
+          <li>Colonnes : bucket, nombre de requêtes totales, % du total, type principal (read/write mix).</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.4 Section 3 – Capacité &amp; stockage</h3>
+    <ul>
+      <li>
+        <strong>FR-GRAF-MINIO-009 – Utilisation disque globale</strong><br />
+        Graph “Utilisation disque globale” :
+        <ul>
+          <li>Espace utilisé vs disponible (en GB/TB) pour le cluster ou par instance.</li>
+          <li>Ligne de seuil (ex. 80% – warning, 90% – critical).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-GRAF-MINIO-010 – Utilisation par bucket</strong><br />
+        Graph ou tableau “Top N buckets par taille” :
+        <ul>
+          <li>Colonnes : bucket, taille totale (GB), nombre d’objets, % du total cluster.</li>
+          <li>Filtre <code>$environment</code>.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-GRAF-MINIO-011 – Évolution dans le temps</strong><br />
+        Graph “Croissance du stockage” par jour/semaine :
+        <ul>
+          <li>Volume total utilisé (GB) dans le temps.</li>
+          <li>Option de zoom par bucket.</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.5 Section 4 – Sécurité &amp; audit (via Loki)</h3>
+    <ul>
+      <li>
+        <strong>FR-GRAF-MINIO-012 – Access denied &amp; erreurs auth</strong><br />
+        Panel “Access denied” basé sur requêtes Loki :
+        <ul>
+          <li>Nombre d’événements “AccessDenied” par période.</li>
+          <li>Top IP / user / bucket associés (si présents dans les logs).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-GRAF-MINIO-013 – Activité DELETE / PUT suspecte</strong><br />
+        Panel “DELETE / PUT activity” :
+        <ul>
+          <li>Volume de DELETE/PUT par bucket dans le temps.</li>
+          <li>Détection visuelle de pics anormaux (vagues de suppression ou d’écriture).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-GRAF-MINIO-014 – Explorer les logs</strong><br />
+        Un panel “Logs MinIO” (exploration Loki) :
+        <ul>
+          <li>Requêtes pré-filtrées <code>{app="minio", environment="$environment"}</code>.</li>
+          <li>Possibilité de filtrer sur <code>$instance</code> et <code>$bucket</code>.</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.6 Traces / Tempo (optionnel)</h3>
+    <ul>
+      <li>
+        <strong>FR-GRAF-MINIO-015 – Intégration traces</strong><br />
+        Si des traces Tempo existent pour des flows qui utilisent MinIO :
+        <ul>
+          <li>Panel “Traces récentes liées à MinIO” avec lien vers Tempo (traceID, durée, état).</li>
+          <li>Filtre par service appelant (ex. <code>backup-service</code>, <code>app-xyz</code>).</li>
+        </ul>
+      </li>
+    </ul>
+  </section>
+
+  <!-- NFR -->
+  <section id="nfr">
+    <h2>5. Exigences non fonctionnelles (NFR)</h2>
+    <ul>
+      <li>
+        <strong>NFR-GRAF-MINIO-001 – Performance du dashboard</strong><br />
+        Les requêtes Prometheus/Loki ne doivent pas surcharger les systèmes ; intervalles raisonnables (ex. 30s–1 min) et consolidation des séries si nécessaire.
+      </li>
+      <li>
+        <strong>NFR-GRAF-MINIO-002 – Lisibilité</strong><br />
+        Le dashboard doit rester lisible sur un écran standard (1080p) avec un design clair : regroupement par sections, légendes explicites.
+      </li>
+      <li>
+        <strong>NFR-GRAF-MINIO-003 – Sécurité</strong><br />
+        L’accès au dashboard doit être restreint aux rôles Grafana adéquats (DevOps, OPS, Sécu) ; aucun secret/clé MinIO ne doit apparaître dans les graphs.
+      </li>
+      <li>
+        <strong>NFR-GRAF-MINIO-004 – Versionning</strong><br />
+        La définition JSON du dashboard doit être versionnée (Git) et déployée par mécanisme de provisioning Grafana/CI-CD.
+      </li>
+    </ul>
+  </section>
+
+  <!-- Data -->
+  <section id="data">
+    <h2>6. Exigences de données (Data)</h2>
+    <ul>
+      <li>
+        <strong>DATA-GRAF-MINIO-001 – Labels métriques</strong><br />
+        Les séries Prometheus utilisées doivent idéalement inclure :
+        <ul>
+          <li><code>instance</code>, <code>job</code>, <code>environment</code>,</li>
+          <li>éventuellement <code>bucket</code>, <code>operation</code> (GET/PUT/DELETE), <code>status_code</code>.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>DATA-GRAF-MINIO-002 – Labels logs</strong><br />
+        Les logs MinIO dans Loki doivent inclure :
+        <ul>
+          <li><code>app="minio"</code>, <code>environment</code>, <code>instance</code>,</li>
+          <li>si possible : <code>bucket</code>, <code>operation</code>, <code>status</code>.</li>
+        </ul>
+      </li>
+      <li>
+        <strong>DATA-GRAF-MINIO-003 – PII minimales</strong><br />
+        Les logs et métriques visibles dans Grafana ne doivent pas exposer de PII non nécessaires (adresse complète, contenu métier, etc.).
+      </li>
+    </ul>
+  </section>
+
+  <!-- User stories -->
+  <section id="user-stories">
+    <h2>7. User Stories (pour Dev/DevOps AI – création dashboard)</h2>
+    <table border="1" cellpadding="6" cellspacing="0">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Titre</th>
+          <th>Description</th>
+          <th>Priorité</th>
+          <th>Système</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>US-GRAF-MINIO-001</td>
+          <td>Vue d’ensemble MinIO</td>
+          <td>En tant qu’OPS, je veux un dashboard qui me montre immédiatement si MinIO est UP, et le taux d’erreurs.</td>
+          <td>Haute</td>
+          <td>Grafana / Prometheus</td>
+        </tr>
+        <tr>
+          <td>US-GRAF-MINIO-002</td>
+          <td>Performance & latence</td>
+          <td>En tant que DevOps, je veux des graphes de requêtes et de latence MinIO pour diagnostiquer les lenteurs.</td>
+          <td>Haute</td>
+          <td>Grafana / Prometheus</td>
+        </tr>
+        <tr>
+          <td>US-GRAF-MINIO-003</td>
+          <td>Capacité & croissance</td>
+          <td>En tant qu’architecte/OPS, je veux suivre l’utilisation de l’espace disque et la croissance des buckets.</td>
+          <td>Haute</td>
+          <td>Grafana / Prometheus</td>
+        </tr>
+        <tr>
+          <td>US-GRAF-MINIO-004</td>
+          <td>Sécurité & access denied</td>
+          <td>En tant que Sécu/OPS, je veux visualiser les access denied, erreurs auth et pics de DELETE.</td>
+          <td>Haute</td>
+          <td>Grafana / Loki</td>
+        </tr>
+        <tr>
+          <td>US-GRAF-MINIO-005</td>
+          <td>Navigation par environnement</td>
+          <td>En tant qu’OPS, je veux filtrer facilement par environnement, instance et bucket.</td>
+          <td>Moyenne</td>
+          <td>Grafana</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Gherkin -->
+  <section id="gherkin">
+    <h2>8. Scénarios Gherkin (acceptation du dashboard)</h2>
+
+    <h3>8.1 Vue globale disponible</h3>
+    <pre><code>Scenario: Consulter la vue d’ensemble MinIO
+  Given Je suis connecté à Grafana avec un rôle autorisé
+  And Le datasource Prometheus est configuré
+  When J’ouvre le dashboard "MinIO – Overview"
+  Then Je vois les statuts clés (instances UP, taux d’erreurs, alertes)
+  And Je vois un graphe des erreurs dans le temps
+</code></pre>
+
+    <h3>8.2 Filtrage par environnement et instance</h3>
+    <pre><code>Scenario: Filtrer le dashboard MinIO par environnement
+  Given Le dashboard MinIO est ouvert
+  And La variable "$environment" est visible
+  When Je sélectionne "PPE" dans "$environment"
+  Then Tous les panels se mettent à jour pour n’afficher que les métriques MinIO de PPE
+  And Les listes d’instances et buckets sont filtrées en conséquence
+</code></pre>
+
+    <h3>8.3 Analyse d’une erreur de performance</h3>
+    <pre><code>Scenario: Analyse d’un pic de latence MinIO
+  Given Une alerte de forte latence MinIO a été déclenchée
+  When J’ouvre la section "Performance & requêtes"
+  Then Je vois un pic de latence sur les courbes P90/P99
+  And Je peux voir quels buckets / opérations sont les plus impactés
+</code></pre>
+
+    <h3>8.4 Suivi de la capacité disque</h3>
+    <pre><code>Scenario: Contrôle de la capacité disque MinIO
+  Given Je veux vérifier que MinIO ne sature pas
+  When J’ouvre la section "Capacité & stockage"
+  Then Je vois l’espace utilisé vs total et les pourcentages d’occupation
+  And Je peux identifier les buckets qui consomment le plus d’espace
+</code></pre>
+
+    <h3>8.5 Surveillance des accès refusés</h3>
+    <pre><code>Scenario: Investigation d’un nombre anormal d’AccessDenied
+  Given Le SIEM signale un volume anormal d’AccessDenied sur MinIO
+  When J’ouvre la section "Sécurité & audit" du dashboard MinIO
+  Then Je vois un panel montrant l’évolution du nombre d’AccessDenied
+  And Je peux filtrer par bucket et éventuellement IP / user
+  And Je peux ouvrir le panel de logs Loki pour voir le détail des événements
+</code></pre>
+  </section>
+
+</main>
+</body>
+</html>
