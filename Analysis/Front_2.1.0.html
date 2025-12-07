@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Functional Analysis – Website Home Page (Welcome Page)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body>
+<main>
+  <h1>Functional Analysis – Website Home Page</h1>
+
+  <!-- Executive Summary -->
+  <section id="executive-summary">
+    <h2>Executive Summary</h2>
+    <p>
+      This document defines the functional requirements for the <strong>home page</strong> of the website.
+      The home page must display a clear <strong>welcome message</strong> and serve as the main entry point
+      to the rest of the site.
+    </p>
+    <p>
+      The page will provide a simple, clean layout with a welcome section, short description of the site,
+      and navigation to key sections. It should be easy to understand, fast to load and responsive for
+      desktop and mobile users.
+    </p>
+  </section>
+
+  <!-- Context & Goals -->
+  <section id="context-goals">
+    <h2>1. Context & Goals</h2>
+
+    <h3>1.1 Context</h3>
+    <ul>
+      <li>The site uses a modern web front-end (SPA or classic web – but home page acts as main entry point).</li>
+      <li>The home page is the first page most users will see.</li>
+      <li>The user wants a simple initial scope: a welcome message plus a basic structure that can be extended later.</li>
+    </ul>
+
+    <h3>1.2 Goals</h3>
+    <ul>
+      <li>G1 – Display a clear and friendly <strong>welcome message</strong> to the user.</li>
+      <li>G2 – Provide a simple structure (header, main content, footer) ready for future content.</li>
+      <li>G3 – Allow easy navigation to other parts of the site (menu or basic links).</li>
+      <li>G4 – Ensure good readability on desktop and mobile devices.</li>
+    </ul>
+  </section>
+
+  <!-- Assumptions -->
+  <section id="assumptions">
+    <h2>2. Assumptions</h2>
+    <ul>
+      <li>A1 – The site has or will have a global navigation (header menu) that can be reused on the home page.</li>
+      <li>A2 – The home page is accessible via the root URL (e.g. <code>/</code> or <code>/home</code>).</li>
+      <li>A3 – The welcome message is static text (no need for personalization in this first version).</li>
+      <li>A4 – No authentication is required to access the home page.</li>
+    </ul>
+  </section>
+
+  <!-- Business Requirements -->
+  <section id="br">
+    <h2>3. Business Requirements (BR)</h2>
+    <ul>
+      <li>
+        <strong>BR-HOME-001 – Welcome message</strong><br />
+        The home page must display a clear welcome message to the user when they arrive.
+      </li>
+      <li>
+        <strong>BR-HOME-002 – First impression</strong><br />
+        The home page must give a professional and simple first impression (clean layout, readable text).
+      </li>
+      <li>
+        <strong>BR-HOME-003 – Access to main sections</strong><br />
+        From the home page, the user must be able to navigate to the main sections of the site (for example:
+        Dashboard, Monitoring, Documentation – or future sections).
+      </li>
+    </ul>
+  </section>
+
+  <!-- Functional Requirements -->
+  <section id="fr">
+    <h2>4. Functional Requirements (FR)</h2>
+
+    <h3>4.1 Layout & Structure</h3>
+    <ul>
+      <li>
+        <strong>FR-HOME-001 – Global structure</strong><br />
+        The home page must have the following main areas:
+        <ul>
+          <li><strong>Header</strong>: site logo or title, main navigation menu.</li>
+          <li><strong>Main content</strong>: welcome section + optional short description + main actions/links.</li>
+          <li><strong>Footer</strong>: basic info (e.g. ©, version, small note).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>FR-HOME-002 – Welcome section</strong><br />
+        The main content must include a <strong>Welcome section</strong> with:
+        <ul>
+          <li>A main title, e.g. <em>“Welcome to &lt;Site Name&gt;”</em>.</li>
+          <li>An optional short subtitle/paragraph explaining the purpose of the site (1–3 lines).</li>
+        </ul>
+      </li>
+    </ul>
+
+    <h3>4.2 Welcome Message</h3>
+    <ul>
+      <li>
+        <strong>FR-HOME-003 – Mandatory welcome text</strong><br />
+        A welcome message must be displayed prominently near the top of the page. Example text (to be customized):
+        <em>“Welcome to our monitoring and administration portal.”</em>
+      </li>
+      <li>
+        <strong>FR-HOME-004 – Simple language</strong><br />
+        The welcome message must use simple, friendly language that is easy to understand.
+      </li>
+    </ul>
+
+    <h3>4.3 Navigation from Home Page</h3>
+    <ul>
+      <li>
+        <strong>FR-HOME-005 – Main navigation menu</strong><br />
+        The header must contain a navigation menu with links (or future placeholders) to the key sections. For example:
+        <ul>
+          <li>Home</li>
+          <li>Monitoring</li>
+          <li>Admin</li>
+          <li>Documentation</li>
+        </ul>
+        (Names can be adapted; placeholders are acceptable if sections do not exist yet.)
+      </li>
+      <li>
+        <strong>FR-HOME-006 – Quick-access buttons (optional)</strong><br />
+        Under the welcome message, the home page may show 2–3 buttons or links for common actions
+        (e.g. “Open Monitoring”, “See Documentation”). These are optional but recommended.
+      </li>
+    </ul>
+
+    <h3>4.4 Content & Text</h3>
+    <ul>
+      <li>
+        <strong>FR-HOME-007 – Short site description</strong><br />
+        The home page should include a short paragraph (2–4 lines) explaining what the site is for (ex: “This site allows you
+        to monitor infrastructure, access admin consoles, and view system dashboards.”).
+      </li>
+      <li>
+        <strong>FR-HOME-008 – No sensitive data</strong><br />
+        The home page must not display any confidential or sensitive information (no internal IPs, keys, secrets, etc.).
+      </li>
+    </ul>
+  </section>
+
+  <!-- Non-Functional Requirements -->
+  <section id="nfr">
+    <h2>5. Non-Functional Requirements (NFR)</h2>
+    <ul>
+      <li>
+        <strong>NFR-HOME-001 – Performance</strong><br />
+        The home page must load quickly (perceived load time &lt; ~2 seconds on a normal internal connection).
+      </li>
+      <li>
+        <strong>NFR-HOME-002 – Responsiveness</strong><br />
+        The layout must be responsive and readable on:
+        <ul>
+          <li>Desktop screens (≥ 1024px width).</li>
+          <li>Tablets and mobile devices (&lt; 1024px width).</li>
+        </ul>
+      </li>
+      <li>
+        <strong>NFR-HOME-003 – Accessibility (basic)</strong><br />
+        Basic accessibility rules should be respected:
+        <ul>
+          <li>Use semantic HTML tags (<code>&lt;header&gt;</code>, <code>&lt;main&gt;</code>, <code>&lt;footer&gt;</code>, headings).</li>
+          <li>Text must have enough contrast with background.</li>
+        </ul>
+      </li>
+    </ul>
+  </section>
+
+  <!-- Data -->
+  <section id="data">
+    <h2>6. Data Requirements</h2>
+    <ul>
+      <li>
+        <strong>DATA-HOME-001 – Static content</strong><br />
+        For the first version, all text on the home page (welcome message, description, menu labels) can be static,
+        defined in configuration or source code.
+      </li>
+      <li>
+        <strong>DATA-HOME-002 – Localization (optional / future)</strong><br />
+        The design should allow adding multi-language support later (e.g. English/French), but this is not mandatory in v1.
+      </li>
+    </ul>
+  </section>
+
+  <!-- User Stories -->
+  <section id="user-stories">
+    <h2>7. User Stories (for Dev AI)</h2>
+    <table border="1" cellpadding="6" cellspacing="0">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Title</th>
+          <th>Description</th>
+          <th>Priority</th>
+          <th>System</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>US-HOME-001</td>
+          <td>See welcome message</td>
+          <td>As a user, when I arrive on the website, I want to see a clear welcome message so I know I am in the right place.</td>
+          <td>High</td>
+          <td>Front-end</td>
+        </tr>
+        <tr>
+          <td>US-HOME-002</td>
+          <td>Navigate from home</td>
+          <td>As a user, I want to see a simple menu on the home page so I can easily navigate to other sections.</td>
+          <td>High</td>
+          <td>Front-end</td>
+        </tr>
+        <tr>
+          <td>US-HOME-003</td>
+          <td>Understand site purpose</td>
+          <td>As a user, I want a short description on the home page to understand what the website is used for.</td>
+          <td>Medium</td>
+          <td>Front-end</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Gherkin Scenarios -->
+  <section id="gherkin">
+    <h2>8. Gherkin Scenarios (Acceptance)</h2>
+
+    <h3>8.1 Display welcome message</h3>
+    <pre><code>Scenario: User sees welcome message on home page
+  Given I open the website root URL "/"
+  When the home page loads
+  Then I see a main title or text containing a welcome message
+  And the welcome message is visible without scrolling
+</code></pre>
+
+    <h3>8.2 Navigate to another section</h3>
+    <pre><code>Scenario: Navigate from home page to another section
+  Given I am on the home page
+  And I see the main navigation menu
+  When I click on a menu item (e.g. "Monitoring")
+  Then the application navigates to the corresponding page or route
+  And the home page is no longer the active view
+</code></pre>
+
+    <h3>8.3 Responsive layout</h3>
+    <pre><code>Scenario: Home page layout on a small screen
+  Given I open the home page on a mobile-sized screen
+  When the page is fully loaded
+  Then the welcome message text is readable without horizontal scrolling
+  And the main menu is accessible (e.g. as a burger menu or simple list)
+</code></pre>
+  </section>
+
+</main>
+</body>
+</html>
