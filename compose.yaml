@@ -1,0 +1,31 @@
+name: dev-env
+
+services:
+  opencode:
+    build:
+      context: ./images/opencode
+      args:
+        OPENCODE_VERSION: ${OPENCODE_VERSION:-1.18.25}
+    image: opencode:${TAG:-latest}
+    container_name: opencode
+    restart: unless-stopped
+    ports:
+      # Bound to loopback by default — the server has no auth unless
+      # OPENCODE_SERVER_PASSWORD is set. Use OPENCODE_BIND=0.0.0.0 to expose it.
+      - "${OPENCODE_BIND:-127.0.0.1}:${OPENCODE_PORT:-4096}:4096"
+    volumes:
+      # Project you want opencode to work on.
+      - ${WORKSPACE:-./workspace}:/work
+      # Persist opencode state across container recreation.
+      - opencode-data:/home/opencode/.local/share/opencode
+      - opencode-config:/home/opencode/.config/opencode
+    environment:
+      # Provider keys are read from the environment; leave unset to skip.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Set this before exposing the port beyond loopback.
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:-}
+    # Healthcheck is inherited from the image (GET /global/health on :4096).
+
+volumes:
+  opencode-data:
+  opencode-config:

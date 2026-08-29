@@ -19,9 +19,13 @@ RUN apt-get update \
         tar \
       && rm -rf /var/lib/apt/lists/*
 
+# The state/config dirs are created here so that named volumes mounted over
+# them inherit the opencode ownership instead of being created root-owned.
 RUN useradd --create-home --uid 10001 opencode \
       && mkdir -p /work /opt/opencode/bin \
-      && chown opencode:opencode /work /opt/opencode/bin
+        /home/opencode/.local/share/opencode \
+        /home/opencode/.config/opencode \
+      && chown -R opencode:opencode /work /opt/opencode/bin /home/opencode
 
 USER opencode
 WORKDIR /work

@@ -1,9 +1,12 @@
 NAME ?=
 REGISTRY ?= ghcr.io
 TAG ?= latest
+SERVICE ?=
+COMPOSE ?= docker compose
 
 .DEFAULT_GOAL := help
-.PHONY: help up down status restart list build build-all push push-all run shell logs prune clean
+.PHONY: help up down status restart list build build-all push push-all run shell logs prune clean \
+        compose-build compose-up compose-down compose-restart compose-ps compose-logs compose-shell compose-clean
 
 help:
 	@echo "Colima / Dev Env Images — available commands"
@@ -23,11 +26,21 @@ help:
 	@echo "    run           Run an image         (make run NAME=<name>)"
 	@echo "    shell         Open a shell in a built image (make shell NAME=<name>)"
 	@echo ""
+	@echo "  Compose stack"
+	@echo "    compose-build    Build the compose services"
+	@echo "    compose-up       Start the stack in the background"
+	@echo "    compose-down     Stop the stack and remove containers"
+	@echo "    compose-restart  Restart the stack"
+	@echo "    compose-ps       Show stack status"
+	@echo "    compose-logs     Follow stack logs   (make compose-logs SERVICE=<name>)"
+	@echo "    compose-shell    Shell into a running service (make compose-shell SERVICE=<name>)"
+	@echo "    compose-clean    Stop the stack and remove its volumes"
+	@echo ""
 	@echo "  Cleanup"
 	@echo "    prune         Remove dangling images and unused resources"
 	@echo "    clean         Remove containers and dangling images"
 	@echo ""
-	@echo "Options: NAME, REGISTRY (default $(REGISTRY)), TAG (default $(TAG))"
+	@echo "Options: NAME, SERVICE, REGISTRY (default $(REGISTRY)), TAG (default $(TAG))"
 
 up:
 	@colima start
@@ -76,6 +89,30 @@ run:
 shell:
 	@if [ -z "$(NAME)" ]; then echo "Usage: make shell NAME=<name>"; exit 1; fi
 	@docker run --rm -it $(NAME):$(TAG) /bin/sh
+
+compose-build:
+	@$(COMPOSE) build $(SERVICE)
+
+compose-up:
+	@$(COMPOSE) up -d $(SERVICE)
+
+compose-down:
+	@$(COMPOSE) down --remove-orphans
+
+compose-restart: compose-down compose-up
+
+compose-ps:
+	@$(COMPOSE) ps
+
+compose-logs:
+	@$(COMPOSE) logs -f $(SERVICE)
+
+compose-shell:
+	@if [ -z "$(SERVICE)" ]; then echo "Usage: make compose-shell SERVICE=<name>"; exit 1; fi
+	@$(COMPOSE) exec $(SERVICE) /bin/sh
+
+compose-clean:
+	@$(COMPOSE) down --remove-orphans --volumes
 
 prune:
 	@docker image prune -f
