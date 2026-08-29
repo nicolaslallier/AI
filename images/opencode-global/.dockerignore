@@ -1,0 +1,10 @@
+# Conventions de l image soeur (images/opencode/.dockerignore), adaptees :
+#   ici la config est fournie EN DESSOUS d image/ via le prefixe `config/`, qui
+#   est un chemin MULTI-segment. Les motifs simples ci-dessous ne le touchent
+#   donc pas -- les helpers (*.sh), le script *.py et agents/*.md entrent bien.
+#
+# On n'exclut que la machinerie locale mac (launchd) et ce Dockerfile.
+config/install.sh
+config/net.famillelallier.opencode.plist
+config/README.md
+Dockerfile
