@@ -14,3 +14,14 @@ node_modules/
 # Compose workspace mount (keep the directory, ignore its contents)
 workspace/*
 !workspace/.gitkeep
+
+# --- Python / uv -------------------------------------------------------------
+.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+.coverage
+htmlcov/

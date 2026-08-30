@@ -256,3 +256,53 @@ The opencode server then answers on <http://localhost:4096>, e.g.
 ## License
 
 Unlicensed — all rights reserved.
+
+---
+
+## `mllab` — Python ML & LLM toolkit
+
+Source tree under `src/mllab/`, installed editable by `uv`.
+
+### Layout
+
+```
+src/
+├── mllab/
+│   ├── __init__.py
+│   ├── data.py          # pandas helpers (impute, standardize, train/test split)
+│   └── llm.py           # OpenAI-compatible LLM client (Ollama target by default)
+tests/
+├── test_data.py
+└── test_llm.py
+pyproject.toml           # uv + ruff + mypy (strict) + pytest
+```
+
+### Tooling
+
+| Step | Command |
+|---|---|
+| Sync deps (main + dev) | `uv sync --extra dev` |
+| With torch (heavy, optional) | `uv sync --extra torch --extra dev` |
+| Lint | `uv run ruff check .` |
+| Typecheck | `uv run mypy .` |
+| Tests | `uv run pytest` |
+
+### `mllab.llm` defaults
+
+The `LLMServer` dataclass points at the LAN Ollama instance by default:
+
+- `base_url` = `http://192.168.2.40:11434/v1`
+- `model` = `ollama-remote/qwen3.8:27b-mlx`
+
+Override with `make_server(base_url=..., model=...)` or by constructing
+`LLMServer(...)` directly. The `openai` package is imported lazily inside
+`LLMServer.client()`, so importing `mllab.llm` (and running the config-only
+tests) does not require `openai` to be installed.
+
+### `mllab.data` contract
+
+- All transformations are pure: input → new output, no side effects.
+- `fit_standardize` / `standardize` split is the standard fit-on-train /
+   `apply`-on-everything pattern; use `train_test_split` first, *then*
+   `fit_standardize(train)` to avoid leakage.
+- `train_test_split` is deterministic: pass `seed=N`.
