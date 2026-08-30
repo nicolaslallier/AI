@@ -161,6 +161,21 @@ Container reachability comes from the `CMD` flag
 `opencode serve --hostname 0.0.0.0 --port 4096` — the flag outranks the config
 field, so the config file stays unmutated and the container is still reachable.
 
+> **Security (RCE, unauthenticated).** This `CMD` binds the server on
+> `0.0.0.0:4096` with **no authentication** — neither `Dockerfile` sets
+> `OPENCODE_SERVER_PASSWORD`, and `opencode.json` has no server auth. Several
+> agents (`test`, `heaven-backend`, `heaven-frontend`) run with `bash: allow`,
+> so anyone who can reach the port can drive a `bash` agent that executes
+> commands **without any human approval**. If a consumer publishes the port
+> (e.g. `OPENCODE_BIND=0.0.0.0`, or `make run NAME=opencode-global` against a
+> reachable interface, or a load-balancer / reverse proxy in front of it), that
+> is remote command execution.
+>
+> Keep the port on loopback (`127.0.0.1`, as `compose.yaml` / `.env.example`
+> already default to) unless you set `OPENCODE_SERVER_PASSWORD` first. Do not
+> republish this warning only on `compose.*` — the `CMD` itself is the unsafe
+> default, so it must be called out wherever an image is run.
+
 ### The provider URL is unchanged (known risk)
 
 The provider points in cleartext at `http://192.168.2.40:11434` on the LAN. It
