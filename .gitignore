@@ -7,3 +7,10 @@ node_modules/
 # Build artifacts
 *.tar
 *.image
+
+# Local compose environment
+.env
+
+# Compose workspace mount (keep the directory, ignore its contents)
+workspace/*
+!workspace/.gitkeep
