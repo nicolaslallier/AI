@@ -1,0 +1,12 @@
+name: ft-example
+seed: 0
+eval_set: data/train/ft-example/valid_eval.jsonl
+system: finetune.system:build
+finetune:
+  source: data/examples/ft_source.jsonl
+  data_dir: data/train/ft-example
+  model: mlx-community/Qwen2.5-3B-Instruct-4bit
+  split: {valid: 0.15, test: 0.15}
+  lora: {rank: 8, scale: 20.0, dropout: 0.0, num_layers: 16}
+  train: {batch_size: 2, learning_rate: 1.0e-4, iters: 100, steps_per_eval: 20, max_seq_length: 512}
+  generation: {max_tokens: 100, temperature: 0.0}

@@ -1,23 +1,13 @@
 import json
-from datetime import date
-from pathlib import Path
 
 import yaml
 
 from common.jsonl import write_jsonl
+from common.runs import new_run_dir
 
 
 def save_run(cfg, data_sha256, metrics, results, root="runs"):
-    base = Path(root) / f"{date.today().isoformat()}-{cfg['name']}"
-    base.parent.mkdir(parents=True, exist_ok=True)
-    run_dir, n = base, 2
-    while True:
-        try:
-            run_dir.mkdir()
-            break
-        except FileExistsError:
-            run_dir = Path(f"{base}-{n}")
-            n += 1
+    run_dir = new_run_dir(cfg["name"], root)
     (run_dir / "config.yaml").write_text(
         yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8"
     )
