@@ -46,3 +46,29 @@ def test_cli_prints_stats(capsys):
     main(["configs/rag-example.yaml"])
     out = capsys.readouterr().out
     assert "3 documents" in out and "3 chunks" in out
+
+
+def test_hidden_dirs_are_skipped(tmp_path):
+    for d, name, data in [(".obsidian", "x.md", b"x"), (".trash", "y.md", b"y"), (".git", "z.txt", b"\xff\xfe\x00")]:
+        (tmp_path / d).mkdir()
+        (tmp_path / d / name).write_bytes(data)
+    (tmp_path / "a.md").write_text("a", encoding="utf-8")
+    assert [d["doc_id"] for d in load_documents(tmp_path)] == ["a.md"]
+
+
+def test_bom_is_stripped(tmp_path):
+    (tmp_path / "a.md").write_bytes(b"\xef\xbb\xbfbonjour")
+    assert load_documents(tmp_path)[0]["text"] == "bonjour"
+
+
+def test_cli_rejects_docs_without_text(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "blank.md").write_text("  \n\n", encoding="utf-8")
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        f"name: t\nseed: 0\nrag:\n  docs_dir: {docs}\n  embedding: {{model: m}}\n  generation: {{model: g}}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="no non-empty text"):
+        main([str(cfg)])

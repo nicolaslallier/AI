@@ -61,3 +61,14 @@ def test_end_to_end_through_evalkit(tmp_path, monkeypatch):
     assert metrics["citation_validity"] == 1.0
     run_dir = next((tmp_path / "runs").iterdir())
     assert {"config.yaml", "metrics.json", "outputs.jsonl"} <= {p.name for p in run_dir.iterdir()}
+
+
+def test_build_seeds_mlx(tmp_path, monkeypatch):
+    import mlx.core as mx
+
+    cfg, _ = prepare(tmp_path, monkeypatch)
+    cfg["seed"] = 7
+    seen = []
+    monkeypatch.setattr(mx.random, "seed", seen.append)
+    rs.build(cfg)
+    assert seen == [7]

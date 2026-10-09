@@ -43,6 +43,9 @@ class RagSystem:
 
 
 def build(cfg):
+    import mlx.core as mx
+
+    mx.random.seed(cfg["seed"])
     s = rag_settings(cfg)
     index = open_index(s, load_documents(s["docs_dir"]))  # échoue tôt si l'index est périmé
     g = s["generation"]

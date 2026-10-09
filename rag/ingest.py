@@ -21,9 +21,9 @@ def load_documents(docs_dir):
         raise ValueError(f"docs_dir not found: {docs_dir} (put your documents there)")
     docs = []
     for p in sorted(root.rglob("*")):
-        if p.is_file() and p.suffix.lower() in TEXT_EXTS:
+        if p.is_file() and p.suffix.lower() in TEXT_EXTS and not any(x.startswith(".") for x in p.relative_to(root).parts):
             try:
-                text = p.read_text(encoding="utf-8")
+                text = p.read_text(encoding="utf-8-sig")
             except UnicodeDecodeError as e:
                 raise ValueError(f"{p}: not valid UTF-8 ({e.reason})") from e
             docs.append({"doc_id": p.relative_to(root).as_posix(), "text": clean(text)})
@@ -43,6 +43,8 @@ def main(argv):
     s = load_rag_config(args.config)["rag"]
     docs = load_documents(s["docs_dir"])
     chunks = build_chunks(docs, s["chunking"]["size"], s["chunking"]["overlap"])
+    if not chunks:
+        raise ValueError(f"{s['docs_dir']}: no non-empty text to chunk")
     median = statistics.median(len(c["text"]) for c in chunks)
     print(f"{len(docs)} documents, {len(chunks)} chunks, median {median:.0f} chars")
     print(f"Next: uv run python -m rag.index {args.config}")
