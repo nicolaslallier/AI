@@ -12,11 +12,13 @@ import finetune.system as ft_system
 import rag.system as rag_system
 from common.config import is_int, load_config, merge_section
 from common.jsonl import read_jsonl, read_qa, write_jsonl
+from common.llm import check_adapter
 from common.runs import new_run_dir
 from evalkit.harness import evaluate
 from evalkit.metrics import normalize
 from evalkit.report import render_report
 from finetune.data import to_messages
+from finetune.train import data_sha256
 from rag.config import rag_settings
 from rag.index import index_key, open_index
 from rag.ingest import load_documents
@@ -56,14 +58,14 @@ def build_systems(cfg):
     """Charge tout ce qu'il faut d'abord (index périmé, adaptateur incompatible = échec avant l'évaluation)."""
     c, r = cfg["compare"], cfg["rag"]
     g, want = r["generation"], c["systems"]
+    if any(x.endswith("+rag") for x in want):  # index périmé : échec avant tout chargement de modèle
+        index = open_index(r, load_documents(r["docs_dir"]))
+        embedder = rag_system.make_embedder(r)
     gens = {}
     if {"base", "base+rag"} & set(want):
         gens["base"] = ft_system.make_generator({"model": g["model"], "adapter": ""})
     if {"ft", "ft+rag"} & set(want):
         gens["ft"] = ft_system.make_generator({"model": g["model"], "adapter": c["adapter"]})
-    if any(x.endswith("+rag") for x in want):
-        index = open_index(r, load_documents(r["docs_dir"]))
-        embedder = rag_system.make_embedder(r)
 
     def plain(gen):
         def answer(question):
@@ -137,6 +139,10 @@ def _manifest(cfg):
         if not conf.is_file():
             raise ValueError(f"compare.adapter : {conf} introuvable ; lancer d'abord `finetune.train` "
                              "et reporter le dossier `adapters` du run")
+        try:
+            check_adapter(r["generation"]["model"], c["adapter"])
+        except ValueError as e:
+            raise ValueError(f"compare.adapter : {e}") from e
         m["adapter_config_sha256"] = _sha256(conf)
         train_metrics = Path(c["adapter"]).parent / "metrics.json"  # écrit par finetune.train
         if train_metrics.is_file():
@@ -159,6 +165,19 @@ def main(argv):
     warnings = [f"Fuite d'évaluation : {len(leaks)} question(s) vue(s) à l'entraînement ({', '.join(map(str, leaks))}) ; "
                 "les résultats de `ft` sont optimistes."] if leaks else []
     notes = [] if cfg["compare"]["train_file"] else ["Aucune détection de fuite (`compare.train_file` non renseigné)."]
+    if any(x.startswith("ft") for x in cfg["compare"]["systems"]):
+        ft_sha = manifest["ft_data_sha256"]
+        if ft_sha is None:
+            notes.append("Données d'entraînement de l'adaptateur non identifiées (pas de metrics.json) : "
+                         "détection de fuite non vérifiable.")
+        elif cfg["compare"]["train_file"]:
+            try:
+                same = data_sha256(Path(cfg["compare"]["train_file"]).parent) == ft_sha
+            except OSError:
+                same = False
+            if not same:
+                warnings.append("train_file ne correspond pas aux données de l'adaptateur ; "
+                                "détection de fuite non fiable.")
     random.seed(cfg["seed"])
     import mlx.core as mx
 

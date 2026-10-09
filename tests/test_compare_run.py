@@ -7,6 +7,7 @@ import evalkit.compare as cmp
 from common.jsonl import read_jsonl, read_qa, write_jsonl
 from evalkit.compare import leaked_ids, main, run_compare
 from fakes import make_cfg
+from finetune.train import data_sha256
 from ft_fakes import write_cfg
 
 QA = [
@@ -132,7 +133,7 @@ def test_missing_adapter_gives_actionable_error(tmp_path, monkeypatch):
 def test_corrupt_training_metrics_names_the_file(tmp_path, monkeypatch):
     adapter = tmp_path / "ftrun" / "adapters"
     adapter.mkdir(parents=True)
-    (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
+    (adapter / "adapter_config.json").write_text('{"model": "fake"}', encoding="utf-8")
     (tmp_path / "ftrun" / "metrics.json").write_text("{not json", encoding="utf-8")
     path = _cfg_for(tmp_path, monkeypatch, systems=["ft"], adapter=str(adapter))
     with pytest.raises(ValueError, match="metrics.json"):
@@ -150,3 +151,46 @@ def test_render_failure_leaves_no_run_dir(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="render failed"):
         main([str(path)])
     assert not (tmp_path / "runs").exists() or not list((tmp_path / "runs").iterdir())
+
+
+def test_adapter_trained_on_another_model_fails_before_model_load(tmp_path, monkeypatch):
+    adapter = tmp_path / "ftrun" / "adapters"
+    adapter.mkdir(parents=True)
+    (adapter / "adapter_config.json").write_text('{"model": "other"}', encoding="utf-8")
+    path = _cfg_for(tmp_path, monkeypatch, systems=["ft"], adapter=str(adapter))
+    with pytest.raises(ValueError, match=r"compare\.adapter.*other"):
+        main([str(path)])
+
+
+def _ft_run(tmp_path, monkeypatch, sha):
+    """Run compare avec ft ; renvoie le texte du rapport. sha=None: pas de metrics.json."""
+    adapter = tmp_path / "ftrun" / "adapters"
+    adapter.mkdir(parents=True)
+    (adapter / "adapter_config.json").write_text('{"model": "fake"}', encoding="utf-8")
+    data = tmp_path / "ftdata"
+    data.mkdir()
+    for n in ("train", "valid", "test"):
+        write_jsonl(data / f"{n}.jsonl", [{"messages": [{"role": "user", "content": "zzz"}]}])
+    if sha == "match":
+        sha = data_sha256(data)
+    if sha is not None:
+        (tmp_path / "ftrun" / "metrics.json").write_text(json.dumps({"data_sha256": sha}), encoding="utf-8")
+    path = _cfg_for(tmp_path, monkeypatch, systems=["ft"], adapter=str(adapter), train_file=str(data / "train.jsonl"))
+    monkeypatch.setattr(cmp, "build_systems", lambda c: {"ft": lambda q: {"answer": "Paris", "sources": []}})
+    main([str(path)])
+    return (next((tmp_path / "runs").iterdir()) / "report.md").read_text(encoding="utf-8")
+
+
+def test_matching_training_data_hash_adds_no_warning(tmp_path, monkeypatch):
+    report = _ft_run(tmp_path, monkeypatch, "match")
+    assert "ne correspond pas" not in report and "non identifiées" not in report
+
+
+def test_differing_training_data_hash_warns_at_the_top(tmp_path, monkeypatch):
+    report = _ft_run(tmp_path, monkeypatch, "abc")
+    assert "ne correspond pas" in report.split("## Verdict")[0]
+
+
+def test_missing_training_metrics_adds_a_note(tmp_path, monkeypatch):
+    report = _ft_run(tmp_path, monkeypatch, None)
+    assert "non identifiées" in report.split("## Limites")[1]

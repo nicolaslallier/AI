@@ -56,7 +56,7 @@ def test_only_what_is_needed_is_loaded(tmp_path, monkeypatch):
 
 
 def test_stale_index_fails_before_any_generation(tmp_path, monkeypatch):
-    cfg, gens, _ = setup(tmp_path, monkeypatch, index=False, systems=["base+rag"])
+    cfg, _, made = setup(tmp_path, monkeypatch, index=False, systems=["base+rag"])
     with pytest.raises(ValueError, match="rag.index"):
         build_systems(cfg)
-    assert gens[""].calls == []
+    assert made == []  # aucun générateur chargé
