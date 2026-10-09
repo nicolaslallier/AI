@@ -94,6 +94,21 @@ def test_rendered_lines_fit_80_columns_outside_table_and_command():
         assert len(line) <= 80, line
 
 
+def test_long_warning_and_title_fit_80_columns():
+    metrics, results = make([True, False], [True, True])
+    out = render_report("très " * 30, "c", metrics, results, {}, min_gap=2,
+                        warnings=["Fuite : " + "très " * 30])
+    in_bash = False
+    for line in out.splitlines():
+        if line.startswith("```"):
+            in_bash = not in_bash
+            continue
+        if in_bash or line.startswith("|"):
+            continue
+        assert len(line) <= 80, line
+    assert "Fuite" in out and "Verdict" in out
+
+
 def test_rejects_empty_results():
     with pytest.raises(ValueError, match="empty"):
         render_report("t", "c", {}, {}, {}, min_gap=2)

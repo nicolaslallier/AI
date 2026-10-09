@@ -69,8 +69,10 @@ def _divergent(results, limit=3):
 
 def render_report(name, command, metrics, results, latency, min_gap, warnings=(), notes=()):
     _check(metrics, results)
-    out = [f"# Comparaison — {name}", ""]
-    out += [f"> ⚠ {w}" for w in warnings] + ([""] if warnings else [])
+    out = [textwrap.fill(f"# Comparaison — {name}", width=WIDTH, break_on_hyphens=False), ""]
+    out += [textwrap.fill(w, width=WIDTH, initial_indent="> ⚠ ", subsequent_indent="> ",
+                          break_on_hyphens=False) for w in warnings]
+    out += [""] if warnings else []
     out += ["## Verdict", "", textwrap.fill(_verdict(metrics, min_gap), width=WIDTH,
                                             break_on_hyphens=False), ""]
     out += ["## Tableau", "", "| Système | Exactitude | Recall@k | Fidélité | Latence |", "|---|---|---|---|---|"]
