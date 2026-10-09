@@ -86,3 +86,67 @@ def test_main_reports_leaks_and_rejects_empty_eval(tmp_path, monkeypatch):
     write_jsonl(eval_path, [])
     with pytest.raises(ValueError, match="empty"):
         main([str(write_cfg(tmp_path, cfg))])
+
+
+def _cfg_for(tmp_path, monkeypatch, **compare):
+    cfg = make_cfg(tmp_path)
+    eval_path = tmp_path / "eval.jsonl"
+    write_jsonl(eval_path, QA)
+    cfg.update(eval_set=str(eval_path), runs_dir=str(tmp_path / "runs"), compare=compare)
+
+    def boom(c):
+        raise AssertionError("build_systems must not be called")
+
+    monkeypatch.setattr(cmp, "build_systems", boom)
+    return write_cfg(tmp_path, cfg)
+
+
+def test_missing_train_file_fails_before_any_model_load(tmp_path, monkeypatch):
+    path = _cfg_for(tmp_path, monkeypatch, systems=["base"], train_file=str(tmp_path / "nope.jsonl"))
+    with pytest.raises(ValueError, match="nope.jsonl"):
+        main([str(path)])
+
+
+@pytest.mark.parametrize("row", [
+    [1], {"messages": "x"}, {"messages": [3]}, {"messages": [{"role": "user", "content": 5}]}])
+def test_malformed_train_row_names_file_and_row(tmp_path, monkeypatch, row):
+    train = tmp_path / "train.jsonl"
+    write_jsonl(train, [{"messages": []}, row])
+    path = _cfg_for(tmp_path, monkeypatch, systems=["base"], train_file=str(train))
+    with pytest.raises(ValueError, match=r"train\.jsonl.*2"):
+        main([str(path)])
+
+
+def test_rows_without_messages_are_tolerated(tmp_path):
+    train = tmp_path / "train.jsonl"
+    write_jsonl(train, [{"text": "x"}])
+    assert leaked_ids(str(train), QA) == []
+
+
+def test_missing_adapter_gives_actionable_error(tmp_path, monkeypatch):
+    path = _cfg_for(tmp_path, monkeypatch, systems=["ft"], adapter=str(tmp_path / "gone"))
+    with pytest.raises(ValueError, match=r"compare\.adapter.*gone.*finetune\.train"):
+        main([str(path)])
+
+
+def test_corrupt_training_metrics_names_the_file(tmp_path, monkeypatch):
+    adapter = tmp_path / "ftrun" / "adapters"
+    adapter.mkdir(parents=True)
+    (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "ftrun" / "metrics.json").write_text("{not json", encoding="utf-8")
+    path = _cfg_for(tmp_path, monkeypatch, systems=["ft"], adapter=str(adapter))
+    with pytest.raises(ValueError, match="metrics.json"):
+        main([str(path)])
+
+
+def test_render_failure_leaves_no_run_dir(tmp_path, monkeypatch):
+    path = _cfg_for(tmp_path, monkeypatch, systems=["base"])
+    monkeypatch.setattr(cmp, "build_systems", lambda c: {"base": lambda q: {"answer": "Paris", "sources": []}})
+
+    def bad(*a, **k):
+        raise ValueError("render failed")
+
+    monkeypatch.setattr(cmp, "render_report", bad)
+    with pytest.raises(ValueError, match="render failed"):
+        main([str(path)])
+    assert not (tmp_path / "runs").exists() or not list((tmp_path / "runs").iterdir())
