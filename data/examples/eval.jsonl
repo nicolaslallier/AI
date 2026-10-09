@@ -1,0 +1,3 @@
+{"id": "ex1", "question": "Quelle est la capitale de la France ?", "answer": "Paris", "sources": ["examples/geo.md"]}
+{"id": "ex2", "question": "Combien font 2 + 2 ?", "answer": "4", "sources": []}
+{"id": "ex3", "question": "Quel est le plus grand océan ?", "answer": "Pacifique", "sources": ["examples/geo.md"]}
