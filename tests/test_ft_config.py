@@ -37,6 +37,8 @@ def test_typo_in_section_fails_with_the_key_name(tmp_path):
         ({"lora": {"rank": True}}, "finetune.lora.rank"),
         ({"split": {"valid": 0.6, "test": 0.5}}, "finetune.split"),
         ({"split": {"valid": 0, "test": 0.2}}, "finetune.split"),
+        ({"split": {"seed": True}}, "finetune.split.seed"),
+        ({"split": {"seed": "a"}}, "finetune.split.seed"),
         ({"generation": {"temperature": -1}}, "temperature"),
         ({"model": ""}, "finetune.model"),
     ],

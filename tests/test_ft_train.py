@@ -62,3 +62,38 @@ def test_train_before_prepare_names_the_command(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="finetune.prepare"):
         ft_train.train(make_ft_cfg(tmp_path), root=tmp_path / "runs")
     assert not (tmp_path / "runs").exists()
+
+
+def _prepared(tmp_path, monkeypatch, **ft):
+    monkeypatch.setattr(ft_train, "run_mlx_lora", fake_mlx([]))
+    cfg = make_ft_cfg(tmp_path, **ft)
+    prepare(cfg)
+    return cfg
+
+
+def test_train_without_test_jsonl_fails_before_creating_a_run(tmp_path, monkeypatch):
+    cfg = _prepared(tmp_path, monkeypatch)
+    (tmp_path / "data" / "test.jsonl").unlink()
+    with pytest.raises(ValueError, match="test.jsonl"):
+        ft_train.train(cfg, root=tmp_path / "runs")
+    assert not (tmp_path / "runs").exists()
+
+
+@pytest.mark.parametrize("name, bs", [("train", 50), ("valid", 10)])
+def test_train_with_fewer_rows_than_batch_size_fails_before_creating_a_run(tmp_path, monkeypatch, name, bs):
+    cfg = _prepared(tmp_path, monkeypatch, train={"batch_size": bs, "iters": 20, "steps_per_report": 5, "steps_per_eval": 10})
+    with pytest.raises(ValueError, match=rf"{name}.jsonl.*\d+ rows.*batch_size.*{bs}"):
+        ft_train.train(cfg, root=tmp_path / "runs")
+    assert not (tmp_path / "runs").exists()
+
+
+def test_data_hash_is_taken_before_training(tmp_path, monkeypatch):
+    cfg = _prepared(tmp_path, monkeypatch)
+    before = ft_train.data_sha256(tmp_path / "data")
+
+    def mutating(args):
+        (tmp_path / "data" / "train.jsonl").write_text("changed\n" * 5, encoding="utf-8")
+
+    monkeypatch.setattr(ft_train, "run_mlx_lora", mutating)
+    _, m = ft_train.train(cfg, root=tmp_path / "runs")
+    assert m["data_sha256"] == before

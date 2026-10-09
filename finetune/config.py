@@ -7,7 +7,7 @@ SCHEMA = {
     "model": None,
     "system_prompt": "",
     "adapter": "",
-    "split": {"valid": 0.15, "test": 0.15},
+    "split": {"valid": 0.15, "test": 0.15, "seed": 0},
     "lora": {"rank": 8, "scale": 20.0, "dropout": 0.0, "num_layers": 16},
     "train": {
         "batch_size": 2,
@@ -48,6 +48,8 @@ def ft_settings(cfg):
     v, t = s["split"]["valid"], s["split"]["test"]
     if not (_number(v) and _number(t) and v > 0 and t > 0 and v + t < 1):
         raise ValueError("finetune.split: valid and test must be > 0 and sum to < 1")
+    if not is_int(s["split"]["seed"]):
+        raise ValueError("finetune.split.seed must be an integer")
     if not (_number(s["train"]["learning_rate"]) and s["train"]["learning_rate"] > 0):
         raise ValueError("finetune.train.learning_rate must be a number > 0")
     if not isinstance(s["train"]["grad_checkpoint"], bool):

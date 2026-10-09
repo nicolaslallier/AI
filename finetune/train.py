@@ -82,16 +82,21 @@ def data_sha256(data_dir):
 
 def train(cfg, root="runs"):
     s = ft_settings(cfg)
-    missing = [n for n in ("train", "valid") if not (Path(s["data_dir"]) / f"{n}.jsonl").is_file()]
-    if missing:
-        raise ValueError(
-            f"{s['data_dir']}: missing {missing[0]}.jsonl — run: uv run python -m finetune.prepare <config>"
-        )
+    d = Path(s["data_dir"])
+    for n in ("train", "valid", "test"):
+        if not (d / f"{n}.jsonl").is_file():
+            raise ValueError(f"{d}: missing {n}.jsonl — run: uv run python -m finetune.prepare <config>")
+    bs = s["train"]["batch_size"]
+    for n in ("train", "valid"):
+        rows = len((d / f"{n}.jsonl").read_text(encoding="utf-8").splitlines())
+        if rows < bs:
+            raise ValueError(f"{d / f'{n}.jsonl'}: {rows} rows < finetune.train.batch_size ({bs})")
+    sha = data_sha256(d)
     run_dir = new_run_dir(cfg["name"], root)
     (run_dir / "config.yaml").write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
     run_mlx_lora(mlx_args(s, cfg["seed"], run_dir / "adapters"))
     log = read_log(run_dir / LOG_NAME)
-    metrics = {**summarize(log), "iters": s["train"]["iters"], "data_sha256": data_sha256(s["data_dir"])}
+    metrics = {**summarize(log), "iters": s["train"]["iters"], "data_sha256": sha}
     (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     plot(log, run_dir / "curves.png")
     return run_dir, metrics

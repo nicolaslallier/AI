@@ -19,7 +19,7 @@ def prepare(cfg):
     rows = read_qa(s["source"])
     parts = {"train": [], "valid": [], "test": []}
     for r in rows:
-        parts[split_of(r["id"], cfg["seed"], s["split"]["valid"], s["split"]["test"])].append(r)
+        parts[split_of(r["id"], s["split"]["seed"], s["split"]["valid"], s["split"]["test"])].append(r)
     empty = [k for k, v in parts.items() if not v]
     if empty:
         counts = {k: len(v) for k, v in parts.items()}

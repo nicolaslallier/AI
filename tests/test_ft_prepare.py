@@ -57,3 +57,14 @@ def test_cli_prints_counts_and_next_step(tmp_path, capsys):
     main([str(path)])
     out = capsys.readouterr().out
     assert "train" in out and "finetune.train" in out
+
+
+def test_split_depends_on_split_seed_not_experiment_seed(tmp_path):
+    def ids(seed, split_seed, sub):
+        cfg = make_ft_cfg(tmp_path / sub, split={"seed": split_seed})
+        cfg["seed"] = seed
+        prepare(cfg)
+        return [r["id"] for r in read_jsonl(tmp_path / sub / "data" / "test_eval.jsonl")]
+
+    assert ids(0, 0, "a") == ids(7, 0, "b")
+    assert ids(0, 0, "a") != ids(0, 1, "c")
