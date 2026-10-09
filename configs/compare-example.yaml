@@ -1,0 +1,16 @@
+name: compare-example
+seed: 0
+eval_set: data/examples/compare_eval.jsonl
+compare:
+  systems: [base, base+rag, ft, ft+rag]
+  adapter: runs/CHANGE-ME/adapters        # produit par: uv run python -m finetune.train configs/ft-example.yaml
+  system_prompt: ""                       # le même que finetune.system_prompt de l'entraînement
+  train_file: data/train/ft-example/train.jsonl   # active l'alerte de fuite (questions déjà vues à l'entraînement)
+  min_gap: 2
+rag:
+  docs_dir: data/examples/docs
+  index_dir: data/index
+  chunking: {size: 800, overlap: 100}
+  embedding: {model: BAAI/bge-m3, batch_size: 16}
+  retrieval: {k: 5}
+  generation: {model: mlx-community/Qwen2.5-3B-Instruct-4bit, max_tokens: 400, temperature: 0.0}
