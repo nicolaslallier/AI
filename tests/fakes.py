@@ -34,3 +34,15 @@ class HashEmbedder:
 
     def embed_query(self, text):
         return self._vec(text)
+
+
+class ScriptedGenerator:
+    """Returns `reply` and records the messages it received."""
+
+    def __init__(self, reply="D'après les documents [1]."):
+        self.reply = reply
+        self.calls = []
+
+    def generate(self, messages, max_tokens=400, temperature=0.0):
+        self.calls.append(messages)
+        return self.reply
