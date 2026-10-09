@@ -94,10 +94,10 @@ def test_rendered_lines_fit_80_columns_outside_table_and_command():
         assert len(line) <= 80, line
 
 
-def test_long_warning_and_title_fit_80_columns():
+def test_long_warning_fits_80_columns_and_precedes_verdict():
     metrics, results = make([True, False], [True, True])
-    out = render_report("très " * 30, "c", metrics, results, {}, min_gap=2,
-                        warnings=["Fuite : " + "très " * 30])
+    warning = "Fuite : " + "très " * 30
+    out = render_report("t", "c", metrics, results, {}, min_gap=2, warnings=[warning])
     in_bash = False
     for line in out.splitlines():
         if line.startswith("```"):
@@ -106,7 +106,20 @@ def test_long_warning_and_title_fit_80_columns():
         if in_bash or line.startswith("|"):
             continue
         assert len(line) <= 80, line
-    assert "Fuite" in out and "Verdict" in out
+    head = out.split("## Verdict")[0]
+    assert out.index("Fuite") < out.index("## Verdict")
+    wrapped = " ".join(
+        line.removeprefix("> ⚠ ").removeprefix("> ")
+        for line in head.splitlines() if line.startswith(">")
+    )
+    assert wrapped.split() == warning.split()
+
+
+def test_long_title_stays_on_one_line():
+    metrics, results = make([True, False], [True, True])
+    name = "très " * 30
+    out = render_report(name, "c", metrics, results, {}, min_gap=2)
+    assert out.splitlines()[0] == f"# Comparaison — {name}"
 
 
 def test_rejects_empty_results():
