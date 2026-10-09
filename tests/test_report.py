@@ -1,3 +1,5 @@
+import pytest
+
 from evalkit.report import fmt_rate, render_report
 
 
@@ -8,7 +10,7 @@ def rows(correct):
     ]
 
 
-def make(base, rag, n_extra=0):
+def make(base, rag):
     results = {"base": rows(base), "base+rag": rows(rag)}
     metrics = {
         "base": {"n": len(base), "accuracy": sum(base) / len(base)},
@@ -69,3 +71,49 @@ def test_warnings_come_first_and_single_system_has_no_comparative_verdict():
 
 def test_reproduction_command_is_verbatim():
     assert "uv run python -m evalkit.compare c.yaml" in render(*make([True], [True]))
+
+
+def test_rendered_lines_fit_80_columns_outside_table_and_command():
+    names = ["base", "base+rag", "ft", "ft+rag"]
+    results = {
+        n: [{"id": "q1", "question": "Q " + "très " * 60 + "?", "expected": "x" * 50,
+             "answer": "réponse\nlongue " + "é" * 2000, "correct": c}]
+        for n, c in zip(names, [True, False, True, False])
+    }
+    metrics = {n: {"n": 1, "accuracy": float(c)} for n, c in zip(names, [True, False, True, False])}
+    out = render_report("t", "uv run python -m evalkit.compare c.yaml", metrics, results,
+                        {n: None for n in names}, min_gap=2,
+                        notes=["note " + "très " * 40])
+    in_bash = False
+    for line in out.splitlines():
+        if line.startswith("```"):
+            in_bash = not in_bash
+            continue
+        if in_bash or line.startswith("|"):
+            continue
+        assert len(line) <= 80, line
+
+
+def test_rejects_empty_results():
+    with pytest.raises(ValueError, match="empty"):
+        render_report("t", "c", {}, {}, {}, min_gap=2)
+
+
+def test_rejects_metrics_and_results_with_different_systems():
+    metrics, results = make([True], [True])
+    with pytest.raises(ValueError, match="same systems"):
+        render_report("t", "c", metrics, {"base": results["base"]}, {}, min_gap=2)
+
+
+def test_rejects_systems_with_different_row_counts():
+    metrics, results = make([True, False], [True, True])
+    results["base+rag"] = rows([True, True, True])
+    with pytest.raises(ValueError, match="same number of rows"):
+        render_report("t", "c", metrics, results, {}, min_gap=2)
+
+
+def test_rejects_systems_with_different_n():
+    metrics, results = make([True, False], [True, True])
+    metrics["base+rag"]["n"] = 5
+    with pytest.raises(ValueError, match="same n"):
+        render_report("t", "c", metrics, results, {}, min_gap=2)

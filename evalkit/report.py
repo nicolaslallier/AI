@@ -1,4 +1,7 @@
+import textwrap
+
 DASH = "—"
+WIDTH = 80
 
 
 def fmt_rate(correct, n):
@@ -31,10 +34,33 @@ def _verdict(metrics, min_gap):
     return f"Exactitude par rapport à `{ref}` sur {n} questions : " + " ; ".join(parts) + "."
 
 
+def _clip(text, width):
+    text = " ".join(str(text).split())
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def _bullet(text):
+    return textwrap.fill(text, width=WIDTH, subsequent_indent="  ",
+                         break_on_hyphens=False)
+
+
+def _check(metrics, results):
+    if not results:
+        raise ValueError("results is empty: nothing to report")
+    if set(metrics) != set(results):
+        raise ValueError("metrics and results must have the same systems")
+    lengths = {len(rows) for rows in results.values()}
+    if len(lengths) > 1:
+        raise ValueError("all systems must have the same number of rows")
+    ns = {m["n"] for m in metrics.values()}
+    if len(ns) > 1:
+        raise ValueError("all systems must share the same n")
+
+
 def _divergent(results, limit=3):
     names = list(results)
     scored = []
-    for i, base_row in enumerate(results[names[0]]):
+    for i in range(len(results[names[0]])):
         ok = [results[n][i]["correct"] for n in names]
         if 0 < sum(ok) < len(ok):
             scored.append((abs(sum(ok) - len(ok) / 2), i))  # plus proche d'un partage moitié/moitié d'abord
@@ -42,9 +68,11 @@ def _divergent(results, limit=3):
 
 
 def render_report(name, command, metrics, results, latency, min_gap, warnings=(), notes=()):
+    _check(metrics, results)
     out = [f"# Comparaison — {name}", ""]
     out += [f"> ⚠ {w}" for w in warnings] + ([""] if warnings else [])
-    out += ["## Verdict", "", _verdict(metrics, min_gap), ""]
+    out += ["## Verdict", "", textwrap.fill(_verdict(metrics, min_gap), width=WIDTH,
+                                            break_on_hyphens=False), ""]
     out += ["## Tableau", "", "| Système | Exactitude | Recall@k | Fidélité | Latence |", "|---|---|---|---|---|"]
     for n, m in metrics.items():
         out.append(
@@ -57,17 +85,26 @@ def render_report(name, command, metrics, results, latency, min_gap, warnings=()
         out.append("Aucune divergence : tous les systèmes ont le même verdict sur chaque question.")
     for i in picks:
         first = results[next(iter(results))][i]
-        out += [f"**{first['id']} — {first['question']}** (attendu : `{first['expected']}`)", ""]
-        out += [f"- {n} {'✔' if results[n][i]['correct'] else '✘'} : {results[n][i]['answer']!r}" for n in results]
+        qid = first["id"]
+        expected = _clip(first["expected"], 20)
+        question = _clip(first["question"], max(10, WIDTH - 22 - len(qid) - len(expected)))
+        out += [f"**{qid} — {question}** (attendu : `{expected}`)", ""]
+        for n in results:
+            mark = "✔" if results[n][i]["correct"] else "✘"
+            budget = WIDTH - len(f"- {n} {mark} : ") - 2  # 2 : guillemets du repr
+            out.append(f"- {n} {mark} : {_clip(results[n][i]['answer'], budget)!r}")
         out.append("")
-    out += ["## Limites", ""]
-    out += [
+    limits = [
         "- Verdict fondé sur des **règles** (la réponse attendue figure dans la réponse), pas sur un LLM juge ; "
         "relire à la main un échantillon de `outputs.jsonl`.",
         "- Les systèmes `+rag` utilisent le prompt RAG (passages numérotés + citations) ; `system_prompt` ne "
         "s'applique qu'aux systèmes sans RAG.",
         f"- Un écart inférieur à {min_gap} question(s) n'est pas interprétable à cet effectif.",
         *[f"- {n}" for n in notes],
+    ]
+    out += ["## Limites", ""]
+    out += [_bullet(b) for b in limits]
+    out += [
         "",
         "## Reproduire",
         "",
