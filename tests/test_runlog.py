@@ -3,10 +3,10 @@ import json
 from datetime import date
 
 from common.jsonl import read_jsonl
-from eval.runlog import save_run
+from evalkit.runlog import save_run
 
 CFG = {"name": "demo", "seed": 1}
-METRICS = {"n": 1, "accuracy": 1.0, "recall_at_k": None}
+METRICS = {"n": 1, "accuracy": 1.0, "source_hit_rate": None}
 RESULTS = [{"id": "1", "answer": "x"}]
 
 
@@ -18,7 +18,7 @@ def data_file(tmp_path):
 
 def test_save_run_writes_config_metrics_outputs(tmp_path):
     d = data_file(tmp_path)
-    run = save_run(CFG, d, METRICS, RESULTS, root=tmp_path / "runs")
+    run = save_run(CFG, hashlib.sha256(d.read_bytes()).hexdigest(), METRICS, RESULTS, root=tmp_path / "runs")
     assert run.name == f"{date.today().isoformat()}-demo"
     assert "name: demo" in (run / "config.yaml").read_text(encoding="utf-8")
     saved = json.loads((run / "metrics.json").read_text(encoding="utf-8"))
@@ -29,7 +29,7 @@ def test_save_run_writes_config_metrics_outputs(tmp_path):
 
 def test_same_name_twice_does_not_overwrite(tmp_path):
     d = data_file(tmp_path)
-    a = save_run(CFG, d, METRICS, RESULTS, root=tmp_path / "runs")
-    b = save_run(CFG, d, METRICS, RESULTS, root=tmp_path / "runs")
+    a = save_run(CFG, hashlib.sha256(d.read_bytes()).hexdigest(), METRICS, RESULTS, root=tmp_path / "runs")
+    b = save_run(CFG, hashlib.sha256(d.read_bytes()).hexdigest(), METRICS, RESULTS, root=tmp_path / "runs")
     assert a != b and a.exists() and b.exists()
     assert b.name == a.name + "-2"

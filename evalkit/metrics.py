@@ -1,3 +1,4 @@
+import re
 import unicodedata
 
 
@@ -8,7 +9,7 @@ def normalize(s):
 
 
 def answer_correct(pred, expected):
-    return normalize(expected) in normalize(pred)
+    return re.search(rf"(?<!\w){re.escape(normalize(expected))}(?!\w)", normalize(pred)) is not None
 
 
 def source_hit(pred_sources, expected_sources):

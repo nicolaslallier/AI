@@ -3,7 +3,7 @@ import json
 import pytest
 
 from common.jsonl import write_jsonl
-from eval.run import main
+from evalkit.run import main
 
 QA = [
     {"id": "1", "question": "Capitale ?", "answer": "Paris", "sources": ["geo.md"]},
@@ -11,7 +11,7 @@ QA = [
 ]
 
 
-def setup(tmp_path, system="eval.trivial:build"):
+def setup(tmp_path, system="evalkit.trivial:build"):
     write_jsonl(tmp_path / "eval.jsonl", QA)
     cfg = tmp_path / "c.yaml"
     cfg.write_text(
@@ -24,7 +24,7 @@ def setup(tmp_path, system="eval.trivial:build"):
 
 def test_end_to_end_with_trivial_system(tmp_path):
     metrics = main([str(setup(tmp_path))])
-    assert metrics == {"n": 2, "accuracy": 1.0, "recall_at_k": 1.0}
+    assert metrics == {"n": 2, "accuracy": 1.0, "source_hit_rate": 1.0}
     (run,) = (tmp_path / "runs").iterdir()
     saved = json.loads((run / "metrics.json").read_text(encoding="utf-8"))
     assert saved["accuracy"] == 1.0 and "data_sha256" in saved
@@ -37,4 +37,4 @@ def test_same_config_gives_same_metrics(tmp_path):
 
 def test_unknown_system_is_a_clear_error(tmp_path):
     with pytest.raises(ValueError, match="nope"):
-        main([str(setup(tmp_path, system="eval.trivial:nope"))])
+        main([str(setup(tmp_path, system="evalkit.trivial:nope"))])

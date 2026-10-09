@@ -65,3 +65,18 @@ def test_config_rejects_invalid(tmp_path, body):
     p.write_text(body, encoding="utf-8")
     with pytest.raises(ValueError):
         load_config(p)
+
+
+@pytest.mark.parametrize("row", ["[1,2]", "42", '{"id":[1],"question":"q","answer":"a","sources":[]}'])
+def test_read_qa_rejects_odd_rows(tmp_path, row):
+    p = tmp_path / "qa.jsonl"
+    p.write_text(row + "\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        read_qa(p)
+
+
+def test_config_rejects_bool_seed(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text("name: x\nseed: true\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_config(p)

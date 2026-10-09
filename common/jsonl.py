@@ -29,11 +29,19 @@ def read_qa(path):
     rows = read_jsonl(path)
     seen = set()
     for i, r in enumerate(rows, 1):
+        if not isinstance(r, dict):
+            raise ValueError(f"{path}: row {i}: must be a JSON object")
         for k in QA_KEYS:
             if k not in r:
                 raise ValueError(f"{path}: row {i}: missing key '{k}'")
         if not isinstance(r["sources"], list):
             raise ValueError(f"{path}: row {i}: 'sources' must be a list")
+        if not isinstance(r["id"], (str, int)):
+            raise ValueError(f"{path}: row {i}: 'id' must be a string or integer")
+        if not isinstance(r["question"], str) or not isinstance(r["answer"], str):
+            raise ValueError(f"{path}: row {i}: 'question' and 'answer' must be strings")
+        if not all(isinstance(s, str) for s in r["sources"]):
+            raise ValueError(f"{path}: row {i}: 'sources' must contain only strings")
         if not str(r["answer"]).strip():
             raise ValueError(f"{path}: row {i}: 'answer' must not be empty")
         if r["id"] in seen:

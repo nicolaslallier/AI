@@ -1,4 +1,4 @@
 name: trivial
 seed: 0
 eval_set: data/examples/eval.jsonl
-system: eval.trivial:build
+system: evalkit.trivial:build

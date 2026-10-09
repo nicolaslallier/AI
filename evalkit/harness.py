@@ -1,4 +1,4 @@
-from eval.metrics import answer_correct, source_hit
+from evalkit.metrics import answer_correct, source_hit
 
 
 def evaluate(system, qa):
@@ -9,6 +9,8 @@ def evaluate(system, qa):
             raise ValueError(
                 f"system output for id {row['id']!r} must be a dict with 'answer' and 'sources'"
             )
+        if not isinstance(out["sources"], list) or not all(isinstance(s, str) for s in out["sources"]):
+            raise ValueError(f"system output for id {row['id']!r}: 'sources' must be a list of strings")
         results.append(
             {
                 "id": row["id"],
@@ -24,6 +26,6 @@ def evaluate(system, qa):
     metrics = {
         "n": len(results),
         "accuracy": sum(r["correct"] for r in results) / len(results) if results else 0.0,
-        "recall_at_k": sum(hits) / len(hits) if hits else None,
+        "source_hit_rate": sum(hits) / len(hits) if hits else None,
     }
     return metrics, results

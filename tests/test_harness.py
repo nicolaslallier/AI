@@ -1,7 +1,7 @@
 import pytest
 
-from eval.harness import evaluate
-from eval.metrics import answer_correct, normalize, source_hit
+from evalkit.harness import evaluate
+from evalkit.metrics import answer_correct, normalize, source_hit
 
 QA = [
     {"id": "1", "question": "Capitale ?", "answer": "Paris", "sources": ["geo.md"]},
@@ -30,27 +30,38 @@ def test_source_hit():
 
 def test_perfect_system():
     metrics, results = evaluate(system({"Capitale ?": "Paris", "2+2 ?": "4"}, ["geo.md"]), QA)
-    assert metrics == {"n": 2, "accuracy": 1.0, "recall_at_k": 1.0}
+    assert metrics == {"n": 2, "accuracy": 1.0, "source_hit_rate": 1.0}
     assert results[0]["correct"] is True and results[0]["source_hit"] is True
     assert results[1]["source_hit"] is None  # no expected source -> excluded from recall
 
 
 def test_partial_system():
     metrics, _ = evaluate(system({"Capitale ?": "Lyon", "2+2 ?": "4"}, ["autre.md"]), QA)
-    assert metrics == {"n": 2, "accuracy": 0.5, "recall_at_k": 0.0}
+    assert metrics == {"n": 2, "accuracy": 0.5, "source_hit_rate": 0.0}
 
 
 def test_empty_eval_set_does_not_divide_by_zero():
-    assert evaluate(system({}), []) == ({"n": 0, "accuracy": 0.0, "recall_at_k": None}, [])
+    assert evaluate(system({}), []) == ({"n": 0, "accuracy": 0.0, "source_hit_rate": None}, [])
 
 
 def test_no_question_with_sources_gives_none_recall():
     qa = [QA[1]]
     metrics, _ = evaluate(system({"2+2 ?": "4"}), qa)
-    assert metrics["recall_at_k"] is None
+    assert metrics["source_hit_rate"] is None
 
 
 @pytest.mark.parametrize("bad", [{"answer": "x"}, "texte", None])
 def test_malformed_system_output_names_the_question(bad):
     with pytest.raises(ValueError, match="'1'"):
         evaluate(lambda q: bad, QA)
+
+
+def test_word_boundary_match():
+    assert not answer_correct("il y en a 14", "4")
+    assert not answer_correct("Ouistiti", "Oui")
+
+
+@pytest.mark.parametrize("bad", ["geo.md", [{"a": 1}]])
+def test_bad_sources_type_names_the_question(bad):
+    with pytest.raises(ValueError, match="'1'"):
+        evaluate(lambda q: {"answer": "x", "sources": bad}, QA)

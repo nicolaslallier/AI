@@ -10,6 +10,6 @@ def load_config(path):
         raise ValueError(f"{path}: config must be a YAML mapping")
     if not re.fullmatch(r"[\w.-]+", str(cfg.get("name", ""))):
         raise ValueError(f"{path}: 'name' is required and may only contain letters, digits, _ . -")
-    if not isinstance(cfg.get("seed"), int):
+    if not isinstance(cfg.get("seed"), int) or isinstance(cfg["seed"], bool):
         raise ValueError(f"{path}: 'seed' is required and must be an integer")
     return cfg
