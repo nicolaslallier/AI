@@ -1,0 +1,3 @@
+{"id": "r1", "question": "Quelle est la capitale de la France ?", "answer": "Paris", "sources": ["geo.md"]}
+{"id": "r2", "question": "Quel rang utilise LoRA par défaut ?", "answer": "8", "sources": ["lora.md"]}
+{"id": "r3", "question": "Comment le RAG fournit-il des passages au modèle ?", "answer": "index vectoriel", "sources": ["rag.md"]}
