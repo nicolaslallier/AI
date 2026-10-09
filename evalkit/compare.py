@@ -1,5 +1,10 @@
+import finetune.system as ft_system
+import rag.system as rag_system
 from common.config import is_int, load_config, merge_section
+from finetune.data import to_messages
 from rag.config import rag_settings
+from rag.index import open_index
+from rag.ingest import load_documents
 
 SYSTEMS = ("base", "base+rag", "ft", "ft+rag")
 SCHEMA = {"systems": list(SYSTEMS), "adapter": "", "system_prompt": "", "train_file": "", "min_gap": 2}
@@ -30,3 +35,38 @@ def load_compare_config(path):
     except ValueError as e:
         raise ValueError(f"{path}: {e}") from e
     return cfg
+
+
+def build_systems(cfg):
+    """Charge tout ce qu'il faut d'abord (index périmé, adaptateur incompatible = échec avant l'évaluation)."""
+    c, r = cfg["compare"], cfg["rag"]
+    g, want = r["generation"], c["systems"]
+    gens = {}
+    if {"base", "base+rag"} & set(want):
+        gens["base"] = ft_system.make_generator({"model": g["model"], "adapter": ""})
+    if {"ft", "ft+rag"} & set(want):
+        gens["ft"] = ft_system.make_generator({"model": g["model"], "adapter": c["adapter"]})
+    if any(x.endswith("+rag") for x in want):
+        index = open_index(r, load_documents(r["docs_dir"]))
+        embedder = rag_system.make_embedder(r)
+
+    def plain(gen):
+        def answer(question):
+            text = gen.generate(
+                to_messages(question, c["system_prompt"]), max_tokens=g["max_tokens"], temperature=g["temperature"]
+            )
+            return {"answer": text, "sources": []}
+
+        return answer
+
+    systems = {}
+    for name in want:
+        gen = gens["ft" if name.startswith("ft") else "base"]
+        if name.endswith("+rag"):
+            # system_prompt ne s'applique qu'aux systèmes sans RAG : les +rag gardent le prompt RAG de M1.
+            systems[name] = rag_system.RagSystem(
+                index, embedder, gen, r["retrieval"]["k"], g["max_tokens"], g["temperature"]
+            )
+        else:
+            systems[name] = plain(gen)
+    return systems
