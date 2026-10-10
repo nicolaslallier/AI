@@ -46,3 +46,11 @@ class ScriptedGenerator:
     def generate(self, messages, max_tokens=400, temperature=0.0):
         self.calls.append(messages)
         return self.reply
+
+
+class OverlapReranker:
+    """Score = nombre de mots de la requête présents dans le texte. Déterministe, sans modèle."""
+
+    def score(self, query, texts):
+        q = set(re.findall(r"\w+", query.casefold()))
+        return [float(len(q & set(re.findall(r"\w+", t.casefold())))) for t in texts]

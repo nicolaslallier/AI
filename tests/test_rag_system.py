@@ -72,3 +72,14 @@ def test_build_seeds_mlx(tmp_path, monkeypatch):
     monkeypatch.setattr(mx.random, "seed", seen.append)
     rs.build(cfg)
     assert seen == [7]
+
+
+def test_hybrid_rerank_system_keeps_answer_contract(tmp_path, monkeypatch):
+    cfg, _ = prepare(tmp_path, monkeypatch)
+    cfg["rag"]["retrieval"] = {"k": 2, "mode": "hybrid", "rerank": "fake"}
+    s = rag_settings(cfg)
+    build_index(s, load_documents(s["docs_dir"]), HashEmbedder())
+    from fakes import OverlapReranker
+    monkeypatch.setattr("rag.retrieve.CrossEncoderReranker", lambda model: OverlapReranker())
+    out = rs.build(cfg)("Quelle est la capitale de la France ?")
+    assert len(out["retrieved"]) == 2 and out["sources"] == ["geo.md"]

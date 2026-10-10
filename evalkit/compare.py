@@ -61,6 +61,7 @@ def build_systems(cfg):
     if any(x.endswith("+rag") for x in want):  # index périmé : échec avant tout chargement de modèle
         index = open_index(r, load_documents(r["docs_dir"]))
         embedder = rag_system.make_embedder(r)
+        retriever = rag_system.make_retriever(r, index, embedder)  # partagé par base+rag et ft+rag
     gens = {}
     if {"base", "base+rag"} & set(want):
         gens["base"] = ft_system.make_generator({"model": g["model"], "adapter": ""})
@@ -82,7 +83,8 @@ def build_systems(cfg):
         if name.endswith("+rag"):
             # system_prompt ne s'applique qu'aux systèmes sans RAG : les +rag gardent le prompt RAG de M1.
             systems[name] = rag_system.RagSystem(
-                index, embedder, gen, r["retrieval"]["k"], g["max_tokens"], g["temperature"]
+                index, embedder, gen, r["retrieval"]["k"], g["max_tokens"], g["temperature"],
+                retriever=retriever,
             )
         else:
             systems[name] = plain(gen)
