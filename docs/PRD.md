@@ -105,7 +105,7 @@ AI/
 | **M1 — RAG v1** | Ingestion, index, récupération, génération avec citations | Réponses citées sur mes documents, recall@k mesuré. |
 | **M2 — Fine-tuning v1** | LoRA sur un modèle de 1 à 3B avec MLX, suivi des courbes | Un adaptateur entraîné et rechargeable, perte de validation qui baisse. |
 | **M3 — Comparaison** | Rapport des quatre systèmes | Un tableau comparatif reproductible à partir d'une seule commande. |
-| **M4+ — Variantes** | Recherche hybride, reranking, modèles plus gros, autres tâches | À définir selon ce que M3 révèle. |
+| **M4+ — Variantes** | Recherche hybride, reranking, modèles plus gros, autres tâches | Construit : recherche hybride (dense + FTS fusionnés par RRF), reranking cross-encoder, et `python -m rag.recall` (recall@k par mode, sans LLM). **À renseigner** : mode gagnant et écarts de recall, après exécution de `rag.recall` sur de vrais documents (si l'écart est < 1 question, jeu trop petit pour conclure). Modèles plus gros / autres tâches : à définir selon ce que M3 révèle. |
 
 M1 et M2 sont indépendants et peuvent avancer en parallèle une fois M0 terminé.
 

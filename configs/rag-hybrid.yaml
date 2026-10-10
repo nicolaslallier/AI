@@ -1,4 +1,4 @@
-name: rag-example
+name: rag-hybrid
 seed: 0
 eval_set: data/examples/rag_eval.jsonl
 system: rag.system:build
