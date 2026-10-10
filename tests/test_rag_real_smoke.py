@@ -13,6 +13,7 @@ def test_hybrid_rerank_finds_the_geo_doc_with_real_models(tmp_path):
         "docs_dir": "data/examples/docs",
         "index_dir": str(tmp_path / "index"),
         "embedding": {"model": "BAAI/bge-m3"},
+        "generation": {"model": "mlx-community/Qwen2.5-3B-Instruct-4bit"},  # requis par le schéma, jamais chargé
         "retrieval": {"mode": "hybrid", "k": 3, "candidates": 10, "rerank": "BAAI/bge-reranker-v2-m3"},
     }})
     docs = load_documents(s["docs_dir"])
