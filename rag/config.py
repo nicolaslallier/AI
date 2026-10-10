@@ -6,7 +6,7 @@ SCHEMA = {
     "index_dir": "data/index",
     "chunking": {"size": 800, "overlap": 100},
     "embedding": {"model": None, "batch_size": 16, "query_prefix": "", "passage_prefix": ""},
-    "retrieval": {"k": 5},
+    "retrieval": {"mode": "dense", "k": 5, "candidates": 20, "rerank": ""},
     "generation": {"model": None, "max_tokens": 400, "temperature": 0.0},
 }
 
@@ -41,6 +41,13 @@ def rag_settings(cfg):
         raise ValueError("rag.chunking: need integers with size > 0 and 0 <= overlap < size")
     if not (_is_int(s["retrieval"]["k"]) and s["retrieval"]["k"] > 0):
         raise ValueError("rag.retrieval.k must be a positive integer")
+    r = s["retrieval"]
+    if r["mode"] not in ("dense", "hybrid"):
+        raise ValueError("rag.retrieval.mode must be 'dense' or 'hybrid'")
+    if not isinstance(r["rerank"], str):
+        raise ValueError("rag.retrieval.rerank must be a string (model id, or '' for none)")
+    if not (_is_int(r["candidates"]) and r["candidates"] >= r["k"]):
+        raise ValueError("rag.retrieval.candidates must be an integer >= k")
     return s
 
 

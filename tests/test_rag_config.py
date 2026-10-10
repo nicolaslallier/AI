@@ -53,3 +53,27 @@ def test_bad_chunking(tmp_path, chunking):
 def test_bad_k(tmp_path, k):
     with pytest.raises(ValueError, match="retrieval.k"):
         rag_settings(make_cfg(tmp_path, retrieval={"k": k}))
+
+
+def test_retrieval_defaults_keep_m1_behaviour(tmp_path):
+    r = rag_settings(make_cfg(tmp_path))["retrieval"]
+    assert r == {"mode": "dense", "k": 2, "candidates": 20, "rerank": ""}
+
+
+@pytest.mark.parametrize(
+    "retrieval, msg",
+    [
+        ({"mode": "bm25"}, "rag.retrieval.mode"),
+        ({"k": 5, "candidates": 3}, "candidates"),
+        ({"candidates": 0}, "candidates"),
+        ({"rerank": 3}, "rag.retrieval.rerank"),
+    ],
+)
+def test_retrieval_rejects_bad_values(tmp_path, retrieval, msg):
+    with pytest.raises(ValueError, match=msg):
+        rag_settings(make_cfg(tmp_path, retrieval=retrieval))
+
+
+def test_hybrid_and_rerank_are_accepted(tmp_path):
+    r = rag_settings(make_cfg(tmp_path, retrieval={"k": 3, "mode": "hybrid", "rerank": "some/model"}))["retrieval"]
+    assert (r["mode"], r["rerank"], r["candidates"]) == ("hybrid", "some/model", 20)
