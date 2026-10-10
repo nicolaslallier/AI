@@ -1,0 +1,11 @@
+name: rag-example
+seed: 0
+eval_set: data/examples/rag_eval.jsonl
+system: rag.system:build
+rag:
+  docs_dir: data/examples/docs
+  index_dir: data/index
+  chunking: {size: 800, overlap: 100}
+  embedding: {model: BAAI/bge-m3, batch_size: 16}
+  retrieval: {mode: hybrid, k: 5, candidates: 20, rerank: BAAI/bge-reranker-v2-m3}
+  generation: {model: mlx-community/Qwen2.5-3B-Instruct-4bit, max_tokens: 400, temperature: 0.0}
