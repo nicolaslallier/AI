@@ -41,11 +41,39 @@ def test_hybrid_has_unique_ids_and_at_most_k(idx):
     assert [p["score"] for p in got] == sorted((p["score"] for p in got), reverse=True)
 
 
-@pytest.mark.parametrize("q", ["la de", "la de ?", '"(:* France'])
+@pytest.mark.parametrize("q", ["la de", "la de ?"])
 def test_hybrid_falls_back_to_dense_when_fts_is_empty(idx, q):
     index, emb = idx
     got = Retriever(index, emb, "hybrid", 2, 10)(q)
-    assert len(got) == 2  # le dense répond toujours
+    assert [p["id"] for p in got] == [p["id"] for p in Retriever(index, emb, "dense", 2, 10)(q)]
+
+
+def test_hybrid_survives_fts_syntax_chars(idx):
+    index, emb = idx
+    ids = [p["id"] for p in Retriever(index, emb, "hybrid", 3, 10)('"(:* France')]
+    assert len(ids) == 3 and len(set(ids)) == 3
+
+
+def test_hybrid_rerank_pool_capped_at_candidates():
+    def ps(*ids):
+        return [{"id": i, "text": i, "score": 0.0} for i in ids]
+
+    class DisjointIndex:  # dense et lexical disjoints : l'union fait 2 * candidates
+        def search(self, vec, n):
+            return ps("a", "b", "c")[:n]
+
+        def search_text(self, query, n):
+            return ps("x", "y", "z")[:n]
+
+    seen = []
+
+    class Spy(OverlapReranker):
+        def score(self, query, texts):
+            seen.append(len(texts))
+            return super().score(query, texts)
+
+    Retriever(DisjointIndex(), HashEmbedder(), "hybrid", 1, 2, reranker=Spy())("q")
+    assert seen == [2]
 
 
 def test_k_larger_than_corpus_does_not_crash(idx):

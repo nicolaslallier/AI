@@ -33,6 +33,7 @@ class Retriever:
             passages = [
                 {**by_id[i], "score": s} for i, s in rrf([[p["id"] for p in passages], [p["id"] for p in lexical]])
             ]
+            passages = passages[:n]  # l'union dense+lexical peut dépasser `candidates` : plafonne le pool du reranker
         if self.reranker:
             scores = self.reranker.score(query, [p["text"] for p in passages])
             passages = sorted(({**p, "score": s} for p, s in zip(passages, scores)), key=lambda p: -p["score"])

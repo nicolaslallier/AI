@@ -74,4 +74,6 @@ def test_search_text_never_raises(setup, q):
 def test_search_text_n_larger_than_corpus(setup):
     s, docs = setup
     build_index(s, docs, HashEmbedder())
-    assert len(open_index(s, docs).search_text("France", 1000)) <= 1000
+    index = open_index(s, docs)
+    big = [p["id"] for p in index.search_text("France", 1000)]
+    assert big and big == [p["id"] for p in index.search_text("France", 10)]

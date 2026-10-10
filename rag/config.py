@@ -42,6 +42,8 @@ def rag_settings(cfg):
     if not (_is_int(s["retrieval"]["k"]) and s["retrieval"]["k"] > 0):
         raise ValueError("rag.retrieval.k must be a positive integer")
     r = s["retrieval"]
+    if "candidates" not in cfg["rag"].get("retrieval", {}) and _is_int(r["k"]):
+        r["candidates"] = max(r["candidates"], r["k"])  # défaut qui suit k ; un candidates explicite < k reste une erreur
     if r["mode"] not in ("dense", "hybrid"):
         raise ValueError("rag.retrieval.mode must be 'dense' or 'hybrid'")
     if not isinstance(r["rerank"], str):

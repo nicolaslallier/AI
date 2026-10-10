@@ -77,3 +77,8 @@ def test_retrieval_rejects_bad_values(tmp_path, retrieval, msg):
 def test_hybrid_and_rerank_are_accepted(tmp_path):
     r = rag_settings(make_cfg(tmp_path, retrieval={"k": 3, "mode": "hybrid", "rerank": "some/model"}))["retrieval"]
     assert (r["mode"], r["rerank"], r["candidates"]) == ("hybrid", "some/model", 20)
+
+
+def test_candidates_default_tracks_k(tmp_path):
+    assert rag_settings(make_cfg(tmp_path, retrieval={"k": 25}))["retrieval"]["candidates"] == 25
+    assert rag_settings(make_cfg(tmp_path, retrieval={"k": 5}))["retrieval"]["candidates"] == 20
