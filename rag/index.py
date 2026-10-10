@@ -19,6 +19,7 @@ def index_key(settings, docs):
         "chunking": settings["chunking"],
         "embedding": {k: e[k] for k in ("model", "query_prefix", "passage_prefix")},
         "docs": [[d["doc_id"], hashlib.sha256(d["text"].encode()).hexdigest()] for d in docs],
+        "fts": "french-v1",  # changer si les paramètres FTS changent
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
 
@@ -37,10 +38,14 @@ def build_index(settings, docs, embedder):
     tmp = path.with_name(path.name + ".tmp")  # un index à moitié écrit n'est jamais servi
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.parent.mkdir(parents=True, exist_ok=True)
-    lancedb.connect(str(tmp)).create_table(TABLE, data=[{**ch, "vector": v} for ch, v in zip(chunks, vectors)])
+    table = lancedb.connect(str(tmp)).create_table(TABLE, data=[{**ch, "vector": v} for ch, v in zip(chunks, vectors)])
+    table.create_fts_index("text", use_tantivy=False, language="French", replace=True)
     shutil.rmtree(path, ignore_errors=True)
     tmp.rename(path)
     return path
+
+
+_FIELDS = ("id", "doc_id", "text", "start", "end")
 
 
 class Index:
@@ -49,10 +54,11 @@ class Index:
 
     def search(self, query_vec, k):
         rows = self._table.search(query_vec).metric("cosine").limit(k).to_list()
-        return [
-            {**{f: r[f] for f in ("id", "doc_id", "text", "start", "end")}, "score": 1.0 - r["_distance"]}
-            for r in rows
-        ]
+        return [{**{f: r[f] for f in _FIELDS}, "score": 1.0 - r["_distance"]} for r in rows]
+
+    def search_text(self, query, n):
+        rows = self._table.search(query, query_type="fts").limit(n).to_list()
+        return [{**{f: r[f] for f in _FIELDS}, "score": r["_score"]} for r in rows]
 
 
 def open_index(settings, docs):

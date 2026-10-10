@@ -21,3 +21,4 @@ pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-m 'not slow'"
 markers = ["slow: charge un vrai modèle (lancer avec -m slow)"]
+filterwarnings = ["ignore:create_fts_index is deprecated:DeprecationWarning"]

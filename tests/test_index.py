@@ -54,3 +54,26 @@ def test_rebuild_same_config_replaces_index(setup):
     p2 = build_index(s, docs, HashEmbedder())
     assert p1 == p2 and p1.is_dir()
     assert not list(p1.parent.glob("*.tmp"))
+
+
+def test_search_text_is_lexical_and_french_stemmed(setup):
+    s, docs = setup
+    build_index(s, docs, HashEmbedder())
+    hits = open_index(s, docs).search_text("capitales de France", 3)
+    assert hits and hits[0]["doc_id"] == "geo.md"
+    assert {"id", "text", "start", "end", "score"} <= set(hits[0])
+
+
+@pytest.mark.parametrize("q", ["", "la de", '"capitale', "(a OR b) AND:", "C++ -France", "capitale:*"])
+def test_search_text_never_raises(setup, q):
+    s, docs = setup
+    build_index(s, docs, HashEmbedder())
+    assert isinstance(open_index(s, docs).search_text(q, 3), list)
+
+
+def test_search_text_n_larger_than_corpus(setup):
+    s, docs = setup
+    build_index(s, docs, HashEmbedder())
+    index = open_index(s, docs)
+    big = [p["id"] for p in index.search_text("France", 1000)]
+    assert big and big == [p["id"] for p in index.search_text("France", 10)]

@@ -2,6 +2,7 @@ from rag.config import rag_settings
 from rag.generate import build_messages, parse_citations
 from rag.index import open_index
 from rag.ingest import load_documents
+from rag.retrieve import Retriever, make_retriever
 
 
 def make_embedder(settings):
@@ -17,12 +18,13 @@ def make_generator(settings):
 
 
 class RagSystem:
-    def __init__(self, index, embedder, generator, k, max_tokens, temperature):
+    def __init__(self, index, embedder, generator, k, max_tokens, temperature, retriever=None):
         self.index, self.embedder, self.generator = index, embedder, generator
         self.k, self.max_tokens, self.temperature = k, max_tokens, temperature
+        self.retriever = retriever or Retriever(index, embedder, "dense", k, k)
 
     def __call__(self, question):
-        passages = self.index.search(self.embedder.embed_query(question), self.k)
+        passages = self.retriever(question)
         text = self.generator.generate(
             build_messages(question, passages), max_tokens=self.max_tokens, temperature=self.temperature
         )
@@ -48,7 +50,11 @@ def build(cfg):
     mx.random.seed(cfg["seed"])
     s = rag_settings(cfg)
     index = open_index(s, load_documents(s["docs_dir"]))  # échoue tôt si l'index est périmé
+    embedder = make_embedder(s)
     g = s["generation"]
     # Les deux modèles sont chargés ensemble : OK pour un 3B 4 bits + bge-m3 sur 24 Go (TRD §3),
     # à mesurer avant de monter en taille.
-    return RagSystem(index, make_embedder(s), make_generator(s), s["retrieval"]["k"], g["max_tokens"], g["temperature"])
+    return RagSystem(
+        index, embedder, make_generator(s), s["retrieval"]["k"], g["max_tokens"], g["temperature"],
+        retriever=make_retriever(s, index, embedder),
+    )
