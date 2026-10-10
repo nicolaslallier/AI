@@ -1,0 +1,3 @@
+{"id": "c1", "question": "Quel est le plus grand océan du monde ?", "answer": "Pacifique", "sources": ["geo.md"]}
+{"id": "c2", "question": "Quel rang utilise LoRA par défaut ?", "answer": "8", "sources": ["lora.md"]}
+{"id": "c3", "question": "Comment le RAG fournit-il des passages au modèle ?", "answer": "index vectoriel", "sources": ["rag.md"]}
