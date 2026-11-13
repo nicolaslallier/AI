@@ -5,6 +5,8 @@ from mcp.server.request_state import RequestStateSecurity
 from starlette.applications import Starlette
 
 from server.files_ext import FilesExtension
+from server.tools import register_tools
+from server.vault import Vault
 
 
 def create_server(vault_root: Path, *, state_ttl: float = 1800, transfer_ttl: float = 900) -> MCPServer:
@@ -13,8 +15,7 @@ def create_server(vault_root: Path, *, state_ttl: float = 1800, transfer_ttl: fl
         extensions=[FilesExtension()],
         request_state_security=RequestStateSecurity.ephemeral(ttl=state_ttl),
     )
-    server.vault_root = Path(vault_root)
-    server.transfer_ttl = transfer_ttl  # utilisé aux tâches suivantes
+    register_tools(server, Vault(vault_root), None)  # le store de transferts arrive au Task 6
     return server
 
 
