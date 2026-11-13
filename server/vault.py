@@ -77,6 +77,10 @@ class Vault:
     def attach(self, note_rel: str | None, folder_rel: str, file_path: Path) -> Path:
         link = f"![[{file_path.name}]]\n"
         note = self.note_target(note_rel)
+        if note == file_path:  # ne jamais modifier le fichier importé
+            note = None
+        if file_path.suffix.lower() == ".md" and not (note and note.exists()):
+            return file_path  # une note importée est déjà une note : pas de note par défaut
         if not (note and note.exists()):
             note = self.safe(f"{folder_rel}/{file_path.stem}.md")
             note.parent.mkdir(parents=True, exist_ok=True)

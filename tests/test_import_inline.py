@@ -139,3 +139,20 @@ async def test_search_ignore_lien_externe(http, vault, tmp_path_factory):
 async def test_client_sans_caps_n_annonce_pas_l_extension(http):
     r = await call(http, "tools/list", {})
     assert all(t["name"] != "vault_import_file" for t in r["result"]["tools"])
+
+
+async def test_import_md_intact_sans_note(http, vault):
+    md = "# Titre\n\nTexte.\n".encode()
+    r = await imp(http, fi(md, name="n.md", mime="text/markdown"), {"upload"})
+    assert r["result"]["structuredContent"]["note"] == "00 - Inbox/Pièces jointes/n.md"
+    assert (vault / "00 - Inbox/Pièces jointes/n.md").read_bytes() == md
+    assert [p.name for p in (vault / "00 - Inbox/Pièces jointes").iterdir()] == ["n.md"]
+
+
+async def test_import_md_note_liee(http, vault):
+    (vault / "00 - Inbox/autre.md").write_text("x\n")
+    md = b"# Titre\n"
+    await imp(http, fi(md, name="n.md", mime="text/markdown"), {"upload"}, note_liée="00 - Inbox/autre.md")
+    assert "![[n.md]]" in (vault / "00 - Inbox/autre.md").read_text()
+    assert (vault / "00 - Inbox/Pièces jointes/n.md").read_bytes() == md
+    assert [p.name for p in (vault / "00 - Inbox/Pièces jointes").iterdir()] == ["n.md"]
