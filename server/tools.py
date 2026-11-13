@@ -1,11 +1,13 @@
 """Outils MCP du coffre. Toute exception levée ici devient un résultat `isError: true`."""
 import base64
 import binascii
+import mimetypes
 from pathlib import Path
 from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp_types import BlobResourceContents, EmbeddedResource
 from pydantic import Field
 
 from server.digest import digest_obj
@@ -13,6 +15,18 @@ from server.files_ext import MAX_INLINE, X_MCP_FILE, FileInput, accepts
 from server.vault import Vault
 
 EXTRAIT = 160
+
+
+def mime_of(p: Path) -> str:
+    return mimetypes.guess_type(p.name)[0] or ("text/markdown" if p.suffix == ".md" else "application/octet-stream")
+
+
+def export_path(vault: Vault, chemin: str) -> Path:
+    """Même confinement que vault_read_note (VaultPathError -> isError), sans la restriction .md."""
+    p = vault.safe(chemin)
+    if not p.is_file():
+        raise ToolError(f"Fichier introuvable : {chemin}")
+    return p
 
 
 def _verifier(name: str, mime: str, size: int) -> None:
@@ -99,3 +113,14 @@ def register_tools(server: MCPServer, vault: Vault, store) -> None:
             raise ToolError("Données base64 invalides") from e
         _verifier(name, mimeType, len(data))
         return await import_bytes(vault, data, name, mimeType, dossier, note_liée)
+
+    @server.tool()
+    def vault_export(chemin: str) -> list[EmbeddedResource]:
+        """Exporte un fichier du coffre. Avec la capacité `download` (extension files), la réponse
+        porte un lien de téléchargement ; sinon le fichier revient en ligne (limite 1 Mio)."""
+        p = export_path(vault, chemin)
+        if p.stat().st_size > MAX_INLINE:
+            raise ToolError(f"Fichier trop gros pour l'export en ligne (> {MAX_INLINE} octets) : le client doit déclarer `download`")
+        blob = base64.b64encode(p.read_bytes()).decode("ascii")
+        return [EmbeddedResource(type="resource", resource=BlobResourceContents(
+            uri=p.as_uri(), mimeType=mime_of(p), blob=blob))]

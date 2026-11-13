@@ -10,6 +10,8 @@ from mcp.shared.exceptions import MCPError
 from mcp_types import CallToolRequestParams
 from pydantic import BaseModel, Field, ValidationError
 
+from server.digest import Sha256Stream
+
 if TYPE_CHECKING:
     from server.transfers import TransferStore
     from server.vault import Vault
@@ -68,6 +70,8 @@ class FilesExtension(Extension):
     async def intercept_tool_call(
         self, params: CallToolRequestParams, ctx: ServerRequestContext[Any, Any], call_next: CallNext
     ) -> HandlerResult:
+        if params.name == "vault_export":
+            return self._export(params, ctx) or await call_next(ctx)
         if params.name != "vault_import_file":
             return await call_next(ctx)
         args = params.arguments or {}
@@ -87,6 +91,30 @@ class FilesExtension(Extension):
         if state is None:
             return self._demander_upload(f, dossier, note)
         return await self._terminer_upload(state, f, dossier, note)
+
+    def _export(self, params: CallToolRequestParams, ctx: ServerRequestContext[Any, Any]) -> dict[str, Any] | None:
+        """Avec `download` : lien de téléchargement. Sinon None (l'outil renvoie le fichier en ligne)."""
+        from server.tools import export_path, mime_of
+
+        chemin = (params.arguments or {}).get("chemin")
+        if "download" not in client_file_caps(ctx) or not isinstance(chemin, str):
+            return None
+        try:
+            p = export_path(self.vault, chemin)
+        except (ToolError, ValueError) as e:
+            return _erreur(str(e))
+        h = Sha256Stream()
+        with open(p, "rb") as f:  # en flux : jamais 40 Mio en mémoire
+            while chunk := f.read(1 << 20):
+                h.update(chunk)
+        t = self.store.new_download(p)
+        mime = mime_of(p)
+        expires = datetime.fromtimestamp(t.expires_at, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        d = {"name": p.name, "mimeType": mime, "size": t.size, "digest": h.digest_obj(),
+             "path": f"/downloads/{t.jeton}", "expiresAt": expires}
+        return {"resultType": "complete", "isError": False,
+                "content": [{"type": "text", "text": f"{p.name}, {t.size} octets, {mime}"}],
+                "_meta": {EXT_ID: {"downloads": [d]}}}
 
     def _demander_upload(self, f: FileInput, dossier: str, note: str | None) -> dict[str, Any]:
         name = f.name or ""
@@ -119,6 +147,10 @@ class FilesExtension(Extension):
         t = self.store.upload(jeton)
         if t is None:
             raise MCPError(code=-32602, message="Téléversement inconnu ou expiré")
+        if (t.size, t.digest, t.file_id) != (f.size, f.digest.value, f.id):
+            raise MCPError(code=-32602, message="Le fichier de la relance ne correspond pas au téléversement")
+        if t.written and not t.done:
+            return _erreur("Téléversement refusé (taille, digest ou coupure) : recommencez l'appel, sans requestState")
         if not t.done:
             return _erreur("Téléversement pas terminé : faites le PUT, puis relancez avec le même requestState")
         if not self.store.consume(jeton):
@@ -126,6 +158,7 @@ class FilesExtension(Extension):
         try:  # consommé avant d'écrire : l'import n'est pas idempotent
             res = await import_bytes(self.vault, t.staged, f.name or "", f.mimeType, dossier, note)
         except (ToolError, ValueError, OSError) as e:
+            t.staged.unlink(missing_ok=True)  # jeton consommé : plus personne ne viendra le chercher
             return _erreur(str(e))
         return {"resultType": "complete", "isError": False, "structuredContent": res,
                 "content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False)}]}

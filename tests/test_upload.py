@@ -207,3 +207,73 @@ def test_store_sweep(tmp_path):
     s2 = TransferStore(tmp_path / ".staging", ttl=60)
     t2 = s2.new_upload(3, "d", "f1")
     assert s2.consume(t2.jeton) and not s2.consume(t2.jeton)
+
+
+@pytest.mark.parametrize("champ", ["id", "size", "digest"])
+async def test_relance_fileinput_different(http, champ):
+    # Ruling 1 : le ticket doit correspondre au FileInput de la relance
+    pdf = b"%PDF-1"
+    a = args(pdf)
+    r1 = await demande(http, a)
+    assert (await put(http, r1, pdf)).status_code == 204
+    b = args(pdf)
+    if champ == "id":
+        b["file"]["id"] = "f2"
+    elif champ == "size":
+        b["file"]["size"] = 7
+    else:
+        b["file"]["digest"] = digest_obj(b"%PDF-2")
+    r2 = await demande(http, b, r1["result"]["requestState"])
+    assert r2["error"]["code"] == -32602
+
+
+async def test_relance_apres_put_refuse(http):
+    # Ruling 2 : le message dit de recommencer sans requestState
+    pdf = b"%PDF-12345"
+    r1 = await demande(http, args(pdf))
+    assert (await put(http, r1, b"%PDF-1234X")).status_code == 400
+    r2 = await demande(http, args(pdf), r1["result"]["requestState"])
+    txt = r2["result"]["content"][0]["text"]
+    assert r2["result"]["isError"] and "refusé" in txt and "sans requestState" in txt
+
+
+async def test_sweep_pendant_put(vault):
+    # Ruling 3 : un ticket balayé pendant le PUT ne répond pas 204 et ne laisse rien
+    async with running(create_app(vault, transfer_ttl=0.3)) as a, client(a) as http:
+        pdf = make_pdf(1000)
+        r1 = await demande(http, args(pdf))
+
+        async def corps():
+            yield pdf[:500]
+            await asyncio.sleep(0.5)
+            await demande(http, args(b"%PDF-9", name="q.pdf"))  # new_upload fait sweep()
+            yield pdf[500:]
+
+        r = await put(http, r1, corps(), headers={"Content-Length": str(len(pdf))})
+        assert r.status_code == 410
+        assert not (vault / PJ).exists()
+        assert not any((vault / ".staging").iterdir())
+
+
+async def test_echec_import_supprime_staging(http, vault, monkeypatch):
+    # Ruling 4
+    import server.tools
+
+    async def boom(*a, **k):
+        raise OSError("disque plein")
+
+    pdf = b"%PDF-1"
+    r1 = await demande(http, args(pdf))
+    assert (await put(http, r1, pdf)).status_code == 204
+    monkeypatch.setattr(server.tools, "import_bytes", boom)
+    r2 = await demande(http, args(pdf), r1["result"]["requestState"])
+    assert r2["result"]["isError"]
+    assert not any((vault / ".staging").iterdir())
+
+
+@pytest.mark.parametrize("cl", [b"\xb2", b"+3", b"-3", b"3.0", b"0x3"])
+async def test_content_length_non_ascii(http, cl):
+    # Ruling 5 : jamais d'exception (500) sur un Content-Length bizarre
+    r1 = await demande(http, args(b"%PDF-1"))
+    r = await put(http, r1, b"abc", headers={"Content-Length": cl})
+    assert r.status_code in (400, 413)
