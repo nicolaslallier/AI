@@ -1,6 +1,15 @@
+# Python
 .venv/
 __pycache__/
 .pytest_cache/
-data/*
-!data/examples/
-runs/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+dist/
+
+# Secrets : jamais committés
+.env
+*.env
+!*.env.example

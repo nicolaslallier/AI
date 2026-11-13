@@ -1,75 +1,37 @@
-# Labo IA — Fine-tuning de LLM et RAG
+# AI : mes outils IA
 
-Laboratoire personnel pour apprendre, par la pratique, deux techniques des LLM : le **fine-tuning LoRA** et le **RAG** (Retrieval-Augmented Generation). Le fil conducteur est la **mesure** : les deux techniques sont évaluées sur les mêmes questions, ce qui permet de comparer quatre systèmes : `base`, `base+rag`, `ft` (fine-tuné) et `ft+rag`.
+Dépôt de mes outils IA : serveurs MCP, définitions d'agents, skills, prompts et scripts.
 
-Tout tourne en local sur Mac Apple Silicon (MLX), sans service externe.
-
-## Prérequis
-
-- Mac Apple Silicon (la mémoire unifiée est la vraie limite)
-- Python ≥ 3.11 et [`uv`](https://docs.astral.sh/uv/)
-
-```bash
-uv sync
-uv run pytest        # tests rapides (les tests « slow » chargent un vrai modèle : -m slow)
-```
+> L'ancien labo MLX (fine-tuning LoRA et RAG, jalons M0 à M4) est archivé sous le tag
+> [`archive/labo-mlx`](https://github.com/nicolaslallier/AI/tree/archive/labo-mlx).
+> `git checkout archive/labo-mlx` le ramène tel qu'il était.
 
 ## Structure
 
-| Dossier | Rôle |
+| Dossier | Contenu |
 |---|---|
-| `common/` | Config YAML, JSONL, adaptateur LLM, enregistrement des runs |
-| `evalkit/` | Harnais d'évaluation, métriques, rapport, comparaison des 4 systèmes |
-| `rag/` | Ingestion, chunking, embeddings, index LanceDB, génération avec citations |
-| `finetune/` | Préparation des données, entraînement LoRA (`mlx-lm`), courbes |
-| `configs/` | Exemples de configuration (`*-example.yaml`) |
-| `data/examples/` | Documents et jeux de questions d'exemple |
-| `docs/` | PRD, TRD, UX, flux applicatifs, schéma des données |
+| [`mcp-servers/`](mcp-servers/) | Un serveur MCP par sous-dossier, autonome (ses dépendances, son README) |
+| [`agents/`](agents/) | Définitions d'agents et de sous-agents Claude Code (`.md` avec frontmatter) |
+| [`skills/`](skills/) | Skills réutilisables (`<nom>/SKILL.md` + fichiers) |
+| [`prompts/`](prompts/) | Prompts et gabarits réutilisables |
+| [`scripts/`](scripts/) | Petits scripts autonomes (CLI, utilitaires Ollama, LiteLLM, etc.) |
 
-## Utilisation
+## Index des outils
 
-Chaque commande prend un fichier de configuration YAML. Les résultats sont enregistrés dans `runs/` avec leur config et le hash du jeu de données.
+| Outil | Type | Description |
+|---|---|---|
+| _(vide pour l'instant)_ | | |
 
-**Évaluation de bout en bout (système trivial)**
+Chaque nouvel outil ajoute sa ligne ici, dans la même PR que l'outil.
 
-```bash
-uv run python -m evalkit.run configs/trivial.yaml
-```
+## Conventions
 
-**RAG** : ingérer, indexer, poser une question
-
-```bash
-uv run python -m rag.ingest configs/rag-example.yaml      # aperçu du chunking
-uv run python -m rag.index configs/rag-example.yaml       # embeddings + index
-uv run python -m rag.ask configs/rag-example.yaml "Ma question ?"
-uv run python -m evalkit.run configs/rag-example.yaml     # recall@k et métriques
-```
-
-**Fine-tuning**
-
-```bash
-uv run python -m finetune.prepare configs/ft-example.yaml  # split train/valid/test
-uv run python -m finetune.train configs/ft-example.yaml    # adaptateur dans runs/<id>/adapters
-```
-
-**Comparaison des quatre systèmes** (une seule commande)
-
-Renseigner `compare.adapter` dans `configs/compare-example.yaml` avec l'adaptateur produit ci-dessus, puis :
-
-```bash
-uv run python -m evalkit.compare configs/compare-example.yaml
-```
-
-Le run produit un `report.md` comparatif, un manifeste de reproduction et une **alerte de fuite** si des questions d'évaluation figurent dans les données d'entraînement (`compare.train_file`).
-
-## Jalons
-
-- [x] **M0** Socle et harnais d'évaluation
-- [x] **M1** RAG v1 avec citations
-- [x] **M2** Fine-tuning LoRA v1
-- [x] **M3** Rapport comparatif des quatre systèmes
-- [ ] **M4** Variantes : recherche hybride, reranking (PR en cours)
-
-## Documentation
-
-[Guide utilisateur](docs/USERGUIDE.md) · [PRD](docs/PRD.md) · [TRD](docs/TRD.md) · [UX](docs/UX.md) · [Flux applicatifs](docs/APPFLOW.md) · [Schéma des données](docs/BACKEND_SCHEMA.md)
+- **Un outil = un dossier autonome.** Il porte ses propres dépendances
+  (`pyproject.toml` + `uv.lock`, ou `package.json` + lockfile) et un `README.md` qui
+  dit à quoi il sert, comment l'installer et comment le lancer. Aucun outil n'en
+  importe un autre.
+- **Aucun secret dans le dépôt.** Les clés vont dans un `.env` ignoré par git ; on
+  committe un `.env.example` aux valeurs vides.
+- **Modèles locaux par défaut.** Les outils qui appellent un LLM passent par la
+  passerelle LiteLLM de l'Infra (`https://litellm.infra.famillelallier.net`) ou par
+  Ollama, l'adresse étant une variable d'environnement, jamais une constante.
