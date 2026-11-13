@@ -1,5 +1,7 @@
 import base64
 
+import pytest
+
 from client.rpc import call
 from server.digest import digest_obj
 from conftest import make_pdf
@@ -52,10 +54,29 @@ async def test_sans_data_sans_upload_32021(http):
     assert (await imp(http, f))["error"]["code"] == -32021
 
 
-async def test_sans_data_avec_upload_pas_encore(http):
+async def test_sans_data_avec_upload_upload_required(http):
     f = fi(b"%PDF-x")
     del f["data"]
-    assert (await imp(http, f, {"upload"}))["result"]["isError"]
+    assert (await imp(http, f, {"upload"}))["result"]["resultType"] == "upload_required"
+
+
+async def test_nom_cache_assaini(http, vault):
+    await imp(http, fi(b"%PDF-x", name=".cache.pdf"), {"upload"})
+    assert (vault / "00 - Inbox/Pièces jointes/cache.pdf").exists()
+
+
+@pytest.mark.parametrize("note", ["../n.md", "00 - Inbox/n.txt", ".obsidian/n.md", "00 - Inbox"])
+async def test_note_liee_invalide_sans_orphelin(http, vault, note):
+    r = await imp(http, fi(b"%PDF-x"), {"upload"}, note_liée=note)
+    assert r["result"]["isError"]
+    assert not (vault / "00 - Inbox/Pièces jointes").exists()
+
+
+async def test_inline_base64_trop_long_avant_decodage(http):
+    f = fi(b"%PDF-x")
+    f["data"] = "A" * (1048576 * 4 // 3 + 12)
+    r = await imp(http, f, {"upload"})
+    assert r["result"]["isError"] and "hors bande" in r["result"]["content"][0]["text"]
 
 
 async def test_nom_absent(http, vault):

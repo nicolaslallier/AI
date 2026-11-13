@@ -11,7 +11,8 @@ class VaultPathError(ValueError):
 
 def sanitize_name(name: str) -> str:
     name = "".join(c for c in name if c not in "/\\[]|#^" and unicodedata.category(c) != "Cc").strip()
-    if not name.strip("."):  # "", ".", ".." : désigneraient le dossier ou son parent
+    name = name.lstrip(". ")  # ni fichier caché, ni "." / ".." (le dossier ou son parent)
+    if not name:
         return "fichier"
     if len(name) > 120:
         stem, ext = os.path.splitext(name)
@@ -62,15 +63,20 @@ class Vault:
                     continue
         return dest
 
+    def note_target(self, note_rel: str | None) -> Path | None:
+        """Valide `note_liée` (à appeler avant d'écrire le fichier : pas d'orphelin)."""
+        if not note_rel:
+            return None
+        if not note_rel.endswith(".md"):
+            raise VaultPathError(f"Note invalide : {note_rel}")
+        note = self.safe(note_rel)
+        if note.exists() and not note.is_file():
+            raise VaultPathError(f"Note invalide : {note_rel}")
+        return note
+
     def attach(self, note_rel: str | None, folder_rel: str, file_path: Path) -> Path:
         link = f"![[{file_path.name}]]\n"
-        note = None
-        if note_rel:
-            if not note_rel.endswith(".md"):
-                raise VaultPathError(f"Note invalide : {note_rel}")
-            note = self.safe(note_rel)
-            if note.exists() and not note.is_file():
-                raise VaultPathError(f"Note invalide : {note_rel}")
+        note = self.note_target(note_rel)
         if not (note and note.exists()):
             note = self.safe(f"{folder_rel}/{file_path.stem}.md")
             note.parent.mkdir(parents=True, exist_ok=True)

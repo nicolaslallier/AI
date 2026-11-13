@@ -27,6 +27,8 @@ async def import_bytes(
 ) -> dict[str, str]:
     """Écrit dans `<dossier>/Pièces jointes/` sans écraser, lie à une note. Utilisé par les Tasks 6, 8 et 9."""
     dossier_pj = f"{dossier}/Pièces jointes"
+    vault.safe(dossier_pj)  # tout valider avant d'écrire : pas de fichier orphelin
+    vault.note_target(note_liee)  # la note par défaut est sûre : dossier validé, nom assaini sans "."
     dest = await vault.write_unique(dossier_pj, name, data)
     note = vault.attach(note_liee, dossier_pj, dest)
     return {"fichier": dest.relative_to(vault.root).as_posix(), "note": note.relative_to(vault.root).as_posix()}
@@ -72,9 +74,10 @@ def register_tools(server: MCPServer, vault: Vault, store) -> None:
         note_liée: str | None = None,
     ) -> dict[str, str]:
         """Importe un fichier dans `<dossier>/Pièces jointes/` et le lie à une note."""
-        if file.data is None and file.size > 0:
-            raise ToolError("Envoi hors bande pas encore pris en charge")  # Task 6
+        # data absent et size > 0 : traité par FilesExtension.intercept_tool_call (upload_required)
         _verifier(file.name or "", file.mimeType, file.size)
+        if len(file.data or "") > MAX_INLINE * 4 // 3 + 8:  # avant de décoder
+            raise ToolError(f"Fichier trop gros (> {MAX_INLINE} octets) : utilisez l'envoi hors bande")
         try:
             data = base64.b64decode(file.data or "", validate=True)
         except binascii.Error as e:
