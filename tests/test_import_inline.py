@@ -156,3 +156,22 @@ async def test_import_md_note_liee(http, vault):
     assert "![[n.md]]" in (vault / "00 - Inbox/autre.md").read_text()
     assert (vault / "00 - Inbox/Pièces jointes/n.md").read_bytes() == md
     assert [p.name for p in (vault / "00 - Inbox/Pièces jointes").iterdir()] == ["n.md"]
+
+
+async def test_nom_html_mime_png_refuse(http, vault):
+    r = await imp(http, fi(b"<html>", name="x.html", mime="image/png"), {"upload"})
+    assert r["result"]["isError"] and not (vault / "00 - Inbox/Pièces jointes").exists()
+    f = fi(b"<html>", name="x.html", mime="image/png")
+    del f["data"]
+    r = await imp(http, f, {"upload"})  # hors bande : refusé dès la demande
+    assert r["result"]["isError"]
+
+
+async def test_import_md_puis_pdf_meme_nom_ne_modifie_pas_le_md(http, vault):
+    md = b"# Rapport\n"
+    await imp(http, fi(md, name="rapport.md", mime="text/markdown"), {"upload"})
+    pj = vault / "00 - Inbox/Pièces jointes"
+    avant = (pj / "rapport.md").read_bytes()
+    await imp(http, fi(make_pdf(), name="rapport.pdf"), {"upload"})
+    assert (pj / "rapport.md").read_bytes() == avant == md
+    assert "![[rapport.pdf]]" in (pj / "rapport-2.md").read_text()

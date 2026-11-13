@@ -57,6 +57,15 @@ def masquer(numero: str) -> str:
     return "****" + numero[-4:] if len(numero) > 4 else "****"
 
 
+def masquer_nom(nom: str, numero: str | None) -> str:
+    """Masque dans un nom de fichier le numéro de police (tel quel ou en chiffres seuls)."""
+    if numero:
+        for clair in sorted({numero, re.sub(r"\D", "", numero)}, key=len, reverse=True):
+            if len(clair) > 4:
+                nom = nom.replace(clair, masquer(numero))
+    return nom
+
+
 def texte_pdf(src: bytes | Path) -> str:
     """Texte du PDF ; toute erreur (PDF malformé, trop gros) = "" = pas une police."""
     try:

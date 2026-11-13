@@ -1,4 +1,7 @@
+from pathlib import Path
+
 from client.rpc import call
+from server.app import create_app
 from server.digest import Sha256Stream, sha256_b64url
 
 
@@ -14,3 +17,17 @@ def test_sha256_b64url():
     s.update(b"a")
     s.update(b"bc")
     assert s.b64url() == sha256_b64url(b"abc")
+
+
+def test_staging_vide_au_demarrage(vault):
+    (vault / ".staging").mkdir()
+    (vault / ".staging" / "reste.bin").write_bytes(b"x")
+    create_app(vault)
+    assert not any((vault / ".staging").iterdir())
+
+
+def test_main_refuse_coffre_inexistant(tmp_path):
+    import subprocess, sys
+    r = subprocess.run([sys.executable, "-m", "server.app", "--vault", str(tmp_path / "absent")],
+                       capture_output=True, text=True, timeout=30, cwd=Path(__file__).parent.parent)
+    assert r.returncode != 0 and "absent" in r.stderr and not (tmp_path / "absent").exists()

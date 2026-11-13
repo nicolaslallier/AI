@@ -1,4 +1,6 @@
 import json
+import mimetypes
+import os
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -38,6 +40,13 @@ class FileInput(BaseModel):
 
 
 def accepts(name: str, mime: str, accept: list[str]) -> bool:
+    """Le type déclaré ET, si le nom a une extension, le type que celle-ci suggère doivent passer."""
+    if not _accepts(name, mime, accept):
+        return False
+    return not os.path.splitext(name)[1] or _accepts(name, mimetypes.guess_type(name)[0] or "", accept)
+
+
+def _accepts(name: str, mime: str, accept: list[str]) -> bool:
     """Type exact, joker `type/*`, ou extension `.ext` sur le nom (sans tenir compte de la casse)."""
     mime, name = mime.lower(), name.lower()
     for a in map(str.lower, accept):
@@ -61,7 +70,7 @@ def client_file_caps(ctx: ServerRequestContext[Any, Any]) -> set[str]:
 class FilesExtension(Extension):
     identifier = EXT_ID
 
-    def __init__(self, vault: "Vault | None" = None, store: "TransferStore | None" = None):
+    def __init__(self, vault: "Vault", store: "TransferStore"):
         self.vault, self.store = vault, store
 
     def settings(self) -> dict[str, Any]:

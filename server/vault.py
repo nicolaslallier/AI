@@ -10,7 +10,7 @@ class VaultPathError(ValueError):
 
 
 def sanitize_name(name: str) -> str:
-    name = "".join(c for c in name if c not in "/\\[]|#^<>%{}$`" and unicodedata.category(c) != "Cc").strip()
+    name = "".join(c for c in name if c not in "/\\[]|#^<>%{}$`" and unicodedata.category(c) not in ("Cc", "Cf")).strip()
     name = name.lstrip(". ")  # ni fichier caché, ni "." / ".." (le dossier ou son parent)
     if not name:
         return "fichier"
@@ -74,20 +74,18 @@ class Vault:
             raise VaultPathError(f"Note invalide : {note_rel}")
         return note
 
-    def attach(self, note_rel: str | None, folder_rel: str, file_path: Path) -> Path:
+    async def attach(self, note_rel: str | None, folder_rel: str, file_path: Path) -> Path:
+        """Lie le fichier importé à une note. Le fichier importé n'est jamais modifié, et sans
+        `note_liée` existante on ne complète jamais une note déjà là : on en crée une nouvelle."""
         link = f"![[{file_path.name}]]\n"
         note = self.note_target(note_rel)
-        if note == file_path:  # ne jamais modifier le fichier importé
+        if note == file_path:
             note = None
-        if file_path.suffix.lower() == ".md" and not (note and note.exists()):
+        existe = bool(note and note.exists())
+        if file_path.suffix.lower() == ".md" and not existe:
             return file_path  # une note importée est déjà une note : pas de note par défaut
-        if not (note and note.exists()):
-            note = self.safe(f"{folder_rel}/{file_path.stem}.md")
-            note.parent.mkdir(parents=True, exist_ok=True)
-            if not note.exists():
-                with note.open("x", encoding="utf-8") as f:
-                    f.write(link)
-                return note
+        if not existe:
+            return await self.write_unique(folder_rel, file_path.stem + ".md", link.encode("utf-8"))
         with note.open("a", encoding="utf-8") as f:
             f.write("\n" + link)
         return note

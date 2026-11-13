@@ -115,3 +115,18 @@ def test_digest_objet():
 )
 def test_accepts(name, mime, ok):
     assert accepts(name, mime, X_MCP_FILE["accept"]) is ok
+
+
+@pytest.mark.parametrize(
+    "name,mime,ok",
+    [
+        ("x.html", "image/png", False),
+        ("a.pdf", "application/pdf", True),
+        ("a.png", "image/png", True),
+        ("n.md", "text/markdown", True),
+        ("sans_ext", "application/pdf", True),
+        ("sans_ext", "text/html", False),
+    ],
+)
+def test_accepts_nom_et_mime(name, mime, ok):
+    assert accepts(name, mime, X_MCP_FILE["accept"]) is ok

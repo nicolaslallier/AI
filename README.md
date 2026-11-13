@@ -34,9 +34,12 @@ Ce que le brouillon a appris au projet :
 ```
 uv sync
 uv run pytest -q
-cp -R ~/Obsidian/Maison vault-test   # copie de travail, ignorée par git
-uv run python -m server.app          # MCP sur http://127.0.0.1:8765/mcp, coffre : vault-test/
+rsync -a --exclude .git ~/Obsidian/Maison/ vault-test/   # copie de travail, ignorée par git
+uv run python -m server.app [--vault CHEMIN]   # MCP sur http://127.0.0.1:8765/mcp, coffre : vault-test/ par défaut
 ```
+
+Le coffre doit exister (le serveur refuse de démarrer sinon, sans le créer). Au démarrage, `<coffre>/.staging/`
+est vidé : les jetons d'envoi sont en mémoire, aucun fichier qui y reste n'est valide après un redémarrage.
 
 Client `mcpf` (il parle au serveur ci-dessus) ; `--url` avant la sous-commande, pour une autre adresse :
 
@@ -76,7 +79,10 @@ Un PDF importé sans `note_liée` ne donne une note de ressource (à partir du m
     (l'import) : deux relances concurrentes ne passent pas toutes les deux ;
   - le PUT est protégé séparément par son drapeau d'écriture unique (un second PUT reçoit 409) ;
   - les jetons de téléchargement ne sont pas protégés contre le rejeu pendant leur durée de vie.
-- Types de fichiers filtrés par `x-mcp-file.accept`.
+- Types de fichiers filtrés par `x-mcp-file.accept` : le type MIME déclaré **et**, si le nom a une extension,
+  le type que cette extension suggère doivent tous deux être acceptés (`x.html` déclaré `image/png` est refusé) ;
+  un nom sans extension passe si le type MIME passe.
+- Un fichier importé n'est jamais modifié ; sans `note_liée`, la note de lien est toujours nouvelle (`-2`, `-3`…).
 
 ## Notes d'assurance
 
@@ -86,8 +92,8 @@ Extraction par règles simples (pas de LLM), sur le texte du PDF :
   les autres occurrences du texte de la note ;
 - les champs extraits (assureur, dates, montants) sont assainis : pas de Markdown, ni de syntaxe
   Obsidian, Templater ou Dataview (neutralisation des injections) ;
-- **compromis connu** : un PDF dont le *nom de fichier* contient le numéro de police reçoit un lien
-  masqué ou cassé vers le PDF. Acceptable pour l'instant, à traiter si ça gêne ;
+- un PDF dont le *nom de fichier* contient le numéro de police (en entier ou en chiffres seuls) est stocké
+  sous un nom masqué (`****1234`), de même que sa note : aucun numéro en clair dans un nom, une note ou un résultat ;
 - **calibrage sur de vrais PDF d'assureurs : à faire.** Les tests utilisent des PDF fabriqués.
 
 ## Tester avec Claude Code

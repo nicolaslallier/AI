@@ -6,6 +6,7 @@ import os
 import mimetypes
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import quote
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -14,7 +15,7 @@ from pydantic import Field
 
 from server.digest import digest_obj
 from server.files_ext import MAX_INLINE, X_MCP_FILE, FileInput, accepts
-from server.insurance import GABARIT, note_police, parse_police, texte_pdf
+from server.insurance import GABARIT, masquer_nom, note_police, parse_police, texte_pdf
 from server.vault import Vault, sanitize_name
 
 EXTRAIT = 160
@@ -54,6 +55,8 @@ async def import_bytes(
             modele = None  # sans modèle lisible : note générique
         if modele:
             police = parse_police(await asyncio.to_thread(texte_pdf, data))
+    if police:
+        name = masquer_nom(name, police.numero)  # ni le PDF ni la note ne portent le numéro en clair
     note_nom = os.path.splitext(sanitize_name(name))[0] + ".md"
     if police:
         vault.safe(f"{dossier}/{note_nom}")  # valider avant d'écrire : pas de fichier orphelin
@@ -62,7 +65,7 @@ async def import_bytes(
         txt = note_police(police, modele, dest.name)
         note = await vault.write_unique(dossier, note_nom, txt.encode("utf-8"))
     else:
-        note = vault.attach(note_liee, dossier_pj, dest)
+        note = await vault.attach(note_liee, dossier_pj, dest)
     return {"fichier": dest.relative_to(vault.root).as_posix(), "note": note.relative_to(vault.root).as_posix()}
 
 
@@ -141,4 +144,4 @@ def register_tools(server: MCPServer, vault: Vault, store) -> None:
             raise ToolError(f"Fichier trop gros pour l'export en ligne (> {MAX_INLINE} octets) : le client doit déclarer `download`")
         blob = base64.b64encode(p.read_bytes()).decode("ascii")
         return [EmbeddedResource(type="resource", resource=BlobResourceContents(
-            uri=p.as_uri(), mimeType=mime_of(p), blob=blob))]
+            uri="vault://" + quote(p.relative_to(vault.root).as_posix()), mimeType=mime_of(p), blob=blob))]

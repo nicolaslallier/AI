@@ -100,3 +100,10 @@ async def test_export_lien_hors_coffre(http, vault, tmp_path_factory):
 async def test_range_chiffres_enormes_416(http, vault, rng):
     url = await ticket(http, vault, b"x" * 1000)
     assert (await http.get(url, headers={"Range": rng})).status_code == 416
+
+
+async def test_export_en_ligne_uri_relative(http, vault):
+    (vault / "00 - Inbox" / "é x.pdf").write_bytes(b"abc")
+    r = await export(http, "00 - Inbox/é x.pdf", caps=set())
+    uri = r["result"]["content"][0]["resource"]["uri"]
+    assert uri == "vault://00%20-%20Inbox/%C3%A9%20x.pdf" and str(vault) not in uri

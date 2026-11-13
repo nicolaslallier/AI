@@ -12,6 +12,9 @@ from server.vault import Vault
 
 def create_server(vault_root: Path, *, state_ttl: float = 1800, transfer_ttl: float = 900) -> MCPServer:
     vault = Vault(vault_root)
+    for f in (vault.root / ".staging").glob("*"):  # les jetons sont en mémoire : rien n'y survit à un redémarrage
+        if f.is_file() or f.is_symlink():
+            f.unlink()
     store = TransferStore(vault.root / ".staging", transfer_ttl)
     server = MCPServer(
         "mcp-fichiers",
@@ -34,6 +37,14 @@ def create_app(vault_root: Path, **kw) -> Starlette:
 
 
 if __name__ == "__main__":
+    import argparse
+    import sys
+
     import uvicorn
 
-    uvicorn.run(create_app(Path("vault-test")), host="127.0.0.1", port=8765)
+    ap = argparse.ArgumentParser(prog="python -m server.app")
+    ap.add_argument("--vault", type=Path, default=Path("vault-test"), help="racine du coffre (défaut : vault-test)")
+    racine = ap.parse_args().vault
+    if not racine.is_dir():
+        sys.exit(f"Coffre introuvable : {racine} (copiez-le d'abord, voir le README)")
+    uvicorn.run(create_app(racine), host="127.0.0.1", port=8765)

@@ -48,23 +48,24 @@ async def test_write_unique_deplace_un_path(vault):
     assert dest.read_bytes() == b"z" and not src.exists()
 
 
-def test_attach_cree_puis_complete(vault):
+async def test_attach_cree_puis_complete(vault):
     v = Vault(vault)
     f = vault / "00 - Inbox" / "p.pdf"
     f.write_bytes(b"x")
-    note = v.attach(None, "00 - Inbox", f)
+    note = await v.attach(None, "00 - Inbox", f)
     assert note.read_text().strip() == "![[p.pdf]]"
-    v.attach("00 - Inbox/p.md", "00 - Inbox", f)
+    await v.attach("00 - Inbox/p.md", "00 - Inbox", f)
     assert note.read_text().count("![[p.pdf]]") == 2
 
 
-def test_attach_n_ecrase_pas_une_note_existante(vault):
+async def test_attach_n_ecrase_pas_une_note_existante(vault):
     v = Vault(vault)
     (vault / "00 - Inbox" / "p.md").write_text("avant\n")
     f = vault / "00 - Inbox" / "p.pdf"
     f.write_bytes(b"x")
-    note = v.attach(None, "00 - Inbox", f)
-    assert note.read_text().startswith("avant\n") and "![[p.pdf]]" in note.read_text()
+    note = await v.attach(None, "00 - Inbox", f)
+    assert (vault / "00 - Inbox" / "p.md").read_text() == "avant\n"  # jamais modifiée
+    assert note.name == "p-2.md" and "![[p.pdf]]" in note.read_text()
 
 
 async def test_write_unique_ne_suit_pas_un_lien_brise(vault, tmp_path_factory):
@@ -84,16 +85,21 @@ async def test_write_unique_path_ne_suit_pas_un_lien_brise(vault, tmp_path_facto
 
 
 @pytest.mark.parametrize("note", ["00 - Inbox/p.txt", ".obsidian/x.md", "00 - Inbox/.staging/x.md", "p"])
-def test_attach_refuse_note_invalide(vault, note):
+async def test_attach_refuse_note_invalide(vault, note):
     f = vault / "00 - Inbox" / "p.pdf"
     f.write_bytes(b"x")
     with pytest.raises(VaultPathError):
-        Vault(vault).attach(note, "00 - Inbox", f)
+        await Vault(vault).attach(note, "00 - Inbox", f)
 
 
-def test_attach_refuse_note_qui_est_un_dossier(vault):
+async def test_attach_refuse_note_qui_est_un_dossier(vault):
     (vault / "00 - Inbox" / "d.md").mkdir()
     f = vault / "00 - Inbox" / "p.pdf"
     f.write_bytes(b"x")
     with pytest.raises(VaultPathError):
-        Vault(vault).attach("00 - Inbox/d.md", "00 - Inbox", f)
+        await Vault(vault).attach("00 - Inbox/d.md", "00 - Inbox", f)
+
+
+@pytest.mark.parametrize("brut", ["a\u202eb.pdf", "a\u200bb.pdf", "a\ufeffb.pdf"])
+def test_sanitize_retire_caracteres_de_format(brut):
+    assert sanitize_name(brut) == "ab.pdf"

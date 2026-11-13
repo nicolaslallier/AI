@@ -109,3 +109,13 @@ async def test_injection_neutralisee(http, vault):
 def test_texte_pdf_limite_pages():
     from server.insurance import MAX_PAGES, texte_pdf
     assert MAX_PAGES == 20 and texte_pdf(b"%PDF garbage") == ""
+
+
+async def test_numero_masque_dans_les_noms(http, vault):
+    gabarit(vault)
+    r = await imp(http, make_pdf(texte=TEXTE), name="police-HAB-123456789.pdf")
+    sc = r["result"]["structuredContent"]
+    assert "123456789" not in str(r["result"]) and "****6789" in sc["fichier"] and "****6789" in sc["note"]
+    assert not any("123456789" in p.name for p in vault.rglob("*"))
+    pdf_nom = sc["fichier"].rsplit("/", 1)[1]
+    assert f"![[{pdf_nom}]]" in (vault / sc["note"]).read_text()
