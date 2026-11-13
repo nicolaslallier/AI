@@ -3,6 +3,7 @@ from typing import Any, Literal
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.extension import Extension
 from mcp.server.request_state import RequestStateBoundary
+from mcp.shared.exceptions import MCPError
 from mcp_types import CallToolRequestParams
 from pydantic import BaseModel, Field
 
@@ -57,7 +58,14 @@ class FilesExtension(Extension):
     async def intercept_tool_call(
         self, params: CallToolRequestParams, ctx: ServerRequestContext[Any, Any], call_next: CallNext
     ) -> HandlerResult:
-        # Point d'accroche des Tasks 5 (-32021) et 6 (upload_required).
+        # Task 5 : -32021 ; le cas `upload` déclaré (upload_required) vient au Task 6.
+        if params.name == "vault_import_file":
+            f = (params.arguments or {}).get("file")
+            if isinstance(f, dict) and f.get("data") is None and (f.get("size") or 0) > 0 and "upload" not in client_file_caps(ctx):
+                raise MCPError(
+                    code=-32021,
+                    message="Le client doit déclarer la capacité `upload` (extension files) ou utiliser vault_import_base64",
+                )
         return await call_next(ctx)
 
 

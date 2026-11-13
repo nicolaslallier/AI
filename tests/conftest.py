@@ -48,3 +48,10 @@ async def app(vault):
 async def http(app):
     async with client(app) as c:
         yield c
+
+
+def make_pdf(n_bytes: int) -> bytes:
+    """PDF minimal valide, rembourré (commentaire) jusqu'à `n_bytes`."""
+    head, tail = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n", b"\ntrailer<</Root 1 0 R>>\n%%EOF\n"
+    pad = max(0, n_bytes - len(head) - len(tail) - 1)
+    return head + b"%" + b"x" * pad + tail

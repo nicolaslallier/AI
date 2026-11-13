@@ -15,7 +15,7 @@ async def call(http: httpx.AsyncClient, method: str, params: dict, caps: set[str
     meta = {
         PROTOCOL_VERSION_META_KEY: VERSION,
         CLIENT_INFO_META_KEY: {"name": "mcpf", "version": "0.1"},
-        CLIENT_CAPABILITIES_META_KEY: {"extensions": {EXT_ID: {c: {} for c in caps}}},
+        CLIENT_CAPABILITIES_META_KEY: {"extensions": {EXT_ID: {c: {} for c in caps}}} if caps else {},
     }
     body = {"jsonrpc": "2.0", "id": next(_ids), "method": method, "params": {**params, "_meta": meta}}
     headers = {"mcp-protocol-version": VERSION, "mcp-method": method, "accept": "application/json, text/event-stream"}

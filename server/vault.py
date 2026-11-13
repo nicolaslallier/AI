@@ -31,8 +31,17 @@ class Vault:
             raise VaultPathError(f"Chemin hors du coffre : {rel}")
         return p
 
+    def safe(self, rel: str) -> Path:
+        """`resolve` + refus de tout composant caché (`.obsidian`, `.staging`...), avant et après résolution."""
+        if any(c.startswith(".") for c in Path(rel).parts):
+            raise VaultPathError(f"Chemin caché refusé : {rel}")
+        p = self.resolve(rel)
+        if any(c.startswith(".") for c in p.relative_to(self.root).parts):  # lien vers une cible cachée
+            raise VaultPathError(f"Chemin caché refusé : {rel}")
+        return p
+
     async def write_unique(self, folder_rel: str, name: str, data: bytes | Path) -> Path:
-        folder = self.resolve(folder_rel)
+        folder = self.safe(folder_rel)
         stem, ext = os.path.splitext(sanitize_name(name))
         async with self._lock:
             folder.mkdir(parents=True, exist_ok=True)
@@ -57,13 +66,13 @@ class Vault:
         link = f"![[{file_path.name}]]\n"
         note = None
         if note_rel:
-            if not note_rel.endswith(".md") or any(c.startswith(".") for c in Path(note_rel).parts):
+            if not note_rel.endswith(".md"):
                 raise VaultPathError(f"Note invalide : {note_rel}")
-            note = self.resolve(note_rel)
+            note = self.safe(note_rel)
             if note.exists() and not note.is_file():
                 raise VaultPathError(f"Note invalide : {note_rel}")
         if not (note and note.exists()):
-            note = self.resolve(f"{folder_rel}/{file_path.stem}.md")
+            note = self.safe(f"{folder_rel}/{file_path.stem}.md")
             note.parent.mkdir(parents=True, exist_ok=True)
             if not note.exists():
                 with note.open("x", encoding="utf-8") as f:
