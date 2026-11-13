@@ -1,5 +1,10 @@
 """Outils MCP du coffre. Toute exception levée ici devient un résultat `isError: true`."""
+from typing import Annotated
+
 from mcp.server.mcpserver import MCPServer
+from pydantic import Field
+
+from server.files_ext import X_MCP_FILE, FileInput
 
 from server.vault import Vault
 
@@ -32,3 +37,19 @@ def register_tools(server: MCPServer, vault: Vault, store) -> None:
         if not p.is_file():
             raise FileNotFoundError(f"Note introuvable : {chemin}")
         return p.read_text(encoding="utf-8")
+
+    @server.tool()
+    def vault_import_file(
+        file: Annotated[FileInput, Field(json_schema_extra={"x-mcp-file": X_MCP_FILE})],
+        dossier: str = "00 - Inbox",
+        note_liée: str | None = None,
+    ) -> dict[str, str]:
+        """Importe un fichier dans `<dossier>/Pièces jointes/` et le lie à une note."""
+        raise NotImplementedError("vault_import_file : Task 5")
+
+    @server.tool()
+    def vault_import_base64(
+        name: str, mimeType: str, data_base64: str, dossier: str = "00 - Inbox", note_liée: str | None = None
+    ) -> dict[str, str]:
+        """Comme vault_import_file, pour les clients sans l'extension files (limite 1 Mio)."""
+        raise NotImplementedError("vault_import_base64 : Task 5")
