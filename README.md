@@ -38,7 +38,7 @@ cp -R ~/Obsidian/Maison vault-test   # copie de travail, ignorée par git
 uv run python -m server.app          # MCP sur http://127.0.0.1:8765/mcp, coffre : vault-test/
 ```
 
-Client `mcpf` (il parle au serveur ci-dessus) ; `--url` avant le sous-commande, pour une autre adresse :
+Client `mcpf` (il parle au serveur ci-dessus) ; `--url` avant la sous-commande, pour une autre adresse :
 
 ```
 uv run mcpf put <fichier> [--dossier D] [--note N]      # envoie dans <D>/Pièces jointes/ (défaut : 00 - Inbox)
