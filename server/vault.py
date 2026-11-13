@@ -10,7 +10,7 @@ class VaultPathError(ValueError):
 
 
 def sanitize_name(name: str) -> str:
-    name = "".join(c for c in name if c not in "/\\[]|#^" and unicodedata.category(c) != "Cc").strip()
+    name = "".join(c for c in name if c not in "/\\[]|#^<>%{}$`" and unicodedata.category(c) != "Cc").strip()
     name = name.lstrip(". ")  # ni fichier caché, ni "." / ".." (le dossier ou son parent)
     if not name:
         return "fichier"

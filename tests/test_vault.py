@@ -22,6 +22,7 @@ def test_resolve_refuse_lien_qui_sort(vault, tmp_path_factory):
     ("../x.pdf", "x.pdf"), (".x.pdf", "x.pdf"), (". .pdf", "pdf"), ("a/b.pdf", "ab.pdf"), ("", "fichier"),
     ("Été\x00.pdf", "Été.pdf"), (".", "fichier"), ("..", "fichier"),
     ("a[b]|c#d^e.pdf", "abcde.pdf"), ("[[x]].pdf", "x.pdf"),
+    ("<% tp.x %>.pdf", "tp.x .pdf"), ("{{a}}$`b`.pdf", "ab.pdf"),
 ])
 def test_sanitize(brut, attendu):
     assert sanitize_name(brut) == attendu

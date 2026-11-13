@@ -1,14 +1,16 @@
 # MCP Fichiers
 
 Serveur MCP (Python) qui implémente l'extension expérimentale `io.modelcontextprotocol/files`
-sur une **copie** d'un coffre Obsidian, plus le client en ligne de commande `mcpf`.
+sur une copie d'un coffre Obsidian, plus le client en ligne de commande `mcpf`.
 
 But : vérifier qu'un client MCP (Claude Code, par exemple) peut envoyer et récupérer des fichiers
-via l'extension, sans toucher au coffre réel. Le coffre réel n'est jamais écrit par ce projet.
+via l'extension. Le serveur sert `vault-test/` par défaut ; le viser sur le coffre réel est un choix
+délibéré, pas le réglage par défaut.
 
 ## Spécification
 
-- Commit de spec de référence : `8a859b8` (`specification/draft/file-uploads.md`). C'est un brouillon.
+- Commit de spec de référence : `8a859b8` dans le dépôt externe
+  `modelcontextprotocol/experimental-ext-file-uploads` (`specification/draft/file-uploads.md`). C'est un brouillon.
 - **Digest** : sha-256 en base64url, **sans remplissage `=`** (objet `{algorithm, value}`).
 - **`FileInput`** : champs requis `id` (1 à 128 caractères), `mimeType`, `size` (entier >= 0), plus
   `digest` requis dans cette implémentation. Optionnels : `name`, `data` (base64 RFC 4648 ; absent
@@ -36,11 +38,12 @@ cp -R ~/Obsidian/Maison vault-test   # copie de travail, ignorée par git
 uv run python -m server.app          # MCP sur http://127.0.0.1:8765/mcp, coffre : vault-test/
 ```
 
-Client `mcpf` (il parle au serveur ci-dessus ; `--url` pour une autre adresse) :
+Client `mcpf` (il parle au serveur ci-dessus) ; `--url` avant le sous-commande, pour une autre adresse :
 
 ```
-uv run mcpf put <fichier> [--dossier D] [--note N]   # envoie dans <D>/Pièces jointes/ (défaut : 00 - Inbox)
-uv run mcpf get <chemin> -o <sortie>                 # télécharge un fichier du coffre
+uv run mcpf put <fichier> [--dossier D] [--note N]      # envoie dans <D>/Pièces jointes/ (défaut : 00 - Inbox)
+uv run mcpf get <chemin> [-o <sortie>]                  # télécharge un fichier du coffre
+uv run mcpf --url http://127.0.0.1:8765 put <fichier>   # autre adresse
 ```
 
 ## Outils MCP
@@ -53,8 +56,8 @@ uv run mcpf get <chemin> -o <sortie>                 # télécharge un fichier d
 | `vault_import_base64(name, mimeType, data_base64, dossier, note_liée)` | Import pour les clients **sans** l'extension (limite 1 Mio) |
 | `vault_export(chemin)` | Export ; lien de téléchargement si le client déclare `download`, sinon contenu en ligne (1 Mio max) |
 
-Un PDF d'assurance importé sans `note_liée` produit une note de ressource à partir du modèle
-`06 - Modèles/Modèle - Note de ressource.md` (voir ci-dessous).
+Un PDF importé sans `note_liée` ne donne une note de ressource (à partir du modèle
+`06 - Modèles/Modèle - Note de ressource.md`) que s'il est reconnu comme police d'assurance (voir plus bas).
 
 ## Choix de sécurité
 
@@ -62,10 +65,17 @@ Un PDF d'assurance importé sans `note_liée` produit une note de ressource à p
 - Chemins confinés au coffre. Les dossiers et fichiers cachés (commençant par `.`) sont refusés,
   y compris via un lien symbolique.
 - Pas d'écrasement : un nom déjà pris reçoit un suffixe (`-2`, `-3`…).
-- Jetons de transfert à usage unique, valables **15 min** (900 s).
+- Noms de fichiers assainis : `/ \ [ ] | # ^ < > % { } $` et l'apostrophe inverse sont retirés, ainsi
+  qu'une partie des caractères de contrôle, pour qu'un nom ne transporte pas de marqueurs Templater ou Dataview.
+- **Jetons d'envoi** (PUT) : à usage unique, valables **15 min** (900 s).
+- **Jetons de téléchargement** : **pas** à usage unique. Ils sont relisibles (plusieurs GET, plages
+  comprises) jusqu'à leur expiration, 15 min (900 s).
 - `requestState` valable **1800 s**.
-- Sans authentification, la protection contre le rejeu repose uniquement sur l'ensemble des jetons
-  consommés (`TransferStore.consume`, synchrone) : deux relances concurrentes ne passent pas toutes les deux.
+- Rejeu, sans authentification :
+  - l'ensemble des jetons consommés (`TransferStore.consume`, synchrone) protège l'appel de finalisation
+    (l'import) : deux relances concurrentes ne passent pas toutes les deux ;
+  - le PUT est protégé séparément par son drapeau d'écriture unique (un second PUT reçoit 409) ;
+  - les jetons de téléchargement ne sont pas protégés contre le rejeu pendant leur durée de vie.
 - Types de fichiers filtrés par `x-mcp-file.accept`.
 
 ## Notes d'assurance
@@ -73,9 +83,9 @@ Un PDF d'assurance importé sans `note_liée` produit une note de ressource à p
 Un PDF est considéré comme une police s'il contient au moins deux des mots « assur », « police », « prime ».
 Extraction par règles simples (pas de LLM), sur le texte du PDF :
 - le numéro de police apparaît **masqué** (`****` suivi des 4 derniers chiffres), y compris dans
-  les autres occurrences du texte ;
-- le texte extrait est assaini : pas de Markdown, ni de syntaxe Obsidian, Templater ou Dataview
-  (neutralisation des injections) ;
+  les autres occurrences du texte de la note ;
+- les champs extraits (assureur, dates, montants) sont assainis : pas de Markdown, ni de syntaxe
+  Obsidian, Templater ou Dataview (neutralisation des injections) ;
 - **compromis connu** : un PDF dont le *nom de fichier* contient le numéro de police reçoit un lien
   masqué ou cassé vers le PDF. Acceptable pour l'instant, à traiter si ça gêne ;
 - **calibrage sur de vrais PDF d'assureurs : à faire.** Les tests utilisent des PDF fabriqués.
@@ -90,8 +100,11 @@ claude mcp add --transport http mcp-fichiers http://127.0.0.1:8765/mcp
 ```
 
 Dans Claude Code, demander l'import d'un petit PDF, puis vérifier :
-- `vault_import_file` **n'est pas proposé** : Claude Code ne déclare pas l'extension files ;
-- `vault_import_base64` **réussit** sur ce PDF.
+- `vault_import_file` **n'est pas proposé** dans `tools/list` : Claude Code ne déclare pas l'extension files
+  (c'est couvert par `test_outil_fichier_cache_sans_upload`) ;
+- `vault_import_base64` **réussit** sur ce PDF ;
+- côté serveur, un appel hors bande sans la capacité `upload` reçoit l'erreur `-32021`
+  (couvert par `test_sans_data_sans_upload_32021`).
 
 Noter le résultat (ce qui a marché, ce qui non) : c'est la matière de l'évaluation du projet.
 
@@ -103,7 +116,8 @@ claude mcp remove mcp-fichiers
 
 ## Pas encore fait
 
-- Envoi et téléchargement par morceaux (un fichier n'est envoyé qu'en un seul bloc) et reprise après coupure.
+- Envoi par morceaux (un fichier n'est envoyé qu'en un seul bloc) et reprise après coupure.
+- `mcpf get` n'utilise pas `Range` : le serveur sait répondre aux plages (206/416), le client ne les demande pas encore.
 - Authentification, et donc tout usage hors de la machine locale.
 - Conteneur Docker.
 - Calibrage des notes d'assurance sur de vrais PDF.
