@@ -93,7 +93,7 @@ def register_routes(server: MCPServer, store: TransferStore) -> None:
         cl = request.headers.get("content-length")
         if cl is None:
             return Response(status_code=411)
-        if not (cl.isascii() and cl.isdigit()) or int(cl) != t.size:
+        if not (cl.isascii() and cl.isdigit()) or len(cl) > 18 or int(cl) != t.size:
             return Response(status_code=413)
         t.written = True  # usage unique, même si le corps est rejeté : le client recommence l'appel
         h, n, ok = Sha256Stream(), 0, False
@@ -131,7 +131,7 @@ def register_routes(server: MCPServer, store: TransferStore) -> None:
         if rng is None:
             return StreamingResponse(_lire(d.path, 0, d.size - 1), headers={
                 "content-length": str(d.size), "accept-ranges": "bytes", "content-type": "application/octet-stream"})
-        m = re.fullmatch(r"bytes=(\d*)-(\d*)", rng.strip()) if rng.isascii() else None
+        m = re.fullmatch(r"bytes=(\d{0,18})-(\d{0,18})", rng.strip()) if rng.isascii() else None
         start = end = None
         if m and (m[1] or m[2]):
             if m[1]:

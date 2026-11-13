@@ -93,3 +93,10 @@ async def test_export_lien_hors_coffre(http, vault, tmp_path_factory):
     dehors.write_bytes(b"secret")
     (vault / "00 - Inbox/l.pdf").symlink_to(dehors)
     assert (await export(http, "00 - Inbox/l.pdf"))["result"]["isError"]
+
+
+@pytest.mark.parametrize("rng", ["bytes=-" + "9" * 5000, "bytes=" + "9" * 5000 + "-", "bytes=1-" + "9" * 5000,
+                                 "bytes=" + "9" * 5000 + "-" + "9" * 5000])
+async def test_range_chiffres_enormes_416(http, vault, rng):
+    url = await ticket(http, vault, b"x" * 1000)
+    assert (await http.get(url, headers={"Range": rng})).status_code == 416

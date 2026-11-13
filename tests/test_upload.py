@@ -277,3 +277,9 @@ async def test_content_length_non_ascii(http, cl):
     r1 = await demande(http, args(b"%PDF-1"))
     r = await put(http, r1, b"abc", headers={"Content-Length": cl})
     assert r.status_code in (400, 413)
+
+
+async def test_content_length_enorme(http):
+    r1 = await demande(http, args(b"%PDF-1"))
+    r = await put(http, r1, b"abc", headers={"Content-Length": "9" * 5000})
+    assert r.status_code == 413
