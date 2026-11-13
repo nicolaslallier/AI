@@ -48,15 +48,18 @@ async def import_bytes(
     vault.note_target(note_liee)  # la note par défaut est sûre : dossier validé, nom assaini sans "."
     police = None
     if mime == "application/pdf" and not note_liee:  # une note_liée explicite garde le comportement générique
-        modele = vault.safe(GABARIT)
-        if modele.is_file():  # sans modèle : note générique
+        try:
+            modele = vault.safe(GABARIT).read_text(encoding="utf-8")  # avant d'écrire le PDF
+        except (OSError, ValueError):
+            modele = None  # sans modèle lisible : note générique
+        if modele:
             police = parse_police(await asyncio.to_thread(texte_pdf, data))
     note_nom = os.path.splitext(sanitize_name(name))[0] + ".md"
     if police:
         vault.safe(f"{dossier}/{note_nom}")  # valider avant d'écrire : pas de fichier orphelin
     dest = await vault.write_unique(dossier_pj, name, data)
     if police:
-        txt = note_police(police, modele.read_text(encoding="utf-8"), dest.name)
+        txt = note_police(police, modele, dest.name)
         note = await vault.write_unique(dossier, note_nom, txt.encode("utf-8"))
     else:
         note = vault.attach(note_liee, dossier_pj, dest)

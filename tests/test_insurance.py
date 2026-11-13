@@ -1,3 +1,5 @@
+import time
+
 from client.rpc import call
 from conftest import b64, gabarit, make_pdf
 from server.insurance import masquer, parse_police
@@ -35,7 +37,6 @@ async def test_import_police(http, vault):
     assert not (vault / "00 - Inbox/Pièces jointes/police.md").exists()
     assert (vault / "00 - Inbox/Pièces jointes/police.pdf").exists()
     assert r["result"]["structuredContent"]["note"] == "00 - Inbox/police.md"
-    print(note)
 
 
 async def test_police_ne_remplace_pas_une_note(http, vault):
@@ -70,3 +71,41 @@ async def test_police_dossier_invalide_sans_orphelin(http, vault):
     gabarit(vault)
     r = await imp(http, make_pdf(texte=TEXTE), dossier=".obsidian")
     assert r["result"]["isError"] and not (vault / ".obsidian").exists()
+
+
+async def _note(http, vault, texte):
+    gabarit(vault)
+    await imp(http, make_pdf(texte=texte))
+    return (vault / "00 - Inbox/police.md").read_text()
+
+
+async def test_numero_jamais_en_clair_mise_en_page_fusionnee(http, vault):
+    for t in ("Assureur : Fictive inc. Numéro de police : HAB-123456789 Prime 5 $",
+              "Assureur :\nNuméro de police : HAB-123456789\nPrime 5 $"):
+        note = await _note(http, vault, t)
+        assert "123456789" not in note and "HAB-123456789" not in note and "****6789" in note
+        (vault / "00 - Inbox/police.md").unlink()
+
+
+def test_filet_numero_dans_le_nom_du_pdf():
+    from server.insurance import Police, note_police
+    n = note_police(Police(numero="HAB-123456789"), "# Titre\n\n## Liens\n", "HAB-123456789.pdf")
+    assert "123456789" not in n
+
+
+def test_montant_lineaire():
+    t = time.perf_counter()
+    assert parse_police("assureur : X prime " + "123 " * 50000) is not None
+    assert time.perf_counter() - t < 1
+
+
+async def test_injection_neutralisee(http, vault):
+    note = await _note(http, vault, 'Assureur : <% tp.system.exec("x") %> [[lien]] $= dv`x` {{y}} | #z\nPolice n° 1 prime')
+    for m in ("<%", "%>", "[[lien]]", "$=", "`", "{{", "|", "#z"):
+        assert m not in note.replace("![[police.pdf]]", "")
+    assert note.count("\n# ") == 1
+
+
+def test_texte_pdf_limite_pages():
+    from server.insurance import MAX_PAGES, texte_pdf
+    assert MAX_PAGES == 20 and texte_pdf(b"%PDF garbage") == ""
