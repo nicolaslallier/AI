@@ -1,6 +1,8 @@
 """Outils MCP du coffre. Toute exception levée ici devient un résultat `isError: true`."""
 import base64
+import asyncio
 import binascii
+import os
 import mimetypes
 from pathlib import Path
 from typing import Annotated
@@ -12,7 +14,8 @@ from pydantic import Field
 
 from server.digest import digest_obj
 from server.files_ext import MAX_INLINE, X_MCP_FILE, FileInput, accepts
-from server.vault import Vault
+from server.insurance import GABARIT, note_police, parse_police, texte_pdf
+from server.vault import Vault, sanitize_name
 
 EXTRAIT = 160
 
@@ -43,8 +46,20 @@ async def import_bytes(
     dossier_pj = f"{dossier}/Pièces jointes"
     vault.safe(dossier_pj)  # tout valider avant d'écrire : pas de fichier orphelin
     vault.note_target(note_liee)  # la note par défaut est sûre : dossier validé, nom assaini sans "."
+    police = None
+    if mime == "application/pdf" and not note_liee:  # une note_liée explicite garde le comportement générique
+        modele = vault.safe(GABARIT)
+        if modele.is_file():  # sans modèle : note générique
+            police = parse_police(await asyncio.to_thread(texte_pdf, data))
+    note_nom = os.path.splitext(sanitize_name(name))[0] + ".md"
+    if police:
+        vault.safe(f"{dossier}/{note_nom}")  # valider avant d'écrire : pas de fichier orphelin
     dest = await vault.write_unique(dossier_pj, name, data)
-    note = vault.attach(note_liee, dossier_pj, dest)
+    if police:
+        txt = note_police(police, modele.read_text(encoding="utf-8"), dest.name)
+        note = await vault.write_unique(dossier, note_nom, txt.encode("utf-8"))
+    else:
+        note = vault.attach(note_liee, dossier_pj, dest)
     return {"fichier": dest.relative_to(vault.root).as_posix(), "note": note.relative_to(vault.root).as_posix()}
 
 
