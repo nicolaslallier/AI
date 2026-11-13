@@ -1,11 +1,13 @@
 import inspect
 
 import pytest
+from pydantic import ValidationError
 
 from client.rpc import call
 from conftest import client, running
 from server.app import create_server
-from server.files_ext import X_MCP_FILE, accepts
+from server.digest import Sha256Stream, digest_obj, sha256_b64url
+from server.files_ext import X_MCP_FILE, FileInput, accepts
 
 
 @pytest.fixture
@@ -84,6 +86,22 @@ async def test_schema_vault_import_file(http):
     file_input = schema["$defs"][file["$ref"].rsplit("/", 1)[-1]]
     assert {"id", "mimeType", "size", "digest"} <= set(file_input["required"])
     assert "name" not in file_input["required"] and "data" not in file_input["required"]
+    digest = schema["$defs"][file_input["properties"]["digest"]["$ref"].rsplit("/", 1)[-1]]
+    assert set(digest["required"]) == {"algorithm", "value"}
+    assert digest["properties"]["algorithm"]["const"] == "sha-256"
+
+
+def test_digest_objet():
+    d = digest_obj(b"abc")
+    assert d == {"algorithm": "sha-256", "value": sha256_b64url(b"abc")}
+    s = Sha256Stream()
+    s.update(b"abc")
+    assert s.digest_obj() == d
+    base = {"id": "f1", "mimeType": "application/pdf", "size": 3}
+    assert FileInput(**base, digest=d).digest.value == d["value"]
+    for bad in ({**d, "algorithm": "md5"}, d["value"]):
+        with pytest.raises(ValidationError):
+            FileInput(**base, digest=bad)
 
 
 @pytest.mark.parametrize(

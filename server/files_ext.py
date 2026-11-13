@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.extension import Extension
@@ -11,13 +11,18 @@ MAX_INLINE = 1048576
 X_MCP_FILE = {"accept": ["application/pdf", "image/*", ".md"], "maxSize": 157286400}
 
 
+class Digest(BaseModel):
+    algorithm: Literal["sha-256"]
+    value: str  # base64url sans remplissage (server.digest.digest_obj)
+
+
 class FileInput(BaseModel):
     """`FileInput` du brouillon (commit 8a859b8) ; `digest` requis en plus (spec §6.2)."""
 
     id: str = Field(min_length=1, max_length=128)
     mimeType: str
     size: int = Field(ge=0)
-    digest: str  # sha-256 base64url sans remplissage (server.digest.sha256_b64url)
+    digest: Digest
     name: str | None = None
     data: str | None = None  # base64 ; absent et size > 0 = envoi hors bande
 

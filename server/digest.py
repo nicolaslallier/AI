@@ -11,6 +11,11 @@ def sha256_b64url(data: bytes) -> str:
     return _b64url(hashlib.sha256(data).digest())
 
 
+def digest_obj(data: bytes) -> dict:
+    """Objet `digest` du brouillon : `{"algorithm": "sha-256", "value": <base64url>}`."""
+    return {"algorithm": "sha-256", "value": sha256_b64url(data)}
+
+
 class Sha256Stream:
     def __init__(self) -> None:
         self._h = hashlib.sha256()
@@ -20,3 +25,6 @@ class Sha256Stream:
 
     def b64url(self) -> str:
         return _b64url(self._h.digest())
+
+    def digest_obj(self) -> dict:
+        return {"algorithm": "sha-256", "value": self.b64url()}
