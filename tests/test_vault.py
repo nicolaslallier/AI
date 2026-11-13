@@ -21,6 +21,7 @@ def test_resolve_refuse_lien_qui_sort(vault, tmp_path_factory):
 @pytest.mark.parametrize("brut,attendu", [
     ("../x.pdf", "..x.pdf"), ("a/b.pdf", "ab.pdf"), ("", "fichier"),
     ("Été\x00.pdf", "Été.pdf"), (".", "fichier"), ("..", "fichier"),
+    ("a[b]|c#d^e.pdf", "abcde.pdf"), ("[[x]].pdf", "x.pdf"),
 ])
 def test_sanitize(brut, attendu):
     assert sanitize_name(brut) == attendu
@@ -54,3 +55,44 @@ def test_attach_cree_puis_complete(vault):
     assert note.read_text().strip() == "![[p.pdf]]"
     v.attach("00 - Inbox/p.md", "00 - Inbox", f)
     assert note.read_text().count("![[p.pdf]]") == 2
+
+
+def test_attach_n_ecrase_pas_une_note_existante(vault):
+    v = Vault(vault)
+    (vault / "00 - Inbox" / "p.md").write_text("avant\n")
+    f = vault / "00 - Inbox" / "p.pdf"
+    f.write_bytes(b"x")
+    note = v.attach(None, "00 - Inbox", f)
+    assert note.read_text().startswith("avant\n") and "![[p.pdf]]" in note.read_text()
+
+
+async def test_write_unique_ne_suit_pas_un_lien_brise(vault, tmp_path_factory):
+    cible = tmp_path_factory.mktemp("dehors") / "cible.pdf"
+    (vault / "00 - Inbox" / "p.pdf").symlink_to(cible)
+    dest = await Vault(vault).write_unique("00 - Inbox", "p.pdf", b"1")
+    assert dest.name == "p-2.pdf" and not cible.exists()
+
+
+async def test_write_unique_path_ne_suit_pas_un_lien_brise(vault, tmp_path_factory):
+    cible = tmp_path_factory.mktemp("dehors") / "cible.pdf"
+    (vault / "00 - Inbox" / "p.pdf").symlink_to(cible)
+    src = vault / "src.bin"
+    src.write_bytes(b"z")
+    dest = await Vault(vault).write_unique("00 - Inbox", "p.pdf", src)
+    assert dest.name == "p-2.pdf" and not cible.exists()
+
+
+@pytest.mark.parametrize("note", ["00 - Inbox/p.txt", ".obsidian/x.md", "00 - Inbox/.staging/x.md", "p"])
+def test_attach_refuse_note_invalide(vault, note):
+    f = vault / "00 - Inbox" / "p.pdf"
+    f.write_bytes(b"x")
+    with pytest.raises(VaultPathError):
+        Vault(vault).attach(note, "00 - Inbox", f)
+
+
+def test_attach_refuse_note_qui_est_un_dossier(vault):
+    (vault / "00 - Inbox" / "d.md").mkdir()
+    f = vault / "00 - Inbox" / "p.pdf"
+    f.write_bytes(b"x")
+    with pytest.raises(VaultPathError):
+        Vault(vault).attach("00 - Inbox/d.md", "00 - Inbox", f)
