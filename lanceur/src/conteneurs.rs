@@ -6,8 +6,8 @@ use std::time::Duration;
 use bollard::Docker;
 use bollard::errors::Error as ErreurBollard;
 use bollard::models::{
-    ContainerCreateBody, EndpointSettings, HostConfig, Mount, MountType, MountVolumeOptions,
-    NetworkCreateRequest, NetworkingConfig,
+    ContainerCreateBody, EndpointSettings, HostConfig, HostConfigLogConfig, Mount, MountType,
+    MountVolumeOptions, NetworkCreateRequest, NetworkingConfig,
 };
 use bollard::query_parameters::{
     CreateContainerOptions, CreateImageOptions, ListContainersOptions, LogsOptions,
@@ -193,6 +193,7 @@ pub fn specification(
                 ("/home/agent".into(), String::new()),
             ])),
             mounts: Some(montages),
+            log_config: Some(journaux()),
             ..Default::default()
         }),
         networking_config: Some(NetworkingConfig {
@@ -200,6 +201,43 @@ pub fn specification(
         }),
         ..Default::default()
     })
+}
+
+/// Journaux bornés sur l'hôte : un `yes` de 1800 s ne remplit pas le disque.
+fn journaux() -> HostConfigLogConfig {
+    HostConfigLogConfig {
+        typ: Some("json-file".into()),
+        config: Some(HashMap::from([
+            ("max-size".into(), "10m".into()),
+            ("max-file".into(), "1".into()),
+        ])),
+    }
+}
+
+/// `_` est interdit dans l'espace et dans le nom : deux couples distincts ne collisionnent pas.
+pub fn nom_service(espace: &str, nom: &str) -> String {
+    format!("{}_{nom}", reseau_services(espace))
+}
+
+/// Conteneur de service : réseau interne seul, aucun montage, juste les capacités
+/// dont une image comme postgres a besoin pour démarrer en root puis changer d'utilisateur.
+pub fn hote_service(reseau: &str) -> HostConfig {
+    HostConfig {
+        network_mode: Some(reseau.into()),
+        privileged: Some(false),
+        cap_drop: Some(vec!["ALL".into()]),
+        cap_add: Some(
+            ["CHOWN", "SETUID", "SETGID", "FOWNER", "DAC_OVERRIDE"]
+                .map(String::from)
+                .to_vec(),
+        ),
+        security_opt: Some(vec!["no-new-privileges".into()]),
+        memory: Some(1024 * 1024 * 1024),
+        nano_cpus: Some(1_000_000_000),
+        pids_limit: Some(512),
+        log_config: Some(journaux()),
+        ..Default::default()
+    }
 }
 
 /// Garde les `SORTIE_MAX` derniers caractères.
@@ -341,17 +379,31 @@ impl Moteur for Docker {
         }
         for s in &d.services {
             assurer_image(self, &s.image).await?;
-            let nom = format!("{reseau}-{}", s.nom);
-            self.remove_container(&nom, force()).await.ok();
+            let nom = nom_service(&d.espace, &s.nom);
+            match self.inspect_container(&nom, None).await {
+                Ok(existant) => {
+                    let espace = existant
+                        .config
+                        .and_then(|c| c.labels)
+                        .and_then(|l| l.get(LABEL).cloned());
+                    if espace.as_deref() != Some(d.espace.as_str()) {
+                        return Err(Erreur::Refus(format!(
+                            "le conteneur {nom} n'appartient pas à l'espace {}",
+                            d.espace
+                        )));
+                    }
+                    deja_parti(self.remove_container(&nom, force()).await)?;
+                }
+                Err(ErreurBollard::DockerResponseServerError {
+                    status_code: 404, ..
+                }) => {}
+                Err(e) => return Err(e.into()),
+            }
             let corps = ContainerCreateBody {
                 image: Some(s.image.clone()),
                 env: Some(s.env.iter().map(|(k, v)| format!("{k}={v}")).collect()),
                 labels: Some(libelle(&d.espace)),
-                host_config: Some(HostConfig {
-                    network_mode: Some(reseau.clone()),
-                    privileged: Some(false),
-                    ..Default::default()
-                }),
+                host_config: Some(hote_service(&reseau)),
                 networking_config: Some(NetworkingConfig {
                     endpoints_config: Some(HashMap::from([(
                         reseau.clone(),
@@ -479,6 +531,43 @@ mod tests {
         assert_eq!(montages(&c).len(), 2);
         let reseaux = c.networking_config.unwrap().endpoints_config.unwrap();
         assert_eq!(reseaux.keys().collect::<Vec<_>>(), ["run-net"]);
+        assert_journaux_bornes(h);
+    }
+
+    fn assert_journaux_bornes(h: &HostConfig) {
+        let j = h.log_config.as_ref().unwrap();
+        assert_eq!(j.typ.as_deref(), Some("json-file"));
+        let opts = j.config.as_ref().unwrap();
+        assert_eq!(opts.get("max-size").map(String::as_str), Some("10m"));
+        assert_eq!(opts.get("max-file").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn noms_de_service_sans_collision() {
+        assert_eq!(nom_service("a-b", "c"), "portail-svc-a-b_c");
+        assert_ne!(nom_service("a-b", "c"), nom_service("a", "b-c"));
+    }
+
+    #[test]
+    fn service_durci() {
+        let h = hote_service("portail-svc-tache-1-1");
+        assert_eq!(h.network_mode.as_deref(), Some("portail-svc-tache-1-1"));
+        assert_eq!(h.privileged, Some(false));
+        assert_eq!(h.cap_drop, Some(vec!["ALL".to_string()]));
+        assert_eq!(
+            h.cap_add,
+            Some(
+                ["CHOWN", "SETUID", "SETGID", "FOWNER", "DAC_OVERRIDE"]
+                    .map(String::from)
+                    .to_vec()
+            )
+        );
+        assert_eq!(h.security_opt, Some(vec!["no-new-privileges".to_string()]));
+        assert_eq!(h.memory, Some(1024 * 1024 * 1024));
+        assert_eq!(h.nano_cpus, Some(1_000_000_000));
+        assert_eq!(h.pids_limit, Some(512));
+        assert!(h.mounts.is_none() && h.binds.is_none());
+        assert_journaux_bornes(&h);
     }
 
     #[test]

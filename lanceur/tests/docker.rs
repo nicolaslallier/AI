@@ -6,13 +6,16 @@ use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
 
 use bollard::Docker;
+use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::models::{ContainerCreateBody, HostConfig, NetworkCreateRequest};
 use bollard::query_parameters::{
     CreateImageOptions, ListContainersOptions, RemoveContainerOptions, RemoveVolumeOptions,
 };
 use futures_util::{FutureExt, StreamExt};
 use lanceur::config::Config;
-use lanceur::conteneurs::{DemandeLancer, Moteur, Resultat};
+use lanceur::conteneurs::{
+    DemandeLancer, DemandeServices, Erreur, Moteur, Resultat, Service, nom_service,
+};
 
 const IMAGE: &str = "busybox:1.36";
 
@@ -205,6 +208,108 @@ async fn utilisateur_non_root() {
     avec_banc("uid", async |b: &Banc| {
         let r = b.lancer("id -u", 30, &[]).await;
         assert_eq!((r.code, r.sortie.trim()), (Some(0), "1000"));
+    })
+    .await;
+}
+
+fn postgres(espace: &str) -> DemandeServices {
+    DemandeServices {
+        espace: espace.into(),
+        services: vec![Service {
+            nom: "db".into(),
+            image: "postgres:16-alpine".into(),
+            env: HashMap::from([("POSTGRES_PASSWORD".into(), "essai".into())]),
+        }],
+    }
+}
+
+/// Code de sortie d'une commande exécutée dans un conteneur.
+async fn exec(docker: &Docker, conteneur: &str, cmd: &[&str]) -> Option<i64> {
+    let id = docker
+        .create_exec(
+            conteneur,
+            CreateExecOptions {
+                cmd: Some(cmd.iter().map(|c| c.to_string()).collect()),
+                attach_stdout: Some(true),
+                attach_stderr: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    if let StartExecResults::Attached { mut output, .. } =
+        docker.start_exec(&id, None).await.unwrap()
+    {
+        while output.next().await.is_some() {}
+    }
+    docker.inspect_exec(&id).await.unwrap().exit_code
+}
+
+#[tokio::test]
+#[ignore]
+async fn service_postgres_demarre() {
+    avec_banc("pg", async |b: &Banc| {
+        b.docker
+            .services(&b.cfg, &postgres(&b.espace))
+            .await
+            .unwrap();
+        let nom = nom_service(&b.espace, "db");
+        let debut = Instant::now();
+        while exec(&b.docker, &nom, &["pg_isready", "-h", "127.0.0.1"]).await != Some(0) {
+            assert!(
+                debut.elapsed() < Duration::from_secs(30),
+                "postgres non prêt"
+            );
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let etat = b
+            .docker
+            .inspect_container(&nom, None)
+            .await
+            .unwrap()
+            .state
+            .unwrap();
+        assert_eq!(etat.running, Some(true));
+        // Relancer remplace le conteneur du même espace.
+        b.docker
+            .services(&b.cfg, &postgres(&b.espace))
+            .await
+            .unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn service_d_un_autre_espace_refuse() {
+    avec_banc("autre", async |b: &Banc| {
+        // Un conteneur portant le nom attendu mais le label d'un autre espace.
+        let nom = nom_service(&b.espace, "db");
+        b.docker
+            .create_container(
+                Some(bollard::query_parameters::CreateContainerOptions {
+                    name: Some(nom.clone()),
+                    ..Default::default()
+                }),
+                ContainerCreateBody {
+                    image: Some(IMAGE.into()),
+                    labels: Some(HashMap::from([("portail.espace".into(), "autre".into())])),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let r = b.docker.services(&b.cfg, &postgres(&b.espace)).await;
+        let toujours_la = b.docker.inspect_container(&nom, None).await.is_ok();
+        let force = Some(RemoveContainerOptions {
+            force: true,
+            ..Default::default()
+        });
+        b.docker.remove_container(&nom, force).await.unwrap();
+        assert!(matches!(r, Err(Erreur::Refus(_))), "{r:?}");
+        assert!(toujours_la);
     })
     .await;
 }
