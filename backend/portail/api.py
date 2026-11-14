@@ -238,7 +238,8 @@ def _reveiller(request: Request) -> None:
 async def _annuler(request: Request, s: AsyncSession, pipeline_id: int, clos: bool) -> None:
     """Un pipeline `dev` passe par l'orchestrateur (même terminé : nettoyage), les autres par le
     chat, qui refuse un pipeline clos (`clos` : le lui demander quand même). Libère la
-    transaction de `s` avant que le service ouvre la sienne."""
+    transaction de `s` avant que le service ouvre la sienne, puis la tâche que le pipeline
+    verrouillait revient « à faire », sans verrou."""
     p = await s.get(Pipeline, pipeline_id)
     if p is None:
         raise Refus(404, "pipeline introuvable")
@@ -249,6 +250,22 @@ async def _annuler(request: Request, s: AsyncSession, pipeline_id: int, clos: bo
         await orchestrateur.annuler(pipeline_id)
     elif clos or etat not in (Etat.TERMINEE, Etat.ECHOUEE):
         await request.app.state.chat.annuler(pipeline_id)
+    projet_id = await s.scalar(select(Tache.projet_id).where(Tache.verrou == pipeline_id))
+    if projet_id is None:
+        return
+    # ordre des verrous : projet d'abord, comme partout ailleurs
+    await s.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
+    t = await s.scalar(
+        select(Tache)
+        .where(Tache.verrou == pipeline_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if t is not None:
+        t.verrou = None
+        await deplacer_tache(s, t, "a_faire", None, "nicolas")
+    await s.commit()
+    _reveiller(request)
 
 
 def _orchestrateur(r: Reglages, sessions, catalogue, llm) -> Orchestrateur | None:
@@ -539,22 +556,10 @@ def create_app(
     @app.post("/api/taches/{tache_id}/annuler", response_model=TacheVue)
     async def annuler_tache(tache_id: int, request: Request, s: Session):
         t = await _tache(s, tache_id)
-        verrou, projet_id = t.verrou, t.projet_id
+        verrou = t.verrou
         if verrou is None:
             raise Refus(409, "rien à annuler")
         await _annuler(request, s, verrou, clos=False)  # même chemin que /pipelines/{id}/annuler
-        # ordre des verrous : projet d'abord, comme partout ailleurs
-        await s.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
-        t = await s.scalar(
-            select(Tache)
-            .where(Tache.id == tache_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
-        t.verrou = None
-        await deplacer_tache(s, t, "a_faire", None, "nicolas")
-        await s.commit()
-        _reveiller(request)
         return await _vue(s, tache_id)
 
     class MessageIn(BaseModel):

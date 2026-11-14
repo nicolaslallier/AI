@@ -142,6 +142,39 @@ async def test_branche_defaut_et_erreur_http():
         await app.branche_defaut("a/c")
 
 
+async def test_statut_et_message_assaini():
+    reponses = {
+        "/repos/a/b": httpx.Response(503, text="<html>" + "x" * 5000),
+        "/repos/a/c": httpx.Response(
+            422, json={"message": "Validation\nFailed " + "y" * 500, "doc": "secret"}
+        ),
+        "/repos/a/e": httpx.Response(200, json={}),
+    }
+
+    def rep(req):
+        if req.url.path == "/repos/a/d":
+            raise httpx.ConnectError("boum")
+        return reponses[req.url.path]
+
+    app = _app_repo(rep)
+    with pytest.raises(ErreurGitHub) as e:
+        await app.branche_defaut("a/b")
+    assert e.value.statut == 503 and e.value.transitoire
+    assert "<html>" not in str(e.value) and len(str(e.value)) < 200
+    with pytest.raises(ErreurGitHub) as e:
+        await app.branche_defaut("a/c")
+    assert e.value.statut == 422 and not e.value.transitoire
+    assert "Validation Failed" in str(e.value) and "secret" not in str(e.value)
+    assert "\n" not in str(e.value) and len(str(e.value)) < 200
+    with pytest.raises(ErreurGitHub) as e:
+        await app.branche_defaut("a/d")
+    assert e.value.statut is None and e.value.transitoire
+    with pytest.raises(ErreurGitHub) as e:  # réponse inattendue : pas transitoire
+        await app.branche_defaut("a/e")
+    assert not e.value.transitoire
+    assert ErreurGitHub("x", 429).transitoire and not ErreurGitHub("x").transitoire
+
+
 async def test_creer_pr_draft():
     corps = {}
 

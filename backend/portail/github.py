@@ -20,7 +20,28 @@ _MARGE_S = 300
 
 
 class ErreurGitHub(Exception):
-    pass
+    """`statut` : code HTTP de GitHub ; None si GitHub est injoignable ; 0 sinon (donnée
+    ou réponse invalide)."""
+
+    def __init__(self, message: str, statut: int | None = 0):
+        super().__init__(message)
+        self.statut = statut
+
+    @property
+    def transitoire(self) -> bool:
+        """Injoignable, 5xx ou 429 : à retenter plus tard."""
+        return self.statut is None or self.statut == 429 or self.statut >= 500
+
+
+def _raison(r: httpx.Response) -> str:
+    """Le seul champ `message` de GitHub, sur une ligne et court : jamais le corps brut."""
+    try:
+        message = r.json().get("message")
+    except (ValueError, AttributeError):
+        message = None
+    if not isinstance(message, str):
+        return ""
+    return " : " + " ".join("".join(c if c.isprintable() else " " for c in message).split())[:100]
 
 
 def depot_depuis_url(url: str) -> str:
@@ -71,9 +92,11 @@ class GitHubApp:
             async with httpx.AsyncClient(transport=self._transport, timeout=30) as c:
                 r = await c.request(methode, API + chemin, json=corps, headers=entetes)
         except httpx.HTTPError as e:
-            raise ErreurGitHub(f"GitHub injoignable : {type(e).__name__}") from None
+            raise ErreurGitHub(f"GitHub injoignable : {type(e).__name__}", None) from None
         if r.status_code >= 400:
-            raise ErreurGitHub(f"GitHub {r.status_code} sur {methode} {chemin} : {r.text[:300]}")
+            raise ErreurGitHub(
+                f"GitHub {r.status_code} sur {methode} {chemin}{_raison(r)}", r.status_code
+            )
         try:
             return r.json()
         except ValueError:

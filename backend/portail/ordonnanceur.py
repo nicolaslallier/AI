@@ -6,12 +6,14 @@ import logging
 from collections.abc import Callable
 
 from sqlalchemy import exists, select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
 from portail.db import Etape, ExecutionDev, Pipeline, Projet, Tache, TacheDependance
 from portail.dev import Orchestrateur
 from portail.etats import Etat
+from portail.github import ErreurGitHub
 from portail.taches import deplacer_tache
 
 logger = logging.getLogger(__name__)
@@ -91,7 +93,14 @@ class Ordonnanceur:
                         return  # la route occupée réveillera l'ordonnanceur après son commit
                     pipeline = await self._orch.demarrer(s, tache, base)
                     await s.commit()
-            except Exception as e:  # sinon elle reviendrait à chaque tour, devant les autres
+            except Exception as e:
+                passagere = isinstance(e, SQLAlchemyError) or (
+                    isinstance(e, ErreurGitHub) and e.transitoire
+                )
+                if passagere:  # GitHub ou base : la tâche reste Prête, retentée au tour suivant
+                    logger.warning("ordonnanceur : tâche %s reportée : %s", tache_id, e)
+                    return
+                # sinon elle reviendrait à chaque tour, devant les autres
                 logger.exception("ordonnanceur : démarrage de la tâche %s impossible", tache_id)
                 await self._bloquer(tache_id, f"démarrage impossible : {e}")
                 continue

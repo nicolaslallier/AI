@@ -1,8 +1,10 @@
 import asyncio
 
+import pytest
 from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from test_dev import BRANCHE, CATALOGUE, CIBLES, CODE_OK, CONFIG, TESTS_OK, Monde, texte, verdict
 
 from portail.api import create_app
@@ -150,7 +152,7 @@ async def test_demarrage_impossible_bloque_et_passe_a_la_suivante(tmp_path, sess
     async def branche_defaut(depot):
         appels.append(depot)
         if len(appels) == 1:  # T1, de plus petit rang : l'App n'est pas installée
-            raise ErreurGitHub("App non installée")
+            raise ErreurGitHub("App non installée", 404)
         return "main"
 
     m.github.branche_defaut = branche_defaut
@@ -171,6 +173,37 @@ async def test_demarrage_impossible_bloque_et_passe_a_la_suivante(tmp_path, sess
         assert types == ["deplacement"]
     finally:
         await _arreter(m)
+
+
+@pytest.mark.parametrize(
+    "erreur",
+    [
+        ErreurGitHub("GitHub injoignable", None),
+        ErreurGitHub("GitHub 502", 502),
+        ErreurGitHub("GitHub 429", 429),
+        OperationalError("select", {}, Exception("base indisponible")),
+    ],
+)
+async def test_erreur_transitoire_ne_bloque_pas(tmp_path, sessions, erreur):
+    m = await _monde(tmp_path, sessions)
+    async with sessions() as s:
+        t2 = await _tache(s, 1, 2000)
+        await s.commit()
+    if isinstance(erreur, ErreurGitHub):
+        m.github.erreur = erreur
+    else:
+
+        async def demarrer(*_):
+            raise erreur
+
+        m.orch.demarrer = demarrer
+    ordo = Ordonnanceur(sessions, m.orch, 1)
+    await ordo.tour()
+    assert m.orch.taches == {}
+    async with sessions() as s:
+        t1, t2 = await s.get(Tache, 1), await s.get(Tache, t2)
+    assert (t1.colonne, t1.verrou, t2.colonne) == ("prete", None, "prete")
+    assert t1.resume_blocage is None
 
 
 async def test_reprise_liberee_reveille_l_ordonnanceur(tmp_path, sessions):
@@ -240,6 +273,23 @@ async def test_annuler_dev(tmp_path, sessions):
         etapes = (await s.scalars(select(Etape).order_by(Etape.ordre))).all()
     assert pipeline.etat == "echouee"
     assert (etapes[-1].agent, etapes[-1].etat, etapes[-1].erreur) == ("tests", "echouee", "annulé")
+
+
+async def test_annuler_dev_par_la_route_pipeline_libere_la_tache(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    m.llm.reponses = [asyncio.Event()]
+    app = _app(m)
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        await attendre(lambda: _vrai(len(m.llm.appels) == 1))
+        r = await c.post("/api/pipelines/1/annuler")
+        assert (r.status_code, r.json()["etat"]) == (200, "echouee")
+        async with sessions() as s:
+            t = await s.get(Tache, 1)
+        assert (t.colonne, t.verrou) == ("a_faire", None)
+    assert not (m.reglages.espaces_dir / "tache-1-1").exists()
 
 
 async def _vrai(v):
