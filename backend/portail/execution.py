@@ -29,10 +29,17 @@ class Service(BaseModel):
 
 class ConfigExecution(BaseModel):
     image: str
-    chemins_tests: list[str] = Field(min_length=1)
+    chemins_tests: list[str]
     config_tests: list[str] = list(CONFIG_TESTS_DEFAUT)
     commandes: dict[str, str]
     services: list[Service] = []
+
+    @field_validator("chemins_tests")
+    @classmethod
+    def _chemins_tests(cls, v):
+        if not v:
+            raise ValueError("au moins un chemin de tests est obligatoire")
+        return v
 
     @field_validator("commandes")
     @classmethod
@@ -98,7 +105,7 @@ def _regex(motif: str) -> re.Pattern[str]:
         else:
             sortie += re.escape(motif[i])
             i += 1
-    return re.compile(sortie)
+    return re.compile(sortie, re.DOTALL)
 
 
 def correspond(chemin: str, motifs: Sequence[str]) -> bool:

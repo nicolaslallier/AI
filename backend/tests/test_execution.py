@@ -73,6 +73,9 @@ def test_commande_quote_les_fichiers():
         ("a?.py", "ab.py", True),
         ("Tests/**", "tests/a.py", False),
         ("a.b", "axb", False),
+        ("tests/**", "tests/a\nb.py", True),
+        ("**/conftest.py", "x\ny/conftest.py", True),
+        ("*.py", "a\nb.py", True),
     ],
 )
 def test_correspond(motif, chemin, attendu):
@@ -138,3 +141,23 @@ async def test_put_execution_api(client):
 
 def test_type():
     assert isinstance(lire_config(BASE), ConfigExecution)
+
+
+@pytest.mark.parametrize(
+    "remplacement",
+    [
+        ('chemins_tests: ["backend/tests/**", "frontend/**/*.spec.ts"]', "chemins_tests: []"),
+        ("nom: postgres", "nom: Bad_Nom"),
+        ("services:\n", "services:\n  - {nom: postgres, image: x}\n"),
+    ],
+)
+def test_config_invalide_422(remplacement):
+    with pytest.raises(Refus) as e:
+        lire_config(BASE.replace(*remplacement))
+    assert e.value.code == 422
+
+
+def test_chemins_tests_vide_en_francais():
+    with pytest.raises(Refus) as e:
+        lire_config(BASE.replace('["backend/tests/**", "frontend/**/*.spec.ts"]', "[]"))
+    assert "au moins un chemin" in e.value.message
