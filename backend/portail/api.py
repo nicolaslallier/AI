@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
@@ -13,10 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from portail.agents import Catalogue, charger_catalogue
-from portail.chat import Diffuseur, ServiceChat
+from portail.chat import Diffuseur, ServiceChat, annexes
 from portail.config import Reglages
 from portail.contexte import construire, jauge
 from portail.db import Etape, Pipeline, Projet, creer_moteur, fabrique_sessions
+from portail.depots import Depots, ErreurDepot
+from portail.etats import Etat
 from portail.llm import ClientLLM
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
 from portail.schemas import (
@@ -33,6 +36,8 @@ from portail.schemas import (
     ProjetRef,
     SpecCourante,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
@@ -59,7 +64,10 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
     etapes = []
     for e in pipeline.etapes:
         agent = catalogue.agents.get(e.agent)
-        j = jauge(agent, construire(agent, e.messages, e.document)) if agent else None
+        j = None
+        if agent:
+            a = await annexes(session, agent, e, pipeline.projet_id)
+            j = jauge(agent, construire(agent, e.messages, e.document, annexes=a))
         etapes.append(
             EtapeOut.model_validate(
                 {
@@ -112,9 +120,18 @@ def create_app(
         async with app.state.sessions() as s:
             await recuperer_interrompues(s)
             await s.commit()
+            en_attente = set(
+                (await s.scalars(select(Etape.id).where(Etape.etat == Etat.EN_ATTENTE))).all()
+            )
+        depots = Depots(r.donnees_dir, r.github_jeton)
+        try:
+            # au démarrage, aucune étape n'est au milieu d'une préparation : nettoyer sans verrou
+            await depots.nettoyer(garder=en_attente)
+        except ErreurDepot:
+            logger.exception("nettoyage des arbres de travail incomplet")
         app.state.diffuseur = Diffuseur()
         app.state.chat = ServiceChat(
-            app.state.sessions, app.state.catalogue, app.state.llm, app.state.diffuseur
+            app.state.sessions, app.state.catalogue, app.state.llm, app.state.diffuseur, depots
         )
         yield
         taches = list(app.state.chat.taches.values())
@@ -214,13 +231,19 @@ def create_app(
         if await s.get(Projet, corps.projet_id) is None:
             raise Refus(404, "projet introuvable")
         cat = request.app.state.catalogue
-        pipeline, _a_lancer = await creer_pipeline(s, cat, corps.projet_id, corps.type)
+        pipeline, a_lancer = await creer_pipeline(s, cat, corps.projet_id, corps.type)
         await s.commit()
-        # lancée par ServiceChat.lancer (tâche 7)
+        if a_lancer:
+            request.app.state.chat.lancer(a_lancer.id)
         return await _detail(s, cat, pipeline.id)
 
     @app.get("/api/pipelines/{pipeline_id}", response_model=PipelineDetail)
     async def lire_pipeline(pipeline_id: int, request: Request, s: Session):
+        return await _detail(s, request.app.state.catalogue, pipeline_id)
+
+    @app.post("/api/pipelines/{pipeline_id}/annuler", response_model=PipelineDetail)
+    async def annuler(pipeline_id: int, request: Request, s: Session):
+        await request.app.state.chat.annuler(pipeline_id)
         return await _detail(s, request.app.state.catalogue, pipeline_id)
 
     class MessageIn(BaseModel):

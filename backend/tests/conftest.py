@@ -1,5 +1,6 @@
 import asyncio
 import os
+import subprocess
 
 import pytest
 import pytest_asyncio
@@ -50,7 +51,7 @@ class FauxLLM:
         self.morceaux: list[str | asyncio.Event] = []  # un Event met le flux en pause
         self.exception: Exception | None = None
         self.appels: list[dict] = []  # {"modele", "messages", "temperature"}
-        self.reponses: list[dict] = []  # messages renvoyés tour à tour par `completer`
+        self.reponses: list[dict | asyncio.Event] = []  # renvoyés tour à tour par `completer`
 
     async def flux(self, modele, messages, temperature):
         self.appels.append({"modele": modele, "messages": messages, "temperature": temperature})
@@ -74,7 +75,11 @@ class FauxLLM:
         )
         if self.exception:
             raise self.exception
-        return self.reponses.pop(0)
+        reponse = self.reponses.pop(0)
+        if isinstance(reponse, asyncio.Event):  # un Event bloque l'appel jusqu'à son signal
+            await reponse.wait()
+            reponse = self.reponses.pop(0)
+        return reponse
 
 
 def _agent(nom, contexte_max=32768, **kw):
@@ -84,13 +89,17 @@ def _agent(nom, contexte_max=32768, **kw):
     )  # fmt: skip
 
 
+OUTILS = ["lister", "lire", "chercher"]
+
 CATALOGUE_TEST = Catalogue(
     agents={
-        "spec": _agent("spec", consigne_redaction="Rédige la spec."),
+        "spec": _agent("spec", consigne_redaction="Rédige la spec.", outils=OUTILS),
         "a": _agent("a"),
         "b": _agent("b"),
         "petit": _agent("petit", contexte_max=50),
-        "plan": _agent("plan", consigne_redaction="Rédige le plan.", produit="plan", auto=True),
+        "plan": _agent(
+            "plan", consigne_redaction="Rédige le plan.", produit="plan", auto=True, outils=OUTILS
+        ),
         "taches": _agent(
             "taches", consigne_redaction="Propose les tâches.", produit="taches", auto=True
         ),
@@ -105,8 +114,8 @@ CATALOGUE_TEST = Catalogue(
 
 
 @pytest.fixture
-def reglages(schema):
-    return Reglages(database_url=URL)
+def reglages(schema, tmp_path):
+    return Reglages(database_url=URL, donnees_dir=tmp_path / "donnees")
 
 
 @pytest.fixture
@@ -122,3 +131,26 @@ async def client(moteur, reglages, faux_llm):
         AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
     ):
         yield c
+
+
+# --- dépôt -------------------------------------------------------------
+
+
+def git(cwd, *args: str) -> str:
+    r = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=cwd, check=True, capture_output=True, text=True,
+    )  # fmt: skip
+    return r.stdout.strip()
+
+
+@pytest.fixture
+def depot_origine(tmp_path):
+    """Dépôt local avec un commit (README.md) sur main."""
+    o = tmp_path / "origine"
+    o.mkdir()
+    git(o, "init", "-b", "main")
+    (o / "README.md").write_text("# Projet\n")
+    git(o, "add", "README.md")
+    git(o, "commit", "-m", "init")
+    return o

@@ -16,11 +16,15 @@ class Refus(Exception):
 
 
 async def spec_courante(session: AsyncSession, projet_id: int) -> Document | None:
+    return await dernier_valide(session, projet_id, "spec")
+
+
+async def dernier_valide(session: AsyncSession, projet_id: int, type_: str) -> Document | None:
     return await session.scalar(
         select(Document)
         .where(
             Document.projet_id == projet_id,
-            Document.type == "spec",
+            Document.type == type_,
             Document.etat == "validee",
         )
         .order_by(Document.maj_le.desc(), Document.id.desc())
