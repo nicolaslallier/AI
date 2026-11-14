@@ -16,6 +16,7 @@ const pipelines = ref<PipelineResume[]>([])
 const filtre = ref('')
 const erreur = ref('')
 const formulaire = ref(false)
+const charge = ref(false)
 const projets = ref<Projet[]>([])
 const projetId = ref<number | ''>('')
 const nouveauNom = ref('')
@@ -25,6 +26,7 @@ async function charger() {
   try {
     pipelines.value = await listerPipelines(filtre.value || undefined)
     erreur.value = ''
+    charge.value = true
   } catch (e) {
     erreur.value = (e as Error).message
   }
@@ -59,10 +61,9 @@ onUnmounted(() => clearInterval(minuteur))
 </script>
 
 <template>
-  <h1>Pipelines</h1>
-  <p v-if="erreur" class="erreur">{{ erreur }}</p>
-  <div>
-    <select v-model="filtre">
+  <div class="titre">
+    <h1>Pipelines</h1>
+    <select v-model="filtre" class="pousse" aria-label="Filtrer par état">
       <option value="">Tous les états</option>
       <option value="a_faire">À faire</option>
       <option value="en_cours">En cours</option>
@@ -70,27 +71,32 @@ onUnmounted(() => clearInterval(minuteur))
       <option value="terminee">Terminé</option>
       <option value="echouee">Échoué</option>
     </select>
-    <button @click="ouvrirFormulaire">Nouveau pipeline</button>
+    <button class="primaire" @click="ouvrirFormulaire">+ Nouveau pipeline</button>
   </div>
-  <form v-if="formulaire" @submit.prevent="creer">
-    <select v-model="projetId">
-      <option value="">Nouveau projet…</option>
-      <option v-for="p in projets" :key="p.id" :value="p.id">{{ p.nom }}</option>
-    </select>
-    <input v-if="projetId === ''" v-model="nouveauNom" placeholder="Nom du projet" required />
-    <button>Créer</button>
+  <p v-if="erreur" class="erreur">{{ erreur }}</p>
+  <form v-if="formulaire" class="carte champs" @submit.prevent="creer">
+    <label>
+      Projet
+      <select v-model="projetId">
+        <option value="">Nouveau projet…</option>
+        <option v-for="p in projets" :key="p.id" :value="p.id">{{ p.nom }}</option>
+      </select>
+    </label>
+    <label v-if="projetId === ''">Nom du projet <input v-model="nouveauNom" required /></label>
+    <div class="rangee">
+      <button>Créer</button>
+      <button type="button" @click="formulaire = false">Fermer</button>
+    </div>
   </form>
-  <table>
-    <thead>
-      <tr><th>Projet</th><th>Type</th><th>État</th><th>Mis à jour</th></tr>
-    </thead>
-    <tbody>
-      <tr v-for="p in pipelines" :key="p.id">
-        <td><RouterLink :to="`/pipelines/${p.id}`">{{ p.projet_nom }}</RouterLink></td>
-        <td>{{ p.type }}</td>
-        <td><EtatBadge :etat="p.etat" /></td>
-        <td>{{ new Date(p.maj_le).toLocaleString('fr-FR') }}</td>
-      </tr>
-    </tbody>
-  </table>
+  <div class="pile">
+    <RouterLink v-for="p in pipelines" :key="p.id" :to="`/pipelines/${p.id}`" class="carte ligne">
+      <strong>{{ p.projet_nom }}</strong>
+      <span class="discret">{{ p.type }} n°{{ p.id }}</span>
+      <EtatBadge :etat="p.etat" class="pousse" />
+      <small>{{ new Date(p.maj_le).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }) }}</small>
+    </RouterLink>
+    <p v-if="charge && !pipelines.length" class="vide">
+      {{ filtre ? 'Aucun pipeline dans cet état.' : 'Aucun pipeline pour l\'instant. Crée-en un pour démarrer une spec.' }}
+    </p>
+  </div>
 </template>

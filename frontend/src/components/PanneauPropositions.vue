@@ -22,9 +22,13 @@ const etapes = () => [...new Set(props.propositions.map((p) => p.etape_id))]
 
 <template>
   <section class="panneau">
-    <h2>Propositions ({{ propositions.length }})</h2>
+    <div class="titre">
+      <h2>Propositions de l'agent <span class="badge en_attente">{{ propositions.length }}</span></h2>
+      <button v-for="e in etapes()" :key="e" class="pousse" @click="emit('toutAccepter', e)">
+        Tout accepter (étape {{ e }})
+      </button>
+    </div>
     <p v-if="perimees" class="erreur">{{ perimees }} proposition(s) périmée(s) ignorée(s).</p>
-    <button v-for="e in etapes()" :key="e" @click="emit('toutAccepter', e)">Tout accepter (étape {{ e }})</button>
     <article v-for="p in propositions" :key="p.id" class="prop">
       <template v-if="p.sorte === 'nouvelle'">
         <strong>Nouvelle : {{ p.donnees.titre }}</strong>
@@ -50,19 +54,20 @@ const etapes = () => [...new Set(props.propositions.map((p) => p.etape_id))]
         <p>Raison : {{ p.donnees.raison }}</p>
       </template>
       <div class="actions">
-        <button @click="emit('accepter', p)">Accepter</button>
+        <button class="primaire" @click="emit('accepter', p)">Accepter</button>
         <button v-if="p.sorte !== 'retrait'" @click="emit('modifier', p)">Modifier puis accepter</button>
-        <button @click="emit('rejeter', p)">Rejeter</button>
+        <button class="danger" @click="emit('rejeter', p)">Rejeter</button>
       </div>
     </article>
   </section>
 </template>
 
 <style scoped>
-.panneau { margin-bottom: 1rem; }
-.prop { border: 1px solid #fcd34d; background: #fffbeb; border-radius: 0.4rem; padding: 0.5rem; margin: 0.4rem 0; }
+.panneau { display: flex; flex-direction: column; gap: 0.5rem; }
+.prop { border: 1px solid var(--alerte); background: var(--jaune-doux); border-radius: var(--rayon); padding: 0.75rem 1rem; }
+.prop ul { margin: 0.25rem 0; padding-left: 1.25rem; }
 .avant-apres { display: flex; flex-direction: column; white-space: pre-wrap; }
-del { color: #b91c1c; }
-ins { color: #15803d; text-decoration: none; }
-.actions { display: flex; gap: 0.4rem; }
+del { color: var(--danger); }
+ins { color: var(--succes); text-decoration: none; }
+.actions { display: flex; gap: 0.4rem; margin-top: 0.5rem; }
 </style>

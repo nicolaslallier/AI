@@ -29,56 +29,59 @@ function surEntree(e: KeyboardEvent) {
 </script>
 
 <template>
-  <section v-if="etape.produit === 'taches'">
-    <p>
-      {{ propositions ?? 0 }} propositions à traiter
-      <RouterLink :to="`/projets/${projetId}/kanban`">Ouvrir le kanban</RouterLink>
-    </p>
+  <section v-if="etape.produit === 'taches'" class="pile">
+    <div class="rangee">
+      <span><strong>{{ propositions ?? 0 }}</strong> proposition(s) à traiter</span>
+      <RouterLink :to="`/projets/${projetId}/kanban`" class="bouton primaire">Ouvrir le kanban</RouterLink>
+    </div>
     <p v-if="etape.etat === 'echouee'" class="erreur">
-      {{ etape.erreur }} <button v-if="etape.erreur !== 'annulé'" @click="emit('reessayer')">Réessayer</button>
+      {{ etape.erreur }} <button type="button" v-if="etape.erreur !== 'annulé'" @click="emit('reessayer')">Réessayer</button>
     </p>
     <p v-if="message" class="erreur">{{ message }}</p>
   </section>
-  <section v-else>
+  <section v-else class="pile">
     <JaugeContexte v-if="etape.jauge" :jauge="etape.jauge" />
     <div class="messages">
       <div v-for="m in etape.messages" :key="m.id" :class="['bulle', m.role === 'user' ? 'moi' : 'agent', { systeme: m.role === 'system' }]">
         <details v-if="m.role === 'tool'"><summary>🔎 {{ m.outil }}</summary><pre>{{ m.contenu }}</pre></details>
         <em v-else-if="m.role === 'system'">{{ m.contenu }}</em>
         <template v-else-if="m.role === 'user'">{{ m.contenu }}</template>
-        <div v-else v-html="rendreMarkdown(m.contenu)"></div>
+        <div v-else class="markdown" v-html="rendreMarkdown(m.contenu)"></div>
       </div>
       <div v-if="etape.etat === 'en_cours'" class="bulle agent">
-        <div v-if="partiel" v-html="rendreMarkdown(partiel)"></div>
-        <em v-else>…</em>
+        <div v-if="partiel" class="markdown" v-html="rendreMarkdown(partiel)"></div>
+        <em v-else class="discret">L'agent réfléchit…</em>
         <div v-for="(o, i) in outils" :key="i" class="outil">🔎 {{ o }}</div>
       </div>
     </div>
     <p v-if="etape.etat === 'echouee'" class="erreur">
-      {{ etape.erreur }} <button v-if="etape.erreur !== 'annulé'" @click="emit('reessayer')">Réessayer</button>
+      {{ etape.erreur }} <button type="button" v-if="etape.erreur !== 'annulé'" @click="emit('reessayer')">Réessayer</button>
     </p>
     <p v-if="message" class="erreur">{{ message }}</p>
     <textarea
       v-model="saisie"
       rows="3"
-      placeholder="Écris ton message…"
+      placeholder="Écris ton message… (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)"
       :disabled="etape.etat !== 'en_attente' || etape.jauge?.niveau === 'plein'"
       @keydown.enter.exact="surEntree"
     ></textarea>
-    <button :disabled="etape.etat !== 'en_attente'" @click="emit('rediger')">
-      Rédiger {{ etape.produit === 'plan' ? 'le plan' : 'la spec' }}
-    </button>
+    <div class="rangee">
+      <button :disabled="!saisie.trim() || etape.etat !== 'en_attente' || etape.jauge?.niveau === 'plein'" @click="envoyer">
+        Envoyer
+      </button>
+      <button class="primaire pousse" :disabled="etape.etat !== 'en_attente'" @click="emit('rediger')">
+        Rédiger {{ etape.produit === 'plan' ? 'le plan' : 'la spec' }}
+      </button>
+    </div>
   </section>
 </template>
 
 <style scoped>
-.messages { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.5rem 0; }
-.bulle { max-width: 80%; padding: 0.4rem 0.75rem; border-radius: 0.75rem; }
-.bulle :deep(p) { margin: 0.25rem 0; }
-.moi { align-self: flex-end; background: #dbeafe; white-space: pre-wrap; }
-.systeme { color: #6b7280; }
-.outil { color: #6b7280; font-size: 0.85em; }
-.agent { align-self: flex-start; background: #f3f4f6; }
-textarea { width: 100%; box-sizing: border-box; }
-.erreur { color: #b91c1c; }
+.messages { display: flex; flex-direction: column; gap: 0.5rem; }
+.bulle { max-width: 80%; padding: 0.5rem 0.9rem; border-radius: 1rem; }
+.moi { align-self: flex-end; background: var(--bleu-doux); white-space: pre-wrap; border-bottom-right-radius: 0.25rem; }
+.agent { align-self: flex-start; background: var(--creux); border-bottom-left-radius: 0.25rem; }
+.systeme, .outil { color: var(--discret); }
+.outil { font-size: 0.85em; }
+summary { cursor: pointer; }
 </style>
