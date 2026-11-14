@@ -14,6 +14,7 @@ d'un service tiers quand un modèle local suffit.
 | [`skills/`](skills/) | Skills (`<nom>/SKILL.md` + fichiers) | `~/.claude/skills/` |
 | [`prompts/`](prompts/) | Prompts et gabarits réutilisables | à copier où on en a besoin |
 | [`scripts/`](scripts/) | Petits scripts autonomes | à lancer depuis le dépôt |
+| [`certs/`](certs/) | Certificat public de l'autorité locale de l'Infra | `NODE_EXTRA_CA_CERTS` |
 
 ### Index des outils
 
@@ -27,8 +28,8 @@ Chaque outil ajoute sa ligne ici, dans la même PR que l'outil lui-même.
 ## Démarrage rapide
 
 ```bash
-git clone https://github.com/nicolaslallier/AI.git ~/OpenCode/AI
-cd ~/OpenCode/AI
+git clone https://github.com/nicolaslallier/AI.git ~/Code/AI
+cd ~/Code/AI
 ```
 
 Les agents et les skills s'installent par **lien symbolique**, pour qu'un
@@ -59,9 +60,10 @@ d'environnement, avec ces valeurs pour le réseau de la maison.
 
 Passer par ces deux portes plutôt que d'appeler Ollama directement, c'est ce qui
 fait apparaître l'usage dans les tableaux de bord Grafana de l'Infra. Le
-certificat est celui de la CA locale de l'Infra (`certs/infra-ca.crt`) : un outil
-Node a besoin de `NODE_EXTRA_CA_CERTS`, un outil Python de `SSL_CERT_FILE` ou
-`REQUESTS_CA_BUNDLE`.
+certificat est celui de la CA locale de l'Infra, dont une copie est dans
+[`certs/infra-ca.crt`](certs/) : un outil Node a besoin de `NODE_EXTRA_CA_CERTS`, un outil
+Python de `SSL_CERT_FILE` ou `REQUESTS_CA_BUNDLE` (ces deux-là remplacent toutes les
+autorités : à réserver aux outils qui ne parlent qu'à l'Infra).
 
 ## Ajouter un outil
 

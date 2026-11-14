@@ -22,6 +22,8 @@ from orchestrateur import definitions, depot, issue
 from orchestrateur.etat import OUTILS_ETAT, Etat, serveur_mcp
 
 MODELE_DEFAUT = "claude-opus-5-5"
+# CA locale de l'Infra, copiée dans le dépôt : sert si NODE_EXTRA_CA_CERTS n'est pas défini.
+CA_INFRA = Path(__file__).resolve().parents[3] / "certs" / "infra-ca.crt"
 
 # Ce que les agents peuvent faire sans demander. Tout le reste est refusé (mode dontAsk) :
 # personne n'est là pour approuver pendant une exécution.
@@ -79,6 +81,13 @@ def contexte(etat: Etat) -> str:
     )
 
 
+def env_claude_code() -> dict[str, str]:
+    """Variables ajoutées pour Claude Code (Node) : la CA de l'Infra, pour joindre LiteLLM en HTTPS."""
+    if os.environ.get("NODE_EXTRA_CA_CERTS") or not CA_INFRA.is_file():
+        return {}
+    return {"NODE_EXTRA_CA_CERTS": str(CA_INFRA)}
+
+
 def construire_options(etat: Etat, p: Parametres, dossier_agents: Path = definitions.DOSSIER_AGENTS) -> ClaudeAgentOptions:
     orch, sous_agents = definitions.charger(dossier_agents)
     return ClaudeAgentOptions(
@@ -94,6 +103,7 @@ def construire_options(etat: Etat, p: Parametres, dossier_agents: Path = definit
         max_turns=p.max_tours,
         max_budget_usd=p.budget_usd,
         resume=etat.session_id,
+        env=env_claude_code(),
     )
 
 
@@ -212,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         afficher(f"Autorisés      : {', '.join(options.allowed_tools)}")
         afficher(f"Interdits      : {', '.join(options.disallowed_tools)}")
         afficher(f"API            : {os.environ.get('ANTHROPIC_BASE_URL', 'api.anthropic.com (ANTHROPIC_BASE_URL non défini)')}")
+        afficher(f"CA             : {os.environ.get('NODE_EXTRA_CA_CERTS') or options.env.get('NODE_EXTRA_CA_CERTS', 'aucune')}")
         afficher(f"\nDemande :\n{demande}")
         return 0
 

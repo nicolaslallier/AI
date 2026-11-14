@@ -58,6 +58,14 @@ def test_options(depot_git):
     assert "orchestrateur/x" in o.system_prompt["append"] and "Tu es l'orchestrateur" in o.system_prompt["append"]
 
 
+def test_ca_infra_par_defaut(monkeypatch):
+    assert cli.CA_INFRA.is_file() and "BEGIN CERTIFICATE" in cli.CA_INFRA.read_text()
+    monkeypatch.delenv("NODE_EXTRA_CA_CERTS", raising=False)
+    assert cli.env_claude_code() == {"NODE_EXTRA_CA_CERTS": str(cli.CA_INFRA)}
+    monkeypatch.setenv("NODE_EXTRA_CA_CERTS", "/ailleurs.crt")
+    assert cli.env_claude_code() == {}  # une valeur déjà définie l'emporte
+
+
 def test_execution_complete(depot_git, monkeypatch, capsys):
     vus: list = []
     monkeypatch.setattr(cli, "query", faux_query(resultat(), vus=vus))
