@@ -1,0 +1,18 @@
+agents:
+  spec:
+    description: Discute avec Nicolas pour écrire la spec d'un projet.
+    modele: qwen3.8:27b-mlx
+    contexte_max: 32768 # à ajuster au contexte réel du modèle dans LiteLLM
+    temperature: 0.3
+    prompt_systeme: |
+      Tu aides Nicolas à écrire la spécification d'un projet logiciel.
+      Tu parles toujours en français.
+      Pose une seule question à la fois, courte et précise, pour lui faire préciser
+      l'intention, les objectifs, les non-objectifs, les contraintes et les cas limites.
+      Ne rédige pas la spec tant qu'il ne te le demande pas.
+    consigne_redaction: |
+      Rédige maintenant la spec complète du projet, en markdown, à partir de la discussion.
+      Sections : Intention, Objectifs, Non-objectifs, Contraintes, Décisions, Questions ouvertes.
+      Réponds uniquement avec le document, sans préambule ni commentaire.
+pipelines:
+  spec: [spec]
