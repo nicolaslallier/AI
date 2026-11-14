@@ -33,7 +33,7 @@ class ClientLLM:
                     "POST",
                     f"{self._url}/v1/chat/completions",
                     json=corps,
-                    headers={"Authorization": f"Bearer {self._cle}"},
+                    headers={"Authorization": f"Bearer {self._cle}"} if self._cle else {},
                 ) as reponse,
             ):
                 if not reponse.is_success:
@@ -46,11 +46,13 @@ class ClientLLM:
                     if donnees == "[DONE]":
                         return
                     try:
-                        contenu = json.loads(donnees)["choices"][0]["delta"].get("content")
+                        choix = json.loads(donnees)["choices"]
+                        contenu = choix[0]["delta"].get("content") if choix else None
                     except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
                         raise ErreurLLM(f"Réponse de LiteLLM illisible : {donnees[:200]}") from e
                     if contenu:
                         yield contenu
+                raise ErreurLLM("flux interrompu")
         except httpx.TimeoutException as e:
             raise ErreurLLM(f"LiteLLM : délai dépassé ({e.__class__.__name__})") from e
         except httpx.HTTPError as e:
@@ -66,14 +68,28 @@ def _suffixe_prefixe(texte: str, balise: str) -> int:
 
 
 class FiltreReflexion:
-    def __init__(self) -> None:
+    def __init__(self, retenir: bool = False) -> None:
         self._tampon = ""
         self._dedans = False
+        # retenir : tant qu'aucune balise n'est vue, rien n'est émis, pour qu'un </think>
+        # orphelin (<think> placé dans le prompt) efface ce qui précède. Au détriment du flux :
+        # le chat diffuse sans retenir et recalcule le texte final avec retirer_reflexion.
+        self._retenir = retenir
+        self._indecis = True
 
     def envoyer(self, morceau: str) -> str:
         self._tampon += morceau
         visible = ""
         while True:
+            if self._indecis:
+                f, o = self._tampon.find(_FERME), self._tampon.find(_OUVRE)
+                if f >= 0 and (o < 0 or f < o):
+                    self._tampon = self._tampon[f + len(_FERME) :]
+                    self._indecis = False
+                    continue
+                if o < 0 and self._retenir:
+                    return visible
+                self._indecis = False
             balise = _FERME if self._dedans else _OUVRE
             i = self._tampon.find(balise)
             if i >= 0:
@@ -90,11 +106,12 @@ class FiltreReflexion:
             return visible
 
     def finir(self) -> str:
+        self._indecis = False
         reste = "" if self._dedans else self._tampon
         self._tampon = ""
         return reste
 
 
 def retirer_reflexion(texte: str) -> str:
-    f = FiltreReflexion()
+    f = FiltreReflexion(retenir=True)
     return f.envoyer(texte) + f.finir()

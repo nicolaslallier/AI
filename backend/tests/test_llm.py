@@ -6,9 +6,9 @@ import pytest
 from portail.llm import ClientLLM, ErreurLLM, FiltreReflexion, retirer_reflexion
 
 
-def _sse(*deltas: dict) -> str:
+def _sse(*deltas: dict, fin: bool = True) -> str:
     lignes = [f"data: {json.dumps({'choices': [{'delta': d}]})}\n" for d in deltas]
-    return "\n".join(lignes) + "\ndata: [DONE]\n\n"
+    return "\n".join(lignes) + ("\ndata: [DONE]\n\n" if fin else "\n")
 
 
 async def test_flux_concatene_les_deltas():
@@ -76,6 +76,9 @@ CAS = [
     ("pas de balise", "pas de balise"),
     ("<think>jamais fermé", ""),
     ("a < b", "a < b"),
+    ("raisonnement</think>Salut", "Salut"),
+    ("</think>Salut", "Salut"),
+    ("A<think>x</think>B</think>C", "AB</think>C"),
 ]
 
 
@@ -83,14 +86,52 @@ CAS = [
 def test_filtre_reflexion(entree, attendu):
     assert retirer_reflexion(entree) == attendu
     for i in range(len(entree) + 1):
-        f = FiltreReflexion()
+        f = FiltreReflexion(retenir=True)
         sortie = f.envoyer(entree[:i]) + f.envoyer(entree[i:]) + f.finir()
         assert sortie == attendu, i
 
 
+def test_filtre_en_flux_emet_sans_attendre():
+    f = FiltreReflexion()
+    assert f.envoyer("Bonjour") == "Bonjour"
+
+
 def test_filtre_retient_peu():
     f = FiltreReflexion()
+    f.envoyer("<think></think>")
     f.envoyer("x" * 100)
     assert len(f._tampon) <= len("</think>")
     f.envoyer("<think>" + "y" * 100)
     assert len(f._tampon) <= len("</think>")
+
+
+async def test_flux_sans_cle_pas_d_en_tete_authorization():
+    vues = []
+
+    def handler(requete: httpx.Request) -> httpx.Response:
+        vues.append(requete)
+        return httpx.Response(200, text=_sse({"content": "ok"}))
+
+    client = ClientLLM("http://l", "", transport=httpx.MockTransport(handler))
+    assert "".join([m async for m in client.flux("m", [], None)]) == "ok"
+    assert "Authorization" not in vues[0].headers
+
+
+async def test_flux_ignore_choices_vides():
+    texte = 'data: {"choices": []}\n\n' + _sse({"content": "a"})
+    client = ClientLLM(
+        "http://l", "k", transport=httpx.MockTransport(lambda r: httpx.Response(200, text=texte))
+    )
+    assert "".join([m async for m in client.flux("m", [], None)]) == "a"
+
+
+async def test_flux_coupe_sans_done():
+    client = ClientLLM(
+        "http://l",
+        "k",
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, text=_sse({"content": "a"}, fin=False))
+        ),
+    )
+    with pytest.raises(ErreurLLM, match="flux interrompu"):
+        _ = [m async for m in client.flux("m", [], None)]

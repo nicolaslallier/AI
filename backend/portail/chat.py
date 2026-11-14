@@ -13,7 +13,7 @@ from portail.agents import Catalogue
 from portail.contexte import construire, jauge
 from portail.db import Document, Etape, Message, Pipeline
 from portail.etats import Etat
-from portail.llm import ClientLLM, FiltreReflexion
+from portail.llm import ClientLLM, FiltreReflexion, retirer_reflexion
 from portail.moteur import Refus, changer_etat, terminer_etape
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,12 @@ class ServiceChat:
             raise Refus(404, "étape introuvable")
         return etape
 
+    def _agent(self, etape: Etape):
+        agent = self._catalogue.agents.get(etape.agent)
+        if agent is None:
+            raise Refus(409, f"agent « {etape.agent} » absent de agents.yaml")
+        return agent
+
     async def _contexte(self, s: AsyncSession, etape: Etape):
         messages = (
             await s.scalars(
@@ -90,7 +96,7 @@ class ServiceChat:
             contenu = contenu.strip()
             if not contenu:
                 raise Refus(422, "le message est vide")
-            agent = self._catalogue.agents[etape.agent]
+            agent = self._agent(etape)
             messages, doc = await self._contexte(s, etape)
             avec = construire(agent, messages, doc) + [{"role": "user", "content": contenu}]
             if jauge(agent, avec).niveau == "plein":
@@ -113,7 +119,7 @@ class ServiceChat:
                     if etape.etat != Etat.EN_COURS
                     else "une réponse est déjà en cours",
                 )
-            if not self._catalogue.agents[etape.agent].consigne_redaction:
+            if not self._agent(etape).consigne_redaction:
                 raise Refus(409, "cet agent ne rédige pas de document")
             etape.action = "rediger"
             await changer_etat(s, etape, Etat.EN_COURS)
@@ -144,19 +150,19 @@ class ServiceChat:
         try:
             async with self._sessions() as s:
                 etape = await s.get(Etape, etape_id)
-                agent = self._catalogue.agents[etape.agent]
+                agent = self._agent(etape)
                 action = etape.action
                 messages, doc = await self._contexte(s, etape)
                 consigne = agent.consigne_redaction if action == "rediger" else None
                 demande = construire(agent, messages, doc, consigne)
             filtre = FiltreReflexion()
-            visible = ""
+            brut = ""
             async for morceau in self._llm.flux(agent.modele, demande, agent.temperature):
+                brut += morceau
                 if part := filtre.envoyer(morceau):
-                    visible += part
                     d.ajouter_partiel(etape_id, part)
                     d.publier(etape_id, {"type": "delta", "texte": part})
-            visible = (visible + filtre.finir()).strip()
+            visible = retirer_reflexion(brut).strip()
             async with self._sessions() as s:
                 etape = await self._etape(s, etape_id)
                 if not visible:
