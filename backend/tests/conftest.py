@@ -90,8 +90,17 @@ CATALOGUE_TEST = Catalogue(
         "a": _agent("a"),
         "b": _agent("b"),
         "petit": _agent("petit", contexte_max=50),
+        "plan": _agent("plan", consigne_redaction="Rédige le plan.", produit="plan", auto=True),
+        "taches": _agent(
+            "taches", consigne_redaction="Propose les tâches.", produit="taches", auto=True
+        ),
     },
-    pipelines={"spec": ["spec"], "double": ["a", "b"], "petit": ["petit"]},
+    pipelines={
+        "spec": ["spec"],
+        "double": ["a", "b"],
+        "petit": ["petit"],
+        "planification": ["plan", "taches"],
+    },
 )
 
 

@@ -16,9 +16,9 @@ from portail.agents import Catalogue, charger_catalogue
 from portail.chat import Diffuseur, ServiceChat
 from portail.config import Reglages
 from portail.contexte import construire, jauge
-from portail.db import Document, Etape, Pipeline, Projet, creer_moteur, fabrique_sessions
+from portail.db import Etape, Pipeline, Projet, creer_moteur, fabrique_sessions
 from portail.llm import ClientLLM
-from portail.moteur import Refus, creer_pipeline, recuperer_interrompues
+from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
 from portail.schemas import (
     DEPOT_RE,
     DocumentOut,
@@ -191,16 +191,7 @@ def create_app(
                 .order_by(Pipeline.maj_le.desc())
             )
         ).all()
-        spec = await s.scalar(
-            select(Document)
-            .where(
-                Document.projet_id == projet_id,
-                Document.type == "spec",
-                Document.etat == "validee",
-            )
-            .order_by(Document.maj_le.desc())
-            .limit(1)
-        )
+        spec = await spec_courante(s, projet_id)
         return ProjetDetail(
             **ProjetOut.model_validate(projet, from_attributes=True).model_dump(),
             pipelines=[_resume(p, projet.nom) for p in pipelines],
@@ -223,8 +214,9 @@ def create_app(
         if await s.get(Projet, corps.projet_id) is None:
             raise Refus(404, "projet introuvable")
         cat = request.app.state.catalogue
-        pipeline = await creer_pipeline(s, cat, corps.projet_id, corps.type)
+        pipeline, _a_lancer = await creer_pipeline(s, cat, corps.projet_id, corps.type)
         await s.commit()
+        # lancée par ServiceChat.lancer (tâche 7)
         return await _detail(s, cat, pipeline.id)
 
     @app.get("/api/pipelines/{pipeline_id}", response_model=PipelineDetail)

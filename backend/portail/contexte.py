@@ -7,9 +7,14 @@ from portail.db import Document, Message
 
 
 def construire(
-    agent: Agent, messages: list[Message], document: Document | None, consigne: str | None = None
+    agent: Agent,
+    messages: list[Message],
+    document: Document | None,
+    consigne: str | None = None,
+    annexes: list[str] | None = None,
 ) -> list[dict]:
     sortie = [{"role": "system", "content": agent.prompt_systeme}]
+    sortie += [{"role": "system", "content": a} for a in annexes or []]
     gardes = [m for m in messages if m.role in ("user", "assistant")]
     if document:
         sortie.append(

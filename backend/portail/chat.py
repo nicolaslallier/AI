@@ -232,8 +232,9 @@ class ServiceChat:
                 raise Refus(409, "rien à valider : clique d'abord « Rédiger la spec »")
             doc.etat = "validee"
             doc.maj_le = datetime.now(UTC)
-            await terminer_etape(s, etape)
+            _a_lancer = await terminer_etape(s, self._catalogue, etape)
             await s.commit()
+            # lancée par ServiceChat.lancer (tâche 7)
             return etape.pipeline_id
 
     async def etat(self, etape_id: int) -> str:

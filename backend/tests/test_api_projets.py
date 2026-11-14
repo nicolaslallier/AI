@@ -58,7 +58,7 @@ async def test_filtre_par_etat(client, sessions):
         ids.append(r.json()["id"])
     async with sessions() as s:
         etape = await s.scalar(select(Etape).where(Etape.pipeline_id == ids[0]))
-        await terminer_etape(s, etape)
+        await terminer_etape(s, CATALOGUE_TEST, etape)
         await s.commit()
     r = await client.get("/api/pipelines", params={"etat": "terminee"})
     assert [x["id"] for x in r.json()] == [ids[0]]

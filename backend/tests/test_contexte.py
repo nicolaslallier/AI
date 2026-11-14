@@ -64,3 +64,19 @@ def test_niveaux_jauge(ratio, niveau):
 def test_jauge():
     j = jauge(_agent(100), [{"role": "user", "content": "x" * 280}])  # 74 jetons
     assert (j.utilises, j.max, j.ratio, j.niveau) == (74, 100, 0.74, "ok")
+
+
+def test_annexes_et_messages_tool_ignores():
+    ms = [
+        Message(id=1, role="user", contenu="U"),
+        Message(id=2, role="tool", contenu="T"),
+        Message(id=3, role="assistant", contenu="A"),
+    ]
+    r = construire(_agent(), ms, None, annexes=["A1", "A2"])
+    assert [(m["role"], m["content"]) for m in r] == [
+        ("system", "SYS"),
+        ("system", "A1"),
+        ("system", "A2"),
+        ("user", "U"),
+        ("assistant", "A"),
+    ]
