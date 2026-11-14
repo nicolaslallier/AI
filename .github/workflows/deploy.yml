@@ -1,0 +1,48 @@
+# Construit l'image et la publie sur GHCR. Le redéploiement se fait à la main dans
+# Portainer (« Pull and redeploy »).
+#
+# Ne jamais ajouter de déclencheur pull_request (ni pull_request_target) à ce workflow :
+# il pousse sur GHCR avec GITHUB_TOKEN, et la PR d'un fork apporte son propre fichier de
+# workflow.
+name: Build and push image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}-portail
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      # ponytail: amd64 seul (hôte de déploiement) ; ajouter arm64 comme DarkAngel si la pile doit tourner sur le Mac mini.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

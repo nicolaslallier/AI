@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -90,9 +91,10 @@ def create_app(
     llm: ClientLLM | None = None,
     catalogue: Catalogue | None = None,
 ) -> FastAPI:
+    r = reglages or Reglages()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        r = reglages or Reglages()
         app.state.reglages = r
         app.state.catalogue = catalogue or charger_catalogue(r.agents_fichier)
         app.state.llm = llm or ClientLLM(r.litellm_url, r.litellm_cle)
@@ -233,5 +235,19 @@ def create_app(
         chat = request.app.state.chat
         await chat.etat(etape_id)  # 404 avant de commencer le flux
         return StreamingResponse(chat.flux(etape_id), media_type="text/event-stream")
+
+    if r.static_dir:
+        racine = r.static_dir.resolve()
+        app.mount("/assets", StaticFiles(directory=racine / "assets"), name="assets")
+
+        # Enregistrée en dernier : repli SPA, hors /api/. Les /api/ inconnus gardent leur 404 JSON.
+        @app.get("/{chemin:path}", include_in_schema=False)
+        async def spa(chemin: str):
+            if chemin.startswith("api/"):
+                raise Refus(404, "introuvable")
+            fichier = (racine / chemin).resolve()
+            if fichier.is_file() and fichier.is_relative_to(racine):
+                return FileResponse(fichier)
+            return FileResponse(racine / "index.html")
 
     return app
