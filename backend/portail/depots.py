@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import contextlib
 import os
 import re
 import shutil
@@ -58,7 +59,8 @@ class Depots:
         try:
             out, err = await asyncio.wait_for(proc.communicate(), delai)
         except BaseException as e:
-            proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
             await proc.wait()
             if isinstance(e, TimeoutError):
                 raise ErreurDepot(f"git {args[0]} : délai dépassé ({delai} s)") from None
@@ -87,9 +89,13 @@ class Depots:
         async with self._verrous.setdefault(projet_id, asyncio.Lock()):
             if not clone.exists():
                 clone.parent.mkdir(parents=True, exist_ok=True)
-                await self._git(
-                    "clone", "--bare", "--", depot_url, str(clone), delai=120, distant=True
-                )
+                try:
+                    await self._git(
+                        "clone", "--bare", "--", depot_url, str(clone), delai=120, distant=True
+                    )
+                except BaseException:
+                    shutil.rmtree(clone, ignore_errors=True)
+                    raise
             await self._git(
                 "fetch", "origin", "+refs/heads/*:refs/heads/*", "--prune",
                 cwd=clone, delai=120, distant=True,

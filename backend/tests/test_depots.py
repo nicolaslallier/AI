@@ -151,3 +151,16 @@ async def test_clone_echoue_ne_laisse_rien(depots, tmp_path):
 async def test_sha_inconnu(origine, depots):
     with pytest.raises(ErreurDepot, match="commit .* introuvable dans le dépôt"):
         await depots.preparer(1, url(origine), "main", 10, "a" * 40)
+
+
+async def test_clone_interrompu_est_nettoye(depots, tmp_path, monkeypatch):
+    async def faux_git(self, *args, **kw):
+        clone = Path(args[args.index("--") + 2])
+        clone.mkdir(parents=True)
+        (clone / "junk").write_text("x")
+        raise ErreurDepot("interrompu")
+
+    monkeypatch.setattr(Depots, "_git", faux_git)
+    with pytest.raises(ErreurDepot):
+        await depots.preparer(1, "file:///x", "main", 10, None)
+    assert not (tmp_path / "donnees" / "depots" / "1.git").exists()
