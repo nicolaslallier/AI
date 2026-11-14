@@ -37,6 +37,7 @@ class Projet(Base):
     description: Mapped[str] = mapped_column(Text, default="", server_default="")
     depot_url: Mapped[str | None] = mapped_column(String)
     branche_ref: Mapped[str | None] = mapped_column(String)  # nul : branche par défaut du dépôt
+    config_execution: Mapped[str | None] = mapped_column(Text)  # YAML brut
     cree_le: Mapped[datetime] = _horodatage()
 
 
@@ -119,6 +120,7 @@ class Tache(Base):
     protegee: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     verrou: Mapped[int | None] = mapped_column(ForeignKey("pipeline.id", ondelete="SET NULL"))
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    resume_blocage: Mapped[str | None] = mapped_column(Text)
     cree_le: Mapped[datetime] = _horodatage()
     maj_le: Mapped[datetime] = _horodatage(onupdate=func.now())
 
@@ -161,6 +163,45 @@ class Proposition(Base):
     etat: Mapped[str] = mapped_column(String, default="ouverte", server_default="ouverte")
     tache_creee_id: Mapped[int | None] = mapped_column(ForeignKey("tache.id", ondelete="SET NULL"))
     cree_le: Mapped[datetime] = _horodatage()
+
+
+class ExecutionDev(Base):
+    __tablename__ = "execution_dev"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pipeline_id: Mapped[int] = mapped_column(
+        ForeignKey("pipeline.id", ondelete="CASCADE"), unique=True
+    )
+    tache_id: Mapped[int] = mapped_column(ForeignKey("tache.id", ondelete="CASCADE"))
+    n: Mapped[int] = mapped_column(Integer)
+    branche: Mapped[str] = mapped_column(String)
+    espace: Mapped[str] = mapped_column(String)
+    base: Mapped[str] = mapped_column(String)  # branche de référence résolue
+    base_sha: Mapped[str] = mapped_column(String)
+    # preparation | tests | rouge | code | verification | revue | pr | fini
+    phase: Mapped[str] = mapped_column(String)
+    renvois: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    interruptions: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    remarques: Mapped[list] = mapped_column(JSON, default=list)  # pour la prochaine passe
+    fichiers_tests: Mapped[list] = mapped_column(JSON, default=list)
+    sortie_rouge: Mapped[str | None] = mapped_column(Text)
+    pr_numero: Mapped[int | None] = mapped_column(Integer)
+    pr_url: Mapped[str | None] = mapped_column(String)
+    debut: Mapped[datetime] = _horodatage()
+
+
+class CommandeLancee(Base):
+    __tablename__ = "commande_lancee"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pipeline_id: Mapped[int] = mapped_column(ForeignKey("pipeline.id", ondelete="CASCADE"))
+    etape_id: Mapped[int] = mapped_column(ForeignKey("etape.id", ondelete="CASCADE"))
+    nom: Mapped[str] = mapped_column(String)
+    code: Mapped[int | None] = mapped_column(Integer)
+    delai_depasse: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    sortie: Mapped[str] = mapped_column(Text, default="", server_default="")
+    debut: Mapped[datetime] = _horodatage()
+    fin: Mapped[datetime] = _horodatage()
 
 
 def creer_moteur(url: str) -> AsyncEngine:

@@ -29,6 +29,7 @@ from portail.db import (
 )
 from portail.depots import Depots, ErreurDepot
 from portail.etats import Etat
+from portail.execution import lire_config
 from portail.llm import ClientLLM
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
 from portail.propositions import accepter, fermer_si_fini, rejeter
@@ -40,6 +41,7 @@ from portail.schemas import (
     DonneesTache,
     DonneesTachePartielles,
     EtapeOut,
+    ExecutionIn,
     Kanban,
     KanbanToutAccepte,
     PipelineDetail,
@@ -290,6 +292,20 @@ def create_app(
         await s.refresh(projet)
         return projet
 
+    @app.put("/api/projets/{projet_id}/execution", response_model=ProjetOut)
+    async def definir_execution(projet_id: int, corps: ExecutionIn, s: Session):
+        projet = await s.get(Projet, projet_id)
+        if projet is None:
+            raise Refus(404, "projet introuvable")
+        if corps.yaml.strip():
+            lire_config(corps.yaml)
+            projet.config_execution = corps.yaml
+        else:
+            projet.config_execution = None
+        await s.commit()
+        await s.refresh(projet)
+        return projet
+
     @app.get("/api/projets/{projet_id}", response_model=ProjetDetail)
     async def lire_projet(projet_id: int, s: Session):
         projet = await s.get(Projet, projet_id)
@@ -305,6 +321,7 @@ def create_app(
         spec = await spec_courante(s, projet_id)
         return ProjetDetail(
             **ProjetOut.model_validate(projet, from_attributes=True).model_dump(),
+            config_execution=projet.config_execution,
             pipelines=[_resume(p, projet.nom) for p in pipelines],
             spec_courante=SpecCourante.model_validate(spec, from_attributes=True) if spec else None,
         )

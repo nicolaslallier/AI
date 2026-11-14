@@ -68,7 +68,12 @@ class SpecCourante(BaseModel):
     maj_le: datetime
 
 
+class ExecutionIn(BaseModel):
+    yaml: str
+
+
 class ProjetDetail(ProjetOut):
+    config_execution: str | None = None
     pipelines: list[PipelineResume]
     spec_courante: SpecCourante | None
 
