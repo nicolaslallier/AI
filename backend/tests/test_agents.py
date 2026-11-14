@@ -54,3 +54,16 @@ def test_yaml_illisible(tmp_path):
 def test_agents_yaml_du_depot_est_valide():
     racine = Path(__file__).resolve().parents[2]
     assert "spec" in charger_catalogue(racine / "agents.yaml").pipelines
+
+
+def test_pipelines_mauvaise_forme(tmp_path):
+    with pytest.raises(CatalogueInvalide) as exc:
+        charger_catalogue(ecrire(tmp_path, VALIDE.replace("spec: [spec]", 'spec: "spec"')))
+    assert "pipelines" in str(exc.value) and "?" not in str(exc.value)
+
+
+def test_nom_dans_agent_refuse(tmp_path):
+    with pytest.raises(CatalogueInvalide, match="spec"):
+        charger_catalogue(
+            ecrire(tmp_path, VALIDE.replace("    modele: m", "    nom: x\n    modele: m"))
+        )

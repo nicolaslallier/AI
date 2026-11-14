@@ -30,21 +30,23 @@ def charger_catalogue(chemin: Path) -> Catalogue:
         raise CatalogueInvalide(f"{chemin} illisible : {e}") from e
     if not isinstance(brut, dict):
         raise CatalogueInvalide(f"{chemin} : un dictionnaire est attendu")
-    agents = brut.get("agents") or {}
-    if not isinstance(agents, dict):
+    brut_agents = brut.get("agents") or {}
+    if not isinstance(brut_agents, dict):
         raise CatalogueInvalide("`agents` doit être un dictionnaire")
+    agents = {}
+    for nom, a in brut_agents.items():
+        if not isinstance(a, dict) or "nom" in a:
+            raise CatalogueInvalide(
+                f"agent « {nom} » invalide : un dictionnaire sans clé `nom` est attendu"
+            )
+        try:
+            agents[nom] = Agent(nom=nom, **a)
+        except ValidationError as e:
+            raise CatalogueInvalide(f"agent « {nom} » invalide ({_details(e)})") from e
     try:
-        cat = Catalogue(
-            agents={
-                n: Agent(nom=n, **(a if isinstance(a, dict) else {})) for n, a in agents.items()
-            },
-            pipelines=brut.get("pipelines") or {},
-        )
+        cat = Catalogue(agents=agents, pipelines=brut.get("pipelines") or {})
     except ValidationError as e:
-        details = "; ".join(f"{'.'.join(map(str, x['loc']))} : {x['msg']}" for x in e.errors())
-        # loc ne contient pas le nom de l agent : on le retrouve en revalidant
-        nom = next((n for n, a in agents.items() if _invalide(n, a)), "?")
-        raise CatalogueInvalide(f"agent « {nom} » invalide ({details})") from e
+        raise CatalogueInvalide(f"`pipelines` invalide ({_details(e)})") from e
     for p, etapes in cat.pipelines.items():
         if not etapes:
             raise CatalogueInvalide(f"pipeline « {p} » vide")
@@ -54,9 +56,5 @@ def charger_catalogue(chemin: Path) -> Catalogue:
     return cat
 
 
-def _invalide(nom: str, a: object) -> bool:
-    try:
-        Agent(nom=nom, **(a if isinstance(a, dict) else {}))
-    except ValidationError:
-        return True
-    return False
+def _details(e: ValidationError) -> str:
+    return "; ".join(f"{'.'.join(map(str, x['loc']))} : {x['msg']}" for x in e.errors())
