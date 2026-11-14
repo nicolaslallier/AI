@@ -1,7 +1,8 @@
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 
 class CatalogueInvalide(Exception):
@@ -16,6 +17,18 @@ class Agent(BaseModel):
     contexte_max: int = Field(gt=0)
     temperature: float | None = None
     consigne_redaction: str | None = None
+    produit: Literal["spec", "plan", "taches"] = "spec"
+    auto: bool = False
+    outils: list[Literal["lister", "lire", "chercher"]] = []
+    tours_max: int = Field(default=20, gt=0)
+
+    @model_validator(mode="after")
+    def _coherent(self):
+        if self.auto and not self.consigne_redaction:
+            raise ValueError(f"l'agent « {self.nom} » est auto : consigne_redaction requise")
+        if self.produit == "taches" and self.outils:
+            raise ValueError(f"l'agent « {self.nom} » produit des tâches : pas d'outils")
+        return self
 
 
 class Catalogue(BaseModel):
@@ -57,4 +70,8 @@ def charger_catalogue(chemin: Path) -> Catalogue:
 
 
 def _details(e: ValidationError) -> str:
-    return "; ".join(f"{'.'.join(map(str, x['loc']))} : {x['msg']}" for x in e.errors())
+    return "; ".join(
+        f"{'.'.join(map(str, x['loc']))} : {x['msg']}"
+        + (f" (reçu « {x['input']} »)" if x["type"] == "literal_error" else "")
+        for x in e.errors()
+    )
