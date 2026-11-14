@@ -55,7 +55,7 @@ Le SDK embarque Claude Code : rien d'autre à installer. Les variables de `.env`
 |---|---|
 | `ANTHROPIC_BASE_URL` | `https://litellm.infra.famillelallier.net` pour passer par LiteLLM (usage visible dans Grafana) |
 | `ANTHROPIC_AUTH_TOKEN` | la clé LiteLLM |
-| `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` | `certs/infra-ca.crt` de l'Infra |
+| `NODE_EXTRA_CA_CERTS` | à laisser vide : le programme prend [`certs/infra-ca.crt`](../../certs/) du dépôt |
 | `GITHUB_TOKEN` | seulement pour `--issue` ; un jeton en lecture seule suffit |
 
 LiteLLM doit exposer les modèles sous les noms utilisés ici (`claude-opus-5-5`,
@@ -66,17 +66,17 @@ champ `model` de son `.md` ; pour l'orchestrateur, `--modele` ou `ORCHESTRATEUR_
 
 ```bash
 # d'abord à blanc : affiche agents, modèles, permissions et demande, sans rien toucher
-uv run orchestrateur --a-blanc --depot ~/OpenCode/AI "Ajouter un outil vault_list à mcp-fichiers"
+uv run orchestrateur --a-blanc --depot ~/Code/AI "Ajouter un outil vault_list à mcp-fichiers"
 
 # pour de vrai
-uv run orchestrateur --depot ~/OpenCode/AI "Ajouter un outil vault_list à mcp-fichiers"
+uv run orchestrateur --depot ~/Code/AI "Ajouter un outil vault_list à mcp-fichiers"
 
 # la demande vient d'une issue, et on ouvre une PR en brouillon à la fin
-uv run orchestrateur --depot ~/OpenCode/AI --issue nicolaslallier/AI#15 --pr
+uv run orchestrateur --depot ~/Code/AI --issue nicolaslallier/AI#15 --pr
 
 # lister les exécutions d'un dépôt, reprendre une exécution interrompue (Ctrl-C, budget, tours)
-uv run orchestrateur --depot ~/OpenCode/AI --liste
-uv run orchestrateur --depot ~/OpenCode/AI --reprendre 20261114-081500-ab12
+uv run orchestrateur --depot ~/Code/AI --liste
+uv run orchestrateur --depot ~/Code/AI --reprendre 20261114-081500-ab12
 ```
 
 | Option | Défaut | Effet |
@@ -94,7 +94,7 @@ Pour traiter une issue sans être devant l'écran, par exemple chaque nuit sur l
 étiquetées pour l'orchestrateur, une ligne cron suffit (une issue par ligne) :
 
 ```cron
-0 2 * * * cd ~/OpenCode/AI/agents/orchestrateur && set -a && . ./.env && set +a && uv run orchestrateur --depot ~/OpenCode/AI --issue nicolaslallier/AI#15 --pr >> ~/orchestrateur.log 2>&1
+0 2 * * * cd ~/Code/AI/agents/orchestrateur && set -a && . ./.env && set +a && uv run orchestrateur --depot ~/Code/AI --issue nicolaslallier/AI#15 --pr >> ~/orchestrateur.log 2>&1
 ```
 
 ## Permissions
