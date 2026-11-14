@@ -27,6 +27,15 @@ CONFIG_TESTS_DEFAUT = [
     "vite.config.*",  # vitest y lit la section `test:` faute de vitest.config
     "**/vite.config.*",
     ".cargo/config.toml",
+    # exécutés à l'installation ou au démarrage de Python : ils peuvent fausser la suite sans toucher un test
+    "setup.py",
+    "**/setup.py",
+    "sitecustomize.py",
+    "**/sitecustomize.py",
+    "usercustomize.py",
+    "**/usercustomize.py",
+    "*.pth",
+    "**/*.pth",
 ]
 OBLIGATOIRES = ("installer", "tests", "tests_cibles")
 

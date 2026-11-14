@@ -31,7 +31,10 @@ def _sections(nom: str, texte: str | None) -> dict[str, object]:
         if nom == "setup.cfg":
             c = configparser.ConfigParser(interpolation=None)
             c.read_string(texte)
-            return {"tool:pytest": dict(c["tool:pytest"])} if c.has_section("tool:pytest") else {}
+            # `options.entry_points` peut déclarer un plugin pytest11 chargé à chaque lancement
+            return {
+                k: dict(c[k]) for k in ("tool:pytest", "options.entry_points") if c.has_section(k)
+            }
         d = tomllib.loads(texte)
     except (ValueError, configparser.Error, RecursionError) as e:
         raise _Illisible from e

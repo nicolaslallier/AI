@@ -167,7 +167,8 @@ def test_chemins_tests_vide_en_francais():
     "chemin",
     ["tox.ini", "a/tox.ini", ".pytest.ini", "a/.pytest.ini", "front/jest.config.ts",
      "front/vitest.config.ts", "vitest.workspace.ts", "front/vitest.workspace.js",
-     "vite.config.ts", "frontend/vite.config.mts"],
+     "vite.config.ts", "frontend/vite.config.mts", "setup.py", "lib/setup.py",
+     "sitecustomize.py", "src/sitecustomize.py", "usercustomize.py", "x.pth", "a/b/x.pth"],
 )  # fmt: skip
 def test_config_tests_par_defaut_protegee(chemin):
     from portail.execution import correspond

@@ -103,6 +103,18 @@ async def test_setup_cfg_tool_pytest(espace, cfg):
     assert await verifier_commits_code(espace, base, cfg) == ["lib/setup.cfg (section tool:pytest)"]
 
 
+async def test_setup_cfg_entry_points(espace, cfg):
+    await _base(espace, {"setup.cfg": "[metadata]\nname = x\n"})
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(
+        espace,
+        {"setup.cfg": "[metadata]\nname = x\n[options.entry_points]\npytest11 =\n    p = x.p\n"},
+    )
+    assert await verifier_commits_code(espace, base, cfg) == [
+        "setup.cfg (section options.entry_points)"
+    ]
+
+
 async def test_manifeste_ajoute_avec_sections_de_tests(espace, cfg):
     base = git(espace.racine, "rev-parse", "HEAD")
     await _code(espace, {"pyproject.toml": "[tool.pytest.ini_options]\na = 1\n"})
