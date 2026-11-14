@@ -377,3 +377,14 @@ async def test_sous_module_derriere_un_lien(tmp_path, origine, nettoyage, lien):
     (e.racine / "src" / "b.py").write_text("b = 2\n")
     assert await e.commiter("agent-code", "agent-code@portail.local", "code")
     assert any("d/sub" in ligne for ligne in gitlinks(e.racine))
+
+
+async def test_fichier_a_erreur_git_non_absent(espace):
+    for rev in ("0" * 40, "pas-une-ref", "0" * 40 + "^"):
+        with pytest.raises(ErreurDepot):
+            await espace.fichier_a(rev, "src/b.py")
+
+
+async def test_fichier_a_parent_du_commit_racine(espace):
+    racine = git(espace.racine, "rev-list", "--max-parents=0", "HEAD").split()[0]
+    assert await espace.fichier_a(f"{racine}^", "src/b.py") is None

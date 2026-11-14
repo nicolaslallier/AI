@@ -168,11 +168,18 @@ class Espace:
         return resultat
 
     async def fichier_a(self, rev: str, chemin: str) -> str | None:
-        objet = f"{_rev(rev)}:{chemin}"
-        try:
-            return await self._git("cat-file", "blob", objet)
-        except ErreurDepot:
+        """Contenu à `rev` ; None seulement si le chemin (ou le parent d'un commit racine)
+        n'existe pas. Toute autre erreur git lève `ErreurDepot` (échec fermé)."""
+        rev = _rev(rev)
+        base = rev.removesuffix("^")
+        await self._git("rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
+        if base != rev:
+            parents = (await self._git("rev-list", "--parents", "-n1", base)).split()[1:]
+            if not parents:
+                return None
+        if not await self._git("ls-tree", "-z", rev, "--", chemin):
             return None
+        return await self._git("cat-file", "blob", f"{rev}:{chemin}")
 
     async def diff(self, depuis: str) -> str:
         sortie = await self._git(

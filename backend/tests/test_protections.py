@@ -1,6 +1,7 @@
 # ruff: noqa: F811
 import pytest
 
+from portail.depots import ErreurDepot
 from portail.execution import ConfigExecution
 from portail.protections import verifier_commits_code
 from tests.test_espace import espace, git, origine  # noqa: F401  (fixtures réutilisées)
@@ -81,9 +82,7 @@ async def test_package_json_script_test(espace, cfg):
         espace,
         {"web/package.json": '{"scripts": {"test": "true", "build": "vite"}, "jest": {"a": 1}}'},
     )
-    assert await verifier_commits_code(espace, base, cfg) == [
-        "web/package.json (section scripts.test)"
-    ]
+    assert await verifier_commits_code(espace, base, cfg) == ["web/package.json (section scripts)"]
 
 
 async def test_cargo_dev_dependencies(espace, cfg):
@@ -132,3 +131,78 @@ async def test_commit_d_un_autre_auteur_ignore(espace, cfg):
     base = git(espace.racine, "rev-parse", "HEAD")
     await _code(espace, {"tests/a.py": "a = 2\n"}, auteur="agent-tests")
     assert await verifier_commits_code(espace, base, cfg) == []
+
+
+async def _viol(espace, cfg, avant: dict[str, str], apres: dict[str, str]):
+    await _base(espace, avant)
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(espace, apres)
+    return await verifier_commits_code(espace, base, cfg)
+
+
+async def test_scripts_indirection(espace, cfg):
+    avant = '{"scripts": {"test": "npm run t", "t": "jest"}}'
+    apres = '{"scripts": {"test": "npm run t", "t": "true"}}'
+    assert await _viol(espace, cfg, {"package.json": avant}, {"package.json": apres}) == [
+        "package.json (section scripts)"
+    ]
+
+
+async def test_package_json_mocha(espace, cfg):
+    assert await _viol(
+        espace,
+        cfg,
+        {"package.json": '{"mocha": {"a": 1}}'},
+        {"package.json": '{"mocha": {"a": 2}}'},
+    ) == ["package.json (section mocha)"]
+
+
+async def test_pytest11_entry_point(espace, cfg):
+    avant = "[project]\nname = 'x'\n"
+    apres = avant + "[project.entry-points.pytest11]\nx = 'evil'\n"
+    assert await _viol(espace, cfg, {"pyproject.toml": avant}, {"pyproject.toml": apres}) == [
+        "pyproject.toml (section project.entry-points.pytest11)"
+    ]
+
+
+async def test_tool_coverage(espace, cfg):
+    avant = "[tool.coverage.report]\nfail_under = 90\n"
+    apres = "[tool.coverage.report]\nfail_under = 0\n"
+    assert await _viol(espace, cfg, {"pyproject.toml": avant}, {"pyproject.toml": apres}) == [
+        "pyproject.toml (section tool.coverage.report)"
+    ]
+
+
+async def test_cargo_dev_dependencies_underscore(espace, cfg):
+    avant = "[dev-dependencies]\nrstest = '1'\n"
+    apres = "[dev_dependencies]\nrstest = '1'\nmockall = '1'\n"
+    assert await _viol(espace, cfg, {"Cargo.toml": avant}, {"Cargo.toml": apres}) == [
+        "Cargo.toml (section dev-dependencies)"
+    ]
+
+
+async def test_cargo_target_dev_dependencies_underscore(espace, cfg):
+    avant = "[target.'cfg(unix)'.dev-dependencies]\na = '1'\n"
+    apres = "[target.'cfg(unix)'.dev_dependencies]\na = '2'\n"
+    assert await _viol(espace, cfg, {"Cargo.toml": avant}, {"Cargo.toml": apres}) == [
+        "Cargo.toml (section target.cfg(unix).dev-dependencies)"
+    ]
+
+
+async def test_cargo_profile_test(espace, cfg):
+    avant = "[profile.test]\nopt-level = 0\n"
+    apres = "[profile.test]\nopt-level = 3\n"
+    assert await _viol(espace, cfg, {"Cargo.toml": avant}, {"Cargo.toml": apres}) == [
+        "Cargo.toml (section profile.test)"
+    ]
+
+
+async def test_erreur_git_propagee(espace, cfg):
+    await _base(espace, {"Cargo.toml": "[dev-dependencies]\n"})
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(espace, {"Cargo.toml": "[dev-dependencies]\na = '1'\n"})
+    with pytest.raises(ErreurDepot):
+        await verifier_commits_code(espace, "0" * 40, cfg)  # commits() échoue
+    with pytest.raises(ErreurDepot):
+        await espace.fichier_a("0" * 40, "Cargo.toml")
+    assert await espace.fichier_a(base, "absent.toml") is None

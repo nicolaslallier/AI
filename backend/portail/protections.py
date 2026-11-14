@@ -24,11 +24,9 @@ def _sections(nom: str, texte: str | None) -> dict[str, object]:
             d = json.loads(texte)
             if not isinstance(d, dict):
                 raise _Illisible
-            s = {k: d[k] for k in ("jest", "vitest") if k in d}
-            scripts = d.get("scripts", {})
-            if not isinstance(scripts, dict):
-                raise _Illisible
-            s.update({f"scripts.{k}": v for k, v in scripts.items() if "test" in k})
+            s = {k: d[k] for k in ("jest", "vitest", "mocha", "ava", "c8", "nyc") if k in d}
+            if "scripts" in d:  # un script de test peut en appeler un autre : tout est protégé
+                s["scripts"] = d["scripts"]
             return s
         if nom == "setup.cfg":
             c = configparser.ConfigParser(interpolation=None)
@@ -38,17 +36,33 @@ def _sections(nom: str, texte: str | None) -> dict[str, object]:
     except (ValueError, configparser.Error, RecursionError) as e:
         raise _Illisible from e
     if nom == "pyproject.toml":
-        p = d.get("tool", {}).get("pytest", {}) if isinstance(d.get("tool"), dict) else {}
-        if not isinstance(p, dict):
-            return {"tool.pytest": p}
-        return {f"tool.pytest.{k}": v for k, v in p.items()}
-    # Cargo.toml
+        s = {}
+        outil = d.get("tool")
+        for cle in ("pytest", "coverage"):
+            v = outil.get(cle, {}) if isinstance(outil, dict) else {}
+            if isinstance(v, dict):
+                s.update({f"tool.{cle}.{k}": x for k, x in v.items()})
+            else:
+                s[f"tool.{cle}"] = v
+        projet = d.get("project")
+        ep = projet.get("entry-points") if isinstance(projet, dict) else None
+        if isinstance(ep, dict) and "pytest11" in ep:
+            s["project.entry-points.pytest11"] = ep["pytest11"]
+        return s
+
+    # Cargo.toml : `_` et `-` sont équivalents dans les clés de dépendances
+    def norm(t: dict) -> dict:
+        return {k.replace("_", "-"): v for k, v in t.items()}
+
+    d = norm(d)
     s = {k: d[k] for k in ("dev-dependencies", "test") if k in d}
+    if isinstance(d.get("profile"), dict) and "test" in d["profile"]:
+        s["profile.test"] = d["profile"]["test"]
     cibles = d.get("target", {})
     if isinstance(cibles, dict):
         for cible, v in cibles.items():
-            if isinstance(v, dict) and "dev-dependencies" in v:
-                s[f"target.{cible}.dev-dependencies"] = v["dev-dependencies"]
+            if isinstance(v, dict) and "dev-dependencies" in norm(v):
+                s[f"target.{cible}.dev-dependencies"] = norm(v)["dev-dependencies"]
     return s
 
 
