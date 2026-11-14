@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -131,6 +132,15 @@ def create_app(
             and not request.headers.get("X-Auth-Request-Email")
         ):
             return JSONResponse(status_code=401, content={"detail": "non authentifié"})
+        # Anti-CSRF : le cookie oauth2-proxy vaut pour tout .famillelallier.net,
+        # donc une écriture doit venir du portail lui-même.
+        if chemin.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS"):
+            site = request.headers.get("Sec-Fetch-Site")
+            origine = request.headers.get("Origin")
+            if (site and site not in ("same-origin", "none")) or (
+                not site and origine and urlsplit(origine).netloc != request.headers.get("Host")
+            ):
+                return JSONResponse(status_code=403, content={"detail": "requête d'un autre site"})
         return await call_next(request)
 
     @app.get("/api/sante")

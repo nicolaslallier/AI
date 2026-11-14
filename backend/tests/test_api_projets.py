@@ -108,6 +108,21 @@ async def test_utilisateur_exige(moteur, schema):
         assert (await c.get("/api/santeX")).status_code == 401
 
 
+async def test_ecriture_depuis_un_autre_site_refusee(client):
+    corps = {"nom": "P"}
+    autre = {"Sec-Fetch-Site": "same-site"}
+    r = await client.post("/api/projets", json=corps, headers=autre)
+    assert r.status_code == 403
+    r = await client.post(
+        "/api/projets", json=corps, headers={"Origin": "https://x.famillelallier.net"}
+    )
+    assert r.status_code == 403
+    assert (await client.get("/api/projets", headers=autre)).status_code == 200
+    ok = {"Sec-Fetch-Site": "same-origin", "Origin": "http://t"}
+    assert (await client.post("/api/projets", json=corps, headers=ok)).status_code == 201
+    assert (await client.post("/api/projets", json={"nom": "Q"})).status_code == 201
+
+
 async def test_redemarrage_marque_les_etapes_interrompues(client, sessions, reglages):
     p = await _projet(client)
     det = (await client.post("/api/pipelines", json={"projet_id": p["id"], "type": "spec"})).json()
