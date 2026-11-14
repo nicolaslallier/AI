@@ -94,19 +94,26 @@ onBeforeUnmount(() => {
 
 <template>
   <template v-if="pipeline">
-    <h1>{{ pipeline.type }} n°{{ pipeline.id }} <EtatBadge :etat="pipeline.etat" /></h1>
-    <button
-      v-if="pipeline.etat !== 'terminee' && !pipeline.etapes.some((e) => e.erreur === 'annulé')"
-      @click="annuler"
-    >
-      Annuler le pipeline
-    </button>
-    <p>Projet : <RouterLink :to="`/projets/${pipeline.projet.id}`">{{ pipeline.projet.nom }}</RouterLink></p>
-    <div v-for="e in pipeline.etapes" :key="e.id">
-      <h2>
-        {{ e.agent }} <EtatBadge :etat="e.etat" />
-        <small v-if="e.sha">SHA {{ e.sha.slice(0, 7) }}</small>
-      </h2>
+    <div class="titre">
+      <h1>{{ pipeline.type }} n°{{ pipeline.id }}</h1>
+      <EtatBadge :etat="pipeline.etat" />
+      <button
+        v-if="pipeline.etat !== 'terminee' && !pipeline.etapes.some((e) => e.erreur === 'annulé')"
+        class="danger pousse"
+        @click="annuler"
+      >
+        Annuler le pipeline
+      </button>
+    </div>
+    <p class="discret">
+      Projet : <RouterLink :to="`/projets/${pipeline.projet.id}`">{{ pipeline.projet.nom }}</RouterLink>
+    </p>
+    <section v-for="(e, i) in pipeline.etapes" :key="e.id" class="carte pile">
+      <div class="titre">
+        <h2>{{ i + 1 }}. {{ e.agent }}</h2>
+        <EtatBadge :etat="e.etat" />
+        <small v-if="e.sha">SHA <code>{{ e.sha.slice(0, 7) }}</code></small>
+      </div>
       <template v-if="e.etat !== 'a_faire'">
         <EditeurDocument
           v-if="e.document"
@@ -128,7 +135,8 @@ onBeforeUnmount(() => {
           @reessayer="action(() => reessayer(e.id))"
         />
       </template>
-    </div>
+      <p v-else class="discret">Cette étape démarre quand la précédente est terminée.</p>
+    </section>
   </template>
   <p v-else-if="message" class="erreur">{{ message }}</p>
 </template>

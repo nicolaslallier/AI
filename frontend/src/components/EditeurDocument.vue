@@ -13,26 +13,32 @@ const validee = computed(() => doc.value.etat === 'validee')
 </script>
 
 <template>
-  <section>
-    <h2>{{ etape.produit === 'plan' ? 'Plan' : 'Spec' }} <span v-if="validee" class="valide">Validée</span></h2>
+  <section class="pile">
+    <h3>{{ etape.produit === 'plan' ? 'Plan' : 'Spec' }} <span v-if="validee" class="badge terminee">Validée</span></h3>
     <div class="cote">
       <textarea v-if="!validee" v-model="texte" rows="20"></textarea>
-      <div class="apercu" v-html="rendreMarkdown(validee ? doc.contenu : texte)"></div>
+      <div class="apercu markdown" v-html="rendreMarkdown(validee ? doc.contenu : texte)"></div>
     </div>
     <p v-if="message" class="erreur">{{ message }}</p>
     <template v-if="!validee">
-      <button :disabled="!modifie" @click="emit('enregistrer', texte)">Enregistrer</button>
-      <button :disabled="modifie || etape.etat !== 'en_attente' || doc.etat !== 'brouillon'" @click="emit('valider')">
-        Valider
-      </button>
+      <div class="rangee">
+        <button :disabled="!modifie" @click="emit('enregistrer', texte)">Enregistrer</button>
+        <button
+          class="primaire"
+          :disabled="modifie || etape.etat !== 'en_attente' || doc.etat !== 'brouillon'"
+          @click="emit('valider')"
+        >
+          Valider
+        </button>
+        <small v-if="modifie">Enregistre tes modifications avant de valider.</small>
+      </div>
     </template>
   </section>
 </template>
 
 <style scoped>
-.cote { display: flex; gap: 1rem; }
-.cote > * { flex: 1; min-width: 0; }
-.apercu { border: 1px solid #e5e7eb; padding: 0 0.75rem; overflow: auto; }
-.valide { background: #bbf7d0; padding: 0.1rem 0.5rem; border-radius: 0.75rem; font-size: 0.6em; }
-.erreur { color: #b91c1c; }
+.cote { display: flex; gap: 1rem; flex-wrap: wrap; }
+.cote > * { flex: 1 1 20rem; min-width: 0; }
+.cote textarea { font-family: ui-monospace, monospace; font-size: 0.9rem; }
+.apercu { border: 1px solid var(--bord); border-radius: 0.55rem; padding: 0.75rem 1rem; overflow: auto; max-height: 32rem; }
 </style>
