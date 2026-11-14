@@ -181,3 +181,23 @@ async def test_flux_etape_inactive(client):
 
 async def test_flux_etape_inconnue(client):
     assert (await client.get("/api/etapes/999/flux")).status_code == 404
+
+
+async def test_erreur_publiee_meme_si_l_enregistrement_echoue(client, faux_llm):
+    _, eid = await _etape(client)
+    chat = _chat(client)
+    pause = asyncio.Event()
+    faux_llm.morceaux = [pause]
+    faux_llm.exception = ErreurLLM("boum")
+    await _envoyer(client, eid, "go")
+    await _poll(lambda: faux_llm.appels)
+
+    def _hs():
+        raise RuntimeError("base hors service")
+
+    chat._sessions = _hs
+    _, file = chat.diffuseur.abonner(eid)
+    tache = chat.taches[eid]
+    pause.set()
+    await asyncio.wait_for(tache, 5)  # lèverait si l'exception fuyait de la tâche
+    assert file.get_nowait() == {"type": "erreur", "message": "boum"}

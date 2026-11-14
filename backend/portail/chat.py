@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
@@ -14,6 +15,8 @@ from portail.db import Document, Etape, Message, Pipeline
 from portail.etats import Etat
 from portail.llm import ClientLLM, FiltreReflexion
 from portail.moteur import Refus, changer_etat
+
+logger = logging.getLogger(__name__)
 
 
 class Diffuseur:
@@ -169,10 +172,14 @@ class ServiceChat:
                 await s.commit()
             d.publier(etape_id, {"type": "fin"})
         except Exception as exc:  # noqa: BLE001 - toute erreur doit finir en étape échouée
-            async with self._sessions() as s:
-                etape = await self._etape(s, etape_id)
-                await changer_etat(s, etape, Etat.ECHOUEE, str(exc))
-                await s.commit()
+            try:
+                async with self._sessions() as s:
+                    etape = await self._etape(s, etape_id)
+                    await changer_etat(s, etape, Etat.ECHOUEE, str(exc))
+                    await s.commit()
+            except Exception:
+                # l'événement terminal part quand même : les abonnés ne doivent pas rester bloqués
+                logger.exception("impossible d'enregistrer l'échec de l'étape %s", etape_id)
             d.publier(etape_id, {"type": "erreur", "message": str(exc)})
         finally:
             d.oublier(etape_id)
