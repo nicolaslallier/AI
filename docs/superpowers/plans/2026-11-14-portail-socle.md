@@ -35,7 +35,7 @@
 
 ---
 
-### Tâche 1 : squelette du backend et catalogue d'agents
+### Task 1: squelette du backend et catalogue d'agents
 
 **Fichiers :**
 - Créer : `backend/pyproject.toml`, `backend/portail/__init__.py`, `backend/portail/config.py`, `backend/portail/agents.py`, `agents.yaml`, `backend/tests/test_agents.py`, `.github/workflows/ci.yml`, `.gitignore`
@@ -92,7 +92,7 @@ pipelines:
 - [ ] **Étape 5 :** écrire `.github/workflows/ci.yml`, déclenché sur `pull_request` et `push` vers `main`. Le job `backend` (sur `ubuntu-latest`) fait : `astral-sh/setup-uv`, `uv sync`, `ruff check`, `ruff format --check`, `pytest`. Les tâches 2 et 9 complètent ce fichier.
 - [ ] **Étape 6 : commit** `feat(portail): squelette backend et catalogue d'agents YAML`.
 
-### Tâche 2 : modèle de données, migration et états
+### Task 2: modèle de données, migration et états
 
 **Fichiers :**
 - Créer : `backend/portail/etats.py`, `backend/portail/db.py`, `backend/alembic.ini`, `backend/migrations/env.py`, `backend/migrations/versions/0001_initial.py`, `backend/tests/conftest.py`, `backend/tests/test_etats.py`, `docker-compose.test.yml`
@@ -131,7 +131,7 @@ pipelines:
 - [ ] **Étape 5 :** dans la CI, ajouter le service `postgres:16-alpine` (variables `POSTGRES_USER`, `POSTGRES_PASSWORD` et `POSTGRES_DB` comme ci-dessus, port 5433, healthcheck `pg_isready`). Lancer `alembic upgrade head` puis `alembic downgrade base` avant pytest. Si la migration et les modèles ne correspondent plus, la CI échoue.
 - [ ] **Étape 6 : commit** `feat(portail): modèle de données, migration initiale et états`.
 
-### Tâche 3 : moteur de pipeline
+### Task 3: moteur de pipeline
 
 **Fichiers :**
 - Créer : `backend/portail/moteur.py`, `backend/tests/test_moteur.py`
@@ -158,7 +158,7 @@ pipelines:
 - [ ] **Étape 4 :** pytest donne PASS.
 - [ ] **Étape 5 : commit** `feat(portail): moteur de pipeline générique`.
 
-### Tâche 4 : client LiteLLM et filtre de réflexion
+### Task 4: client LiteLLM et filtre de réflexion
 
 **Fichiers :**
 - Créer : `backend/portail/llm.py`, `backend/tests/test_llm.py`
@@ -185,7 +185,7 @@ pipelines:
 - [ ] **Étape 4 :** pytest donne PASS.
 - [ ] **Étape 5 : commit** `feat(portail): client LiteLLM en streaming et filtre <think>`.
 
-### Tâche 5 : contexte envoyé au modèle et jauge
+### Task 5: contexte envoyé au modèle et jauge
 
 **Fichiers :**
 - Créer : `backend/portail/contexte.py`, `backend/tests/test_contexte.py`
@@ -213,7 +213,7 @@ pipelines:
 - [ ] **Étape 4 :** pytest donne PASS.
 - [ ] **Étape 5 : commit** `feat(portail): contexte envoyé au modèle et jauge`.
 
-### Tâche 6 : application FastAPI, projets et pipelines
+### Task 6: application FastAPI, projets et pipelines
 
 **Fichiers :**
 - Créer : `backend/portail/api.py`, `backend/portail/schemas.py`, `backend/tests/test_api_projets.py`
@@ -253,7 +253,7 @@ pipelines:
 - [ ] **Étape 4 :** pytest donne PASS (tous les tests).
 - [ ] **Étape 5 : commit** `feat(portail): API projets et pipelines`.
 
-### Tâche 7 : chat en streaming (tâche de fond et SSE)
+### Task 7: chat en streaming (tâche de fond et SSE)
 
 **Fichiers :**
 - Créer : `backend/portail/chat.py`, `backend/tests/test_chat.py`
@@ -306,7 +306,7 @@ pipelines:
 - [ ] **Étape 4 :** pytest donne PASS (tous les tests).
 - [ ] **Étape 5 : commit** `feat(portail): chat en streaming avec tâche de fond et SSE`.
 
-### Tâche 8 : édition et validation du document
+### Task 8: édition et validation du document
 
 **Fichiers :**
 - Modifier : `backend/portail/chat.py` (ou `api.py` si c'est plus simple), pour ajouter deux routes
@@ -329,7 +329,7 @@ pipelines:
 - [ ] **Étape 4 :** pytest donne PASS (tous les tests).
 - [ ] **Étape 5 : commit** `feat(portail): correction et validation de la spec`.
 
-### Tâche 9 : frontend, squelette, liste des pipelines et projets
+### Task 9: frontend, squelette, liste des pipelines et projets
 
 **Fichiers :**
 - Créer : `frontend/` (Vite, Vue 3, TS : `package.json`, `vite.config.ts`, `tsconfig.json`, `index.html`, `src/main.ts`, `src/App.vue`, `src/router.ts`), `src/api.ts`, `src/markdown.ts`, `src/markdown.test.ts`, `src/views/PipelinesView.vue`, `src/views/ProjetsView.vue`, `src/views/ProjetView.vue`, `src/components/EtatBadge.vue`
@@ -364,7 +364,7 @@ pipelines:
 - [ ] **Étape 5 :** dans la CI, ajouter le job `frontend` : `actions/setup-node` (node 22), `npm ci`, `npm run typecheck`, `npm test`, `npm run build`.
 - [ ] **Étape 6 : commit** `feat(portail): interface Vue, liste des pipelines et projets`.
 
-### Tâche 10 : frontend, détail d'un pipeline (chat, jauge, éditeur)
+### Task 10: frontend, détail d'un pipeline (chat, jauge, éditeur)
 
 **Fichiers :**
 - Créer : `frontend/src/views/PipelineView.vue`, `frontend/src/components/ChatEtape.vue`, `frontend/src/components/JaugeContexte.vue`, `frontend/src/components/EditeurDocument.vue`, `frontend/src/flux.ts`, `frontend/src/flux.test.ts`
@@ -401,7 +401,7 @@ pipelines:
   Le pipeline est alors « Terminé » dans la liste, et la spec apparaît sur la page du projet. Sans accès à LiteLLM, on fait le même parcours avec un faux serveur OpenAI minimal ; à défaut, on le note comme non vérifié.
 - [ ] **Étape 6 : commit** `feat(portail): détail d'un pipeline avec chat, jauge et éditeur de spec`.
 
-### Tâche 11 : image, service des fichiers statiques et déploiement
+### Task 11: image, service des fichiers statiques et déploiement
 
 **Fichiers :**
 - Créer : `Dockerfile`, `.dockerignore`, `deploy/portainer-stack.yml`, `deploy/nginx/portail.conf`, `.github/workflows/deploy.yml`, `backend/tests/test_static.py`
@@ -444,7 +444,7 @@ pipelines:
   - pas de redéploiement Portainer automatique : on fait « Pull and redeploy » à la main, comme l'indique le README.
 - [ ] **Étape 8 : commit** `feat(portail): image Docker, pile Portainer et vhost NGINX`.
 
-### Tâche 12 : PR dans le dépôt Infra (brouillon, sans fusion)
+### Task 12: PR dans le dépôt Infra (brouillon, sans fusion)
 
 À confier à l'agent `dev-infra`, dans `~/Code/Infra`, sur une branche dédiée, en **PR brouillon**. On ne pousse jamais sur `main` et on ne fusionne pas.
 
