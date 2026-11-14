@@ -581,3 +581,19 @@ async def test_confirmer_annuler_tache(client, faux_llm, sessions):
     await _attendre(client, cid)
     b = (await _detail(client, cid))["actions"][-1]
     assert (b["etat"], b["resultat"]) == ("echouee", "rien à annuler")
+
+
+async def test_reessayer_perime_l_action(client, faux_llm):
+    cid = await _creer(client)
+    faux_llm.reponses = [_appel("creer_projet", '{"nom": "Beta"}'), _texte("  ")]
+    await _envoyer(client, cid, "crée Beta")
+    await _attendre(client, cid)
+    d = await _detail(client, cid)
+    assert d["etat"] == "erreur" and d["actions"][0]["etat"] == "proposee"
+    faux_llm.reponses = [_texte("Repris.")]
+    assert (await client.post(f"/api/conversations/{cid}/reessayer")).status_code == 202
+    await _attendre(client, cid)
+    [a] = (await _detail(client, cid))["actions"]
+    assert a["etat"] == "perimee"
+    r = await _confirmer(client, a["id"])
+    assert r.status_code == 409 and r.json()["detail"] == "action périmée"

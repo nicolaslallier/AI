@@ -121,6 +121,14 @@ class ServiceConversation:
             c.titre = titre.strip()
             await s.commit()
 
+    async def _perimer(self, s: AsyncSession, cid: int) -> None:
+        """Sous le verrou de la conversation : une action ne s'exécute jamais hors de son fil."""
+        await s.execute(
+            update(ActionConversation)
+            .where(ActionConversation.conversation_id == cid, ActionConversation.etat == "proposee")
+            .values(etat="perimee")
+        )
+
     async def envoyer(self, cid: int, contenu: str) -> None:
         async with self._sessions() as s:
             c = await self._conversation(s, cid)
@@ -134,15 +142,7 @@ class ServiceConversation:
             if jauge(agent, avec + [{"role": "user", "content": contenu}]).niveau == "plein":
                 raise Refus(409, "contexte plein : ouvre une nouvelle conversation")
             s.add(MessageConversation(conversation_id=cid, role="user", contenu=contenu))
-            # une action ne s'exécute jamais hors du fil où elle a été proposée
-            await s.execute(
-                update(ActionConversation)
-                .where(
-                    ActionConversation.conversation_id == cid,
-                    ActionConversation.etat == "proposee",
-                )
-                .values(etat="perimee")
-            )
+            await self._perimer(s, cid)
             if not c.titre:
                 c.titre = contenu[:60]
             c.etat, c.erreur = "en_cours", None
@@ -155,6 +155,7 @@ class ServiceConversation:
             if c.etat != "erreur":
                 raise Refus(409, "rien à relancer")
             self._agent()
+            await self._perimer(s, cid)  # le tour relancé reproposera s'il le faut
             c.etat, c.erreur = "en_cours", None
             await s.commit()
         self.lancer(cid)
