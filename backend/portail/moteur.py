@@ -4,7 +4,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from portail.agents import Catalogue
-from portail.db import Document, Etape, Pipeline, Proposition
+from portail.db import Document, Etape, Pipeline, Projet, Proposition
 from portail.etats import Etat, etat_pipeline
 
 
@@ -23,7 +23,7 @@ async def spec_courante(session: AsyncSession, projet_id: int) -> Document | Non
             Document.type == "spec",
             Document.etat == "validee",
         )
-        .order_by(Document.maj_le.desc())
+        .order_by(Document.maj_le.desc(), Document.id.desc())
         .limit(1)
     )
 
@@ -35,6 +35,8 @@ async def creer_pipeline(
     if type_ not in catalogue.pipelines:
         raise Refus(404, f"type de pipeline inconnu : {type_}")
     if type_ == "planification":
+        # verrou de ligne : deux planifications simultanées du même projet se sérialisent
+        await session.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
         if await spec_courante(session, projet_id) is None:
             raise Refus(409, "aucune spec validée pour ce projet")
         actif = await session.scalar(

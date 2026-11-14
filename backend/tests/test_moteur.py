@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from conftest import CATALOGUE_TEST
 from sqlalchemy import select
@@ -121,9 +123,12 @@ async def test_etape_auto_demarre_en_cours(sessions):
     async with sessions() as s:
         projet = await _projet(s)
         p, a_lancer = await creer_pipeline(s, CATALOGUE_TEST, projet.id, "planification")
+        assert a_lancer is p.etapes[0]
+        await s.commit()
+        p = await _relire(s, p)
         assert p.etapes[0].etat == Etat.EN_COURS
         assert p.etapes[0].action == "rediger"
-        assert a_lancer is p.etapes[0]
+        assert p.etat == Etat.EN_COURS
 
 
 async def test_terminer_lance_l_etape_taches(sessions):
@@ -188,4 +193,18 @@ async def test_annuler_rejette_les_propositions(sessions):
         assert list(etats) == ["rejetee", "acceptee"]
         with pytest.raises(Refus) as e:
             await annuler_pipeline(s, p)
+        assert e.value.code == 409
+
+
+async def test_planifications_concurrentes_se_serialisent(sessions):
+    async with sessions() as a, sessions() as b:
+        projet = await _projet(a)
+        await a.commit()
+        await creer_pipeline(a, CATALOGUE_TEST, projet.id, "planification")  # non commité
+        tache = asyncio.create_task(creer_pipeline(b, CATALOGUE_TEST, projet.id, "planification"))
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(tache), 0.5)  # B attend le verrou de A
+        await a.commit()
+        with pytest.raises(Refus) as e:
+            await asyncio.wait_for(tache, 5)
         assert e.value.code == 409
