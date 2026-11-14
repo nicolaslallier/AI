@@ -20,6 +20,7 @@ d'un service tiers quand un modèle local suffit.
 | Outil | Type | À quoi il sert |
 |---|---|---|
 | [`mcp-fichiers`](mcp-servers/mcp-fichiers/) | Serveur MCP (HTTP) | Déposer des fichiers dans une copie d'un coffre Obsidian et en ressortir, avec l'extension expérimentale `io.modelcontextprotocol/files` ; client `mcpf` |
+| [`orchestrateur`](agents/orchestrateur/) | Agent (programme, Claude Agent SDK) | Découpe une demande de développement (texte ou issue GitHub) et la fait réaliser par les sous-agents [`explorateur`, `codeur`, `testeur`, `relecteur`](agents/) sur une branche à part, avec suivi d'état et reprise |
 
 Chaque outil ajoute sa ligne ici, dans la même PR que l'outil lui-même.
 
