@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from portail.agents import Agent, Catalogue
 from portail.boucle import boucle_outils
 from portail.contexte import construire, jauge
-from portail.db import Document, Etape, Message, Pipeline, Projet
+from portail.db import Document, Etape, Message, Pipeline, Projet, Proposition, Tache
 from portail.depots import Depots, ErreurDepot
 from portail.etats import Etat
 from portail.llm import ClientLLM, FiltreReflexion, retirer_reflexion
@@ -26,6 +26,13 @@ from portail.moteur import (
     terminer_etape,
 )
 from portail.outils import OutilsDepot, apercu
+from portail.propositions import (
+    SCHEMA_PROPOSITIONS,
+    PropositionLue,
+    enregistrer_propositions,
+    lire_propositions,
+    plan_du_pipeline,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +72,17 @@ async def annexes(s: AsyncSession, agent: Agent, etape: Etape, projet_id: int) -
             sortie.append("Spec courante :\n\n" + spec.contenu)
         if plan := await dernier_valide(s, projet_id, "plan"):
             sortie.append("Plan validé précédent (à réviser) :\n\n" + plan.contenu)
-    # produit == "taches" : annexes de la tâche 9
+    if agent.produit == "taches":
+        if plan := await plan_du_pipeline(s, etape.pipeline_id):
+            sortie.append("Plan validé :\n\n" + plan.contenu)
+        taches = (
+            await s.scalars(select(Tache).where(Tache.projet_id == projet_id).order_by(Tache.id))
+        ).all()
+        liste = [
+            {c: getattr(t, c) for c in ("id", "titre", "colonne", "protegee", "verrou")}
+            for t in taches
+        ]
+        sortie.append("Tâches existantes (JSON) :\n\n" + json.dumps(liste, ensure_ascii=False))
     if etape.apercu:
         sortie.append(f"Aperçu du dépôt (SHA {etape.sha}) :\n\n" + etape.apercu)
     return sortie
@@ -229,6 +246,55 @@ class ServiceChat:
             self.diffuseur.publier(etape_id, {"type": "delta", "texte": visible})
         return visible, resultat.limite_atteinte
 
+    async def _proposer(
+        self, agent: Agent, demande: list[dict], cles: set[int]
+    ) -> list[PropositionLue]:
+        """Réponse JSON de l'agent de tâches ; une seule relance si elle est invalide."""
+        format_ = {
+            "type": "json_schema",
+            "json_schema": {"name": "propositions", "schema": SCHEMA_PROPOSITIONS},
+        }
+        for essai in range(2):
+            reponse = await self._llm.completer(
+                agent.modele, demande, agent.temperature, response_format=format_
+            )
+            texte = retirer_reflexion(reponse.get("content") or "").strip()
+            try:
+                return lire_propositions(texte, cles)
+            except ValueError as e:
+                if essai:
+                    raise ValueError(f"propositions invalides : {e}") from None
+                demande = demande + [
+                    {"role": "assistant", "content": texte},
+                    {
+                        "role": "user",
+                        "content": f"Réponse invalide : {e}. Renvoie uniquement le JSON corrigé.",
+                    },
+                ]
+
+    async def _enregistrer(
+        self, s: AsyncSession, etape: Etape, agent: Agent, lues: list[PropositionLue]
+    ) -> Etape | None:
+        refus = await enregistrer_propositions(s, etape, lues, f"agent:{agent.nom}")
+        if refus:
+            s.add(
+                Message(
+                    etape_id=etape.id,
+                    role="system",
+                    contenu="propositions écartées : " + "; ".join(refus),
+                )
+            )
+            await s.flush()
+        ouvertes = await s.scalar(
+            select(func.count()).where(
+                Proposition.etape_id == etape.id, Proposition.etat == "ouverte"
+            )
+        )
+        if ouvertes:
+            await changer_etat(s, etape, Etat.EN_ATTENTE)
+            return None
+        return await terminer_etape(s, self._catalogue, etape)
+
     async def _tache(self, etape_id: int) -> None:
         d = self.diffuseur
         try:
@@ -244,37 +310,49 @@ class ServiceChat:
                 action = etape.action
                 consigne = agent.consigne_redaction if action != "repondre" else None
                 demande = await self._demande(s, etape, agent, consigne)
-            limite = False
-            if arbre is None:
+                cles = set(
+                    (await s.scalars(select(Tache.id).where(Tache.projet_id == projet.id))).all()
+                )
+            limite, visible, suivante = False, "", None
+            if action == "taches":
+                lues = await self._proposer(agent, demande, cles)
+            elif arbre is None:
                 visible = await self._streamer(etape_id, agent, demande)
             else:
                 visible, limite = await self._boucle(etape_id, agent, demande, arbre)
             async with self._sessions() as s:
+                # ordre des verrous : projet d'abord, comme pour les tâches et les propositions
+                await s.scalar(select(Projet.id).where(Projet.id == projet.id).with_for_update())
                 etape = await self._etape(s, etape_id)
                 if etape.etat != Etat.EN_COURS:  # annulée entre-temps : on n'écrase rien
                     return
-                if not visible:
+                if action == "taches":
+                    suivante = await self._enregistrer(s, etape, agent, lues)
+                elif not visible:
                     await changer_etat(s, etape, Etat.ECHOUEE, "réponse vide du modèle")
                     await s.commit()
                     await self._depots.liberer(etape_id)
                     d.publier(etape_id, {"type": "erreur", "message": "réponse vide du modèle"})
                     return
-                if limite:
-                    s.add(
-                        Message(
-                            etape_id=etape_id,
-                            role="system",
-                            contenu=f"limite de {agent.tours_max} appels d'outils atteinte : "
-                            "la réponse peut être incomplète",
-                        )
-                    )
-                    await s.flush()
-                if action == "repondre":
-                    s.add(Message(etape_id=etape_id, role="assistant", contenu=visible))
                 else:
-                    await self._ecrire_document(s, etape, agent, visible)
-                await changer_etat(s, etape, Etat.EN_ATTENTE)
+                    if limite:
+                        s.add(
+                            Message(
+                                etape_id=etape_id,
+                                role="system",
+                                contenu=f"limite de {agent.tours_max} appels d'outils atteinte : "
+                                "la réponse peut être incomplète",
+                            )
+                        )
+                        await s.flush()
+                    if action == "repondre":
+                        s.add(Message(etape_id=etape_id, role="assistant", contenu=visible))
+                    else:
+                        await self._ecrire_document(s, etape, agent, visible)
+                    await changer_etat(s, etape, Etat.EN_ATTENTE)
                 await s.commit()
+            if suivante:
+                self.lancer(suivante.id)
             d.publier(etape_id, {"type": "fin"})
         except Exception as exc:  # noqa: BLE001 - toute erreur doit finir en étape échouée
             try:

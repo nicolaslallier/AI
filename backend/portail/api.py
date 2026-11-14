@@ -31,14 +31,17 @@ from portail.depots import Depots, ErreurDepot
 from portail.etats import Etat
 from portail.llm import ClientLLM
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
+from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.schemas import (
     DEPOT_RE,
+    Acceptation,
     Deplacement,
     DocumentOut,
     DonneesTache,
     DonneesTachePartielles,
     EtapeOut,
     Kanban,
+    KanbanToutAccepte,
     PipelineDetail,
     PipelineIn,
     PipelineResume,
@@ -144,6 +147,28 @@ async def _vues(session: AsyncSession, taches: list[Tache]) -> list[TacheVue]:
         )
         for t in taches
     ]
+
+
+async def _kanban(session: AsyncSession, projet_id: int) -> Kanban:
+    taches = (
+        await session.scalars(
+            select(Tache)
+            .where(Tache.projet_id == projet_id)
+            .order_by(Tache.colonne, Tache.rang, Tache.id)
+            .execution_options(populate_existing=True)
+        )
+    ).all()
+    props = (
+        await session.scalars(
+            select(Proposition)
+            .where(Proposition.projet_id == projet_id, Proposition.etat == "ouverte")
+            .order_by(Proposition.id)
+        )
+    ).all()
+    return Kanban(
+        taches=await _vues(session, list(taches)),
+        propositions=[PropositionVue.model_validate(p, from_attributes=True) for p in props],
+    )
 
 
 async def _vue(session: AsyncSession, tache_id: int) -> TacheVue:
@@ -318,24 +343,69 @@ def create_app(
     async def kanban(projet_id: int, s: Session):
         if await s.get(Projet, projet_id) is None:
             raise Refus(404, "projet introuvable")
-        taches = (
+        return await _kanban(s, projet_id)
+
+    async def _proposition(s: AsyncSession, proposition_id: int) -> Proposition:
+        p = await s.get(Proposition, proposition_id)
+        if p is None:
+            raise Refus(404, "proposition introuvable")
+        return p
+
+    async def _fermer(request: Request, s: AsyncSession, etape_id: int) -> None:
+        """Commite ; termine l'étape si plus rien n'est ouvert et lance la suivante."""
+        suivante = await fermer_si_fini(s, request.app.state.catalogue, etape_id)
+        await s.commit()
+        if suivante:
+            request.app.state.chat.lancer(suivante.id)
+
+    @app.post("/api/propositions/{proposition_id}/accepter", response_model=Kanban)
+    async def accepter_proposition(
+        proposition_id: int, request: Request, s: Session, corps: Acceptation | None = None
+    ):
+        p = await _proposition(s, proposition_id)
+        try:
+            await accepter(s, p, corps.donnees if corps else None)
+        except Refus:
+            if p.etat == "perimee":  # le marquage est gardé, même si l'acceptation échoue
+                await _fermer(request, s, p.etape_id)
+            raise
+        await _fermer(request, s, p.etape_id)
+        return await _kanban(s, p.projet_id)
+
+    @app.post("/api/propositions/{proposition_id}/rejeter", response_model=Kanban)
+    async def rejeter_proposition(proposition_id: int, request: Request, s: Session):
+        p = await _proposition(s, proposition_id)
+        await rejeter(s, p)
+        await _fermer(request, s, p.etape_id)
+        return await _kanban(s, p.projet_id)
+
+    @app.post("/api/etapes/{etape_id}/propositions/tout-accepter", response_model=KanbanToutAccepte)
+    async def tout_accepter(etape_id: int, request: Request, s: Session):
+        etape = await s.get(Etape, etape_id)
+        if etape is None:
+            raise Refus(404, "étape introuvable")
+        projet_id = await s.scalar(
+            select(Pipeline.projet_id).where(Pipeline.id == etape.pipeline_id)
+        )
+        ids = (
             await s.scalars(
-                select(Tache)
-                .where(Tache.projet_id == projet_id)
-                .order_by(Tache.colonne, Tache.rang, Tache.id)
-            )
-        ).all()
-        props = (
-            await s.scalars(
-                select(Proposition)
-                .where(Proposition.projet_id == projet_id, Proposition.etat == "ouverte")
+                select(Proposition.id)
+                .where(Proposition.etape_id == etape_id, Proposition.etat == "ouverte")
                 .order_by(Proposition.id)
             )
         ).all()
-        return Kanban(
-            taches=await _vues(s, list(taches)),
-            propositions=[PropositionVue.model_validate(p, from_attributes=True) for p in props],
-        )
+        perimees = 0
+        for i in ids:
+            p = await s.get(Proposition, i)
+            try:
+                await accepter(s, p, None)
+            except Refus:
+                if p.etat != "perimee":
+                    raise
+                perimees += 1
+        await _fermer(request, s, etape_id)
+        k = await _kanban(s, projet_id)
+        return KanbanToutAccepte(**k.model_dump(), perimees=perimees)
 
     @app.post("/api/projets/{projet_id}/taches", status_code=201, response_model=TacheVue)
     async def ajouter_tache(projet_id: int, corps: DonneesTache, s: Session):

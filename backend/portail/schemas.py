@@ -197,6 +197,14 @@ class Kanban(BaseModel):
     propositions: list[PropositionVue]
 
 
+class KanbanToutAccepte(Kanban):
+    perimees: int
+
+
+class Acceptation(BaseModel):
+    donnees: DonneesTache | None = None
+
+
 class Deplacement(BaseModel):
     colonne: str
     avant_id: int | None = None
