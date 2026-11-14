@@ -109,8 +109,15 @@ liste permise. La PR Infra se réduit à `run-net` et à sa sortie squid.
   la tâche *Prête* de plus petit `(rang, id)`.
 - **Trois** nouveaux secrets dans OpenBao `infra/portail` et dans `MAP` : `PORTAIL_GITHUB_APP_ID`,
   `PORTAIL_GITHUB_APP_CLE` et `PORTAIL_LANCEUR_SECRET` (au moins 32 caractères, partagé portail ↔ lanceur).
-- Le portail passe à l'uid 1000. Les clones de B dans `/donnees` ne sont qu'un cache : l'image les vide au démarrage
-  s'ils ne lui appartiennent pas, plutôt qu'une migration.
+- Le portail passe à l'uid 1000. Les clones de B dans `/donnees` ne sont qu'un cache, mais un uid 1000 sans root ne
+  peut pas reprendre l'ancien volume : la pile monte un **volume neuf** (`portail-donnees-2`), l'ancien reste orphelin.
+- Le portail, qui monte le volume des espaces, supprime lui-même le dossier d'un espace ; le lanceur ne monte pas ce volume
+  (il le désigne par son nom) et ne fait que nettoyer conteneurs et réseau de services.
+- `.git` est **toujours** monté en lecture seule dans les conteneurs de commande : sinon une commande pourrait planter un
+  hook ou une option de `.git/config` que le git du portail exécuterait.
+- La clé de la GitHub App est rangée **en base64 sur une ligne** (`vault-render-env.sh` refuse les retours à la ligne).
+- Après un renvoi de la revue aux tests, la vérification « rouge » est sautée : le code existe déjà, des tests ajoutés
+  peuvent légitimement passer.
 - Un **plan C1 neuf** remplace le plan C pour C1. Ses valeurs (délais, limites, auteurs, branches, durcissement des
   conteneurs) sont reprises du plan C, sauf là où ce document le contredit.
 
