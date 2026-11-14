@@ -307,6 +307,26 @@ async def test_repondre_ligne_route():
 
 
 async def test_champ_manquant_erreur():
-    app, _ = _app_lecture(lambda r: [_com(1) | {"user": None}])
+    app, _ = _app_lecture(lambda r: [_com(1) | {"user": "nicolas"}])
     with pytest.raises(ErreurGitHub):
         await app.commentaires_conversation("a/b", 7)
+
+
+async def test_utilisateur_supprime_ignore():
+    app, _ = _app_lecture(lambda r: [_com(1) | {"user": None}, _com(2)])
+    assert [c.id for c in await app.commentaires_conversation("a/b", 7)] == [2]
+
+
+async def test_date_sans_fuseau_forcee_utc():
+    import datetime as dt
+
+    app, _ = _app_lecture(lambda r: [_com(1, created_at="2026-11-14T10:00:00")])
+    (c,) = await app.commentaires_conversation("a/b", 7)
+    assert c.cree_le.tzinfo is dt.UTC
+
+
+async def test_plus_de_1000_elements_refuse():
+    app, vues = _app_lecture(lambda r: [_com(i) for i in range(100)])
+    with pytest.raises(ErreurGitHub, match="plus de 1000"):
+        await app.commentaires_conversation("a/b", 7)
+    assert len(vues) == 10

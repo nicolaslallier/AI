@@ -192,13 +192,21 @@ class GitHubApp:
                 raise ErreurGitHub(f"réponse GitHub inattendue : liste attendue sur {chemin}")
             tout += page
             if len(page) < _PAGE:
-                break
-        return tout
+                return tout
+        raise ErreurGitHub(f"plus de {_PAGE * _PAGES_MAX} éléments sur {chemin} : lecture refusée")
+
+    @staticmethod
+    def _sans_vide(items) -> list[CommentaireGitHub]:
+        return [c for c in items if c is not None]
 
     def _commentaire(self, d: Any, type_: Literal["revue", "ligne", "conversation"], date: str):
+        if isinstance(d, dict) and "user" in d and d["user"] is None:
+            return None  # compte supprimé (« ghost ») : jamais Nicolas, ignoré
         user = self._champ(d, "user", dict)
         try:
             cree_le = datetime.fromisoformat(self._champ(d, date, str))
+            if cree_le.tzinfo is None:
+                cree_le = cree_le.replace(tzinfo=UTC)
         except ValueError:
             raise ErreurGitHub(f"réponse GitHub inattendue : {date}") from None
         corps = d.get("body")
@@ -221,19 +229,19 @@ class GitHubApp:
     async def revues(self, depot: str, numero: int) -> list[CommentaireGitHub]:
         brutes = await self._pages(depot, f"/pulls/{int(numero)}/reviews")
         # une revue PENDING (non soumise) n'a pas de submitted_at : ignorée
-        return [
+        return self._sans_vide(
             self._commentaire(d, "revue", "submitted_at")
             for d in brutes
             if not (isinstance(d, dict) and d.get("submitted_at") is None)
-        ]
+        )
 
     async def commentaires_ligne(self, depot: str, numero: int) -> list[CommentaireGitHub]:
         brutes = await self._pages(depot, f"/pulls/{int(numero)}/comments")
-        return [self._commentaire(d, "ligne", "created_at") for d in brutes]
+        return self._sans_vide(self._commentaire(d, "ligne", "created_at") for d in brutes)
 
     async def commentaires_conversation(self, depot: str, numero: int) -> list[CommentaireGitHub]:
         brutes = await self._pages(depot, f"/issues/{int(numero)}/comments")
-        return [self._commentaire(d, "conversation", "created_at") for d in brutes]
+        return self._sans_vide(self._commentaire(d, "conversation", "created_at") for d in brutes)
 
     async def repondre_ligne(
         self, depot: str, numero: int, commentaire_id: int, texte: str
