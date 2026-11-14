@@ -1,0 +1,25 @@
+services:
+  portail:
+    image: ghcr.io/nicolaslallier/ai-portail:${IMAGE_TAG:-latest}
+    environment:
+      PORTAIL_DATABASE_URL: postgresql+psycopg://portail:${PORTAIL_DB_PASSWORD:?}@postgres:5432/portail
+      PORTAIL_LITELLM_URL: http://litellm:4000
+      PORTAIL_LITELLM_CLE: ${PORTAIL_LITELLM_CLE:?}
+      PORTAIL_EXIGER_UTILISATEUR: "true"
+    networks: [infra-net]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/api/sante', timeout=3)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    mem_limit: 512m
+    restart: unless-stopped
+
+networks:
+  infra-net:
+    external: true
