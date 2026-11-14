@@ -5,14 +5,19 @@ import { rendreMarkdown } from '../markdown'
 import JaugeContexte from './JaugeContexte.vue'
 
 const props = defineProps<{ etape: Etape; partiel?: string; message?: string }>()
-const emit = defineEmits<{ envoyer: [contenu: string]; rediger: []; reessayer: [] }>()
+const emit = defineEmits<{ envoyer: [contenu: string, vider: () => void]; rediger: []; reessayer: [] }>()
 const saisie = ref('')
 
 function envoyer() {
   const t = saisie.value.trim()
   if (!t || props.etape.etat !== 'en_attente' || props.etape.jauge.niveau === 'plein') return
-  emit('envoyer', t)
-  saisie.value = ''
+  emit('envoyer', t, () => (saisie.value = ''))
+}
+
+function surEntree(e: KeyboardEvent) {
+  if (e.isComposing) return
+  e.preventDefault()
+  envoyer()
 }
 </script>
 
@@ -38,7 +43,7 @@ function envoyer() {
       rows="3"
       placeholder="Écris ton message…"
       :disabled="etape.etat !== 'en_attente' || etape.jauge.niveau === 'plein'"
-      @keydown.enter.exact.prevent="envoyer"
+      @keydown.enter.exact="surEntree"
     ></textarea>
     <button :disabled="etape.etat !== 'en_attente'" @click="emit('rediger')">Rédiger la spec</button>
   </section>

@@ -14,6 +14,7 @@ const pipeline = ref<PipelineDetail | null>(null)
 const partiels = reactive<Record<number, string>>({})
 const message = ref('')
 const abonnements = new Map<number, () => void>()
+let demonte = false
 
 function desabonner(etapeId: number) {
   abonnements.get(etapeId)?.()
@@ -22,7 +23,7 @@ function desabonner(etapeId: number) {
 }
 
 function abonner(etapeId: number) {
-  if (abonnements.has(etapeId)) return
+  if (demonte || abonnements.has(etapeId)) return
   const fini = () => {
     desabonner(etapeId)
     charger(false)
@@ -40,28 +41,37 @@ function abonner(etapeId: number) {
 
 async function charger(ecouter = true) {
   try {
-    pipeline.value = await lirePipeline(Number(props.id))
+    const p = await lirePipeline(Number(props.id))
+    if (demonte) return
+    pipeline.value = p
   } catch (e) {
+    if (demonte) return
     message.value = (e as Error).message
     return
   }
   if (ecouter) for (const e of pipeline.value.etapes) if (e.etat === 'en_cours') abonner(e.id)
 }
 
-async function action(f: () => Promise<unknown>, ecouter = true) {
+async function action(f: () => Promise<unknown>, ecouter = true): Promise<boolean> {
   message.value = ''
   try {
     await f()
   } catch (e) {
+    if (demonte) return false
     if (e instanceof ErreurApi && (e.status === 409 || e.status === 422)) message.value = e.detail
     else message.value = (e as Error).message
-    return
+    return false
   }
+  if (demonte) return true
   await charger(ecouter)
+  return true
 }
 
 onMounted(charger)
-onBeforeUnmount(() => [...abonnements.keys()].forEach(desabonner))
+onBeforeUnmount(() => {
+  demonte = true
+  ;[...abonnements.keys()].forEach(desabonner)
+})
 </script>
 
 <template>
@@ -83,7 +93,7 @@ onBeforeUnmount(() => [...abonnements.keys()].forEach(desabonner))
           :etape="e"
           :partiel="partiels[e.id]"
           :message="e.document ? '' : message"
-          @envoyer="(c) => action(() => envoyerMessage(e.id, c))"
+          @envoyer="(c, vider) => action(() => envoyerMessage(e.id, c)).then((ok) => ok && vider())"
           @rediger="action(() => rediger(e.id))"
           @reessayer="action(() => reessayer(e.id))"
         />
