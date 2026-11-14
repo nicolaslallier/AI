@@ -17,6 +17,7 @@ from portail.agents import Catalogue, charger_catalogue
 from portail.chat import Diffuseur, ServiceChat, annexes
 from portail.config import Reglages
 from portail.contexte import construire, jauge
+from portail.conversations import ServiceConversation
 from portail.db import (
     CommandeLancee,
     Etape,
@@ -43,6 +44,9 @@ from portail.schemas import (
     DEPOT_RE,
     Acceptation,
     CommandeVue,
+    ConversationDetail,
+    ConversationPatch,
+    ConversationResume,
     Deplacement,
     DocumentOut,
     DonneesTache,
@@ -312,6 +316,12 @@ def create_app(
         app.state.chat = ServiceChat(
             app.state.sessions, app.state.catalogue, app.state.llm, app.state.diffuseur, depots
         )
+        app.state.conversations = ServiceConversation(
+            app.state.sessions, app.state.catalogue, app.state.llm, Diffuseur()
+        )
+        async with app.state.sessions() as s:
+            await app.state.conversations.recuperer_interrompues(s)
+            await s.commit()
         orch = orchestrateur or _orchestrateur(
             r, app.state.sessions, app.state.catalogue, app.state.llm
         )
@@ -325,7 +335,7 @@ def create_app(
                 asyncio.create_task(suivi.tourner()),
             ]
         yield
-        taches = list(app.state.chat.taches.values())
+        taches = [*app.state.chat.taches.values(), *app.state.conversations.taches.values()]
         if orch:
             taches += [*boucles, *orch.taches.values()]
         for t in taches:
@@ -597,6 +607,47 @@ def create_app(
         chat = request.app.state.chat
         await chat.etat(etape_id)  # 404 avant de commencer le flux
         return StreamingResponse(chat.flux(etape_id), media_type="text/event-stream")
+
+    @app.get("/api/conversations", response_model=list[ConversationResume])
+    async def lister_conversations(request: Request):
+        return await request.app.state.conversations.lister()
+
+    @app.post("/api/conversations", status_code=201, response_model=ConversationDetail)
+    async def creer_conversation(request: Request):
+        service = request.app.state.conversations
+        return await service.detail((await service.creer()).id)
+
+    @app.get("/api/conversations/{conversation_id}", response_model=ConversationDetail)
+    async def lire_conversation(conversation_id: int, request: Request):
+        return await request.app.state.conversations.detail(conversation_id)
+
+    @app.patch("/api/conversations/{conversation_id}", response_model=ConversationDetail)
+    async def renommer_conversation(
+        conversation_id: int, corps: ConversationPatch, request: Request
+    ):
+        service = request.app.state.conversations
+        await service.renommer(conversation_id, corps.titre)
+        return await service.detail(conversation_id)
+
+    @app.delete("/api/conversations/{conversation_id}", status_code=204)
+    async def supprimer_conversation(conversation_id: int, request: Request):
+        await request.app.state.conversations.supprimer(conversation_id)
+
+    @app.post("/api/conversations/{conversation_id}/messages", status_code=202)
+    async def envoyer_conversation(conversation_id: int, corps: MessageIn, request: Request):
+        await request.app.state.conversations.envoyer(conversation_id, corps.contenu)
+        return {}
+
+    @app.post("/api/conversations/{conversation_id}/reessayer", status_code=202)
+    async def reessayer_conversation(conversation_id: int, request: Request):
+        await request.app.state.conversations.reessayer(conversation_id)
+        return {}
+
+    @app.get("/api/conversations/{conversation_id}/flux")
+    async def flux_conversation(conversation_id: int, request: Request):
+        service = request.app.state.conversations
+        await service.etat(conversation_id)  # 404 avant de commencer le flux
+        return StreamingResponse(service.flux(conversation_id), media_type="text/event-stream")
 
     if r.static_dir:
         racine = r.static_dir.resolve()

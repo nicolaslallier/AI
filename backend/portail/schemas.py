@@ -1,7 +1,7 @@
 import re
 from datetime import datetime
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from portail.contexte import Jauge
 
@@ -89,6 +89,26 @@ class MessageOut(BaseModel):
     contenu: str
     outil: str | None
     cree_le: datetime
+
+
+class ConversationResume(BaseModel):
+    id: int
+    titre: str
+    etat: str
+    maj_le: datetime
+
+
+class ConversationDetail(BaseModel):
+    id: int
+    titre: str
+    etat: str
+    erreur: str | None
+    messages: list[MessageOut]
+    jauge: Jauge | None  # None si l'agent manque au catalogue
+
+
+class ConversationPatch(BaseModel):
+    titre: str = Field(max_length=200)
 
 
 class DocumentOut(BaseModel):
