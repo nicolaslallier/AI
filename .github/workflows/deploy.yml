@@ -1,15 +1,25 @@
-# Construit l'image et la publie sur GHCR. Le redéploiement se fait à la main dans
-# Portainer (« Pull and redeploy »).
+# Construit l'image, la publie sur GHCR, puis redéploie la pile « portail » dans
+# Portainer depuis le runner auto-hébergé (le Portainer de l'Infra est sur le LAN).
 #
-# Ne jamais ajouter de déclencheur pull_request (ni pull_request_target) à ce workflow :
-# il pousse sur GHCR avec GITHUB_TOKEN, et la PR d'un fork apporte son propre fichier de
-# workflow.
+# N'ajoutez JAMAIS de déclencheur pull_request (ni pull_request_target) à ce
+# workflow. Le repo est PUBLIC, le job deploy tourne sur un runner qui tient les
+# secrets de déploiement, et la PR d'un fork apporte son propre fichier de workflow :
+# c'est de l'exécution de code arbitraire avec ces secrets.
 name: Build and push image
 
 on:
   push:
     branches: [main]
+    # Ce qui ne peut changer aucun conteneur ne mérite pas un redéploiement.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
   workflow_dispatch:
+
+# Un déploiement à la fois, jamais annulé en vol : Portainer resterait à mi-redéploiement.
+concurrency:
+  group: deploy-portail
+  cancel-in-progress: false
 
 jobs:
   image:
@@ -46,3 +56,35 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    needs: image
+    runs-on: [self-hosted, ai]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Redéployer par Portainer
+        env:
+          PORTAINER_URL: ${{ vars.PORTAINER_URL || 'https://portainer.infra.famillelallier.net' }}
+          PORTAINER_ENDPOINT_ID: ${{ vars.PORTAINER_ENDPOINT_ID }}
+          VAULT_URL: ${{ vars.VAULT_URL || 'https://vault.infra.famillelallier.net' }}
+          # CA de l'Infra montée dans le runner (vérifie Portainer et OpenBao).
+          PORTAINER_CA_CERT: ${{ vars.INFRA_CA_CERT_PATH || '/etc/ai/infra-ca.crt' }}
+          VAULT_CA_CERT: ${{ vars.INFRA_CA_CERT_PATH || '/etc/ai/infra-ca.crt' }}
+          PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
+          BAO_TOKEN: ${{ secrets.BAO_TOKEN }}
+        run: |
+          set -euo pipefail
+          for v in PORTAINER_API_KEY BAO_TOKEN; do
+            [ -n "${!v}" ] || { echo "::error::$v absent (secret du dépôt)"; exit 1; }
+          done
+          umask 077
+          export PORTAIL_STACK_ENV="$RUNNER_TEMP/portail.env"
+          trap 'rm -f "$PORTAIL_STACK_ENV"' EXIT
+          scripts/vault-render-env.sh
+          scripts/portainer-stack.sh up
