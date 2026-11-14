@@ -167,7 +167,7 @@ async def test_parcours_complet_ouvre_une_pr(monde):
     async with monde.sessions() as s:
         noms = (await s.scalars(select(CommandeLancee.nom).order_by(CommandeLancee.id))).all()
         etapes = (await s.scalars(select(Etape).order_by(Etape.ordre))).all()
-    assert noms == ["installer", "tests_cibles", "tests_cibles", "tests"]
+    assert noms == ["installer", "tests_cibles", "installer", "tests_cibles", "tests"]
     assert [(e.agent, e.action) for e in etapes] == [
         ("portail", "preparation"), ("tests", None), ("portail", "rouge"), ("code", None),
         ("portail", "verification"), ("revue", None), ("portail", "pr"),
@@ -232,6 +232,113 @@ async def test_verification_rouge_bloque_avec_sortie(monde):
     assert tache.colonne == "bloquee"
     assert "sortie de pytest" in tache.resume_blocage
     assert pipeline.etat == "echouee"
+    assert monde.github.prs == {}
+
+
+async def test_verification_efface_les_ignores_et_reinstalle(monde):
+    vus = []
+
+    def piege(d: Path):  # une commande de l'agent de code écrit dans .venv/ (ignoré)
+        (d / ".venv").mkdir(exist_ok=True)
+        (d / ".venv" / "sitecustomize.py").write_text("import os\n")
+
+    def constat(d: Path):
+        vus.append((d / ".venv").exists())
+
+    def suite(d: Path):  # 1re fois (après le rouge) : l'agent de code ; ensuite : la vérification
+        (constat if len(vus) > 1 else piege)(d)
+
+    monde.lanceur.effets = {"pytest": suite, CIBLES: constat}
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [
+        *TESTS_OK, appel("lancer", nom="tests"), texte("fait"), verdict("ok"),
+    ]  # fmt: skip
+    pid = await monde.lancer()
+    _ex, tache, _pipeline = await monde.etat(pid)
+    assert tache.colonne == "en_revue"
+    assert vus == [False, False, False]  # rouge, puis tests_cibles et tests de la vérification
+    async with monde.sessions() as s:
+        etape = await s.scalar(select(Etape.id).where(Etape.action == "verification"))
+        noms = (
+            await s.scalars(
+                select(CommandeLancee.nom)
+                .where(CommandeLancee.etape_id == etape)
+                .order_by(CommandeLancee.id)
+            )
+        ).all()
+    assert noms == ["installer", "tests_cibles", "tests"]
+
+
+async def test_installation_echouee_en_verification_bloque(monde):
+    monde.lanceur.codes = {CIBLES: [1], "installer": [0, 1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+    pid = await monde.lancer()
+    _ex, tache, _pipeline = await monde.etat(pid)
+    assert tache.resume_blocage.startswith("installation échouée")
+
+
+@pytest.mark.parametrize(
+    ("code", "raison"),
+    [(3, "commande de tests invalide"), (4, "commande de tests invalide"), (5, "aucun test écrit")],
+)
+async def test_rouge_code_reserve_bloque(monde, code, raison):
+    monde.lanceur.codes = {CIBLES: [code]}
+    monde.llm.reponses = [*TESTS_OK]
+    pid = await monde.lancer()
+    _ex, tache, _pipeline = await monde.etat(pid)
+    assert tache.colonne == "bloquee"
+    assert tache.resume_blocage.startswith(raison)
+
+
+@pytest.mark.parametrize("code", [1, 2, 101])
+async def test_rouge_echec_vaut_rouge(monde, code):
+    # pytest 1 (échecs) et 2 (erreur de collection : module absent), cargo 101, vitest 1
+    monde.lanceur.codes = {CIBLES: [code]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok")]
+    pid = await monde.lancer()
+    _ex, tache, _pipeline = await monde.etat(pid)
+    assert tache.colonne == "en_revue"
+
+
+async def test_reprise_arrete_l_ancien_conteneur_puis_reinstalle(monde):
+    monde.llm.reponses = [asyncio.Event()]
+    async with monde.sessions() as s:
+        pid = (await monde.orch.demarrer(s, await s.get(Tache, 1))).id
+        await s.commit()
+    tache = asyncio.create_task(monde.orch.executer(pid))
+    async with asyncio.timeout(15):
+        while len(monde.llm.appels) < 1:
+            await asyncio.sleep(0.02)
+    tache.cancel()  # arrêt brutal du portail pendant la phase `tests`
+    await asyncio.wait([tache])
+    espace = monde.reglages.espaces_dir / "tache-1-1"
+    (espace / ".venv").mkdir()
+    (espace / ".venv" / "sitecustomize.py").write_text("piege")
+    monde.lanceur.appels.clear()
+    monde.llm.reponses = [texte("rien")]
+    await monde.orch.executer(pid)  # reprise : aucun test écrit, bloquée
+    routes = [(a["route"], a.get("commande")) for a in monde.lanceur.appels]
+    assert routes[:2] == [("arreter", None), ("lancer", "installer")]
+    _ex, tache, _pipeline = await monde.etat(pid)
+    assert tache.resume_blocage.startswith("aucun test écrit")
+
+
+async def test_pr_reverifie_la_protection_avant_de_pousser(monde, monkeypatch):
+    from portail import dev
+
+    vraie, appels = dev.verifier_commits_code, []
+
+    async def verifier(espace, base, cfg):
+        appels.append(1)
+        return await vraie(espace, base, cfg) if len(appels) == 1 else ["tests/test_x.py"]
+
+    monkeypatch.setattr(dev, "verifier_commits_code", verifier)
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok")]
+    pid = await monde.lancer()
+    _ex, tache, _pipeline = await monde.etat(pid)
+    assert tache.resume_blocage.startswith("protection des tests : tests/test_x.py")
+    assert BRANCHE not in monde.branches()
     assert monde.github.prs == {}
 
 

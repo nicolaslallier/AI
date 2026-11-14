@@ -237,7 +237,15 @@ class Orchestrateur:
         ctx = await self._charger(pipeline_id)
         phase = ctx.ex.phase
         if phase not in ("preparation", "fini"):  # phase relancée : on repart de HEAD
-            await ctx.espace.remettre_a_zero()
+            await self._etape(ctx, "portail", "reprise")
+            # le conteneur d'avant le redémarrage écrit peut-être encore dans /travail
+            await self._lanceur.arreter(ctx.ex.espace)  # tue aussi les services
+            await ctx.espace.remettre_a_zero()  # -x : .venv/ et autres ignorés effacés
+            if ctx.cfg.services:
+                await self._lanceur.services(ctx.ex.espace, ctx.cfg.services)
+            if phase in ("tests", "rouge", "code", "revue"):  # la vérification réinstalle
+                await self._installer(ctx)
+            await self._transition(ctx, phase)
         phases = {
             "preparation": self._preparation, "tests": self._tests, "rouge": self._rouge,
             "code": self._code, "verification": self._verification, "revue": self._revue,
@@ -409,10 +417,13 @@ class Orchestrateur:
         sha = await ctx.espace.cloner(ctx.projet.depot_url, jeton, ctx.ex.base, ctx.ex.branche)
         if ctx.cfg.services:
             await self._lanceur.services(ctx.ex.espace, ctx.cfg.services)
+        await self._installer(ctx)
+        return await self._transition(ctx, "tests", base_sha=sha)
+
+    async def _installer(self, ctx: _Ctx) -> None:
         r = await self._commande(ctx, "installer")
         if r.code != 0:
             raise _Blocage(f"installation échouée :\n{r.sortie[-_FIN_SORTIE:]}")
-        return await self._transition(ctx, "tests", base_sha=sha)
 
     async def _tests(self, ctx: _Ctx) -> str:
         agent = self._catalogue.agents["tests"]
@@ -445,8 +456,13 @@ class Orchestrateur:
             raise _Blocage(
                 f"délai dépassé pendant la vérification rouge :\n{r.sortie[-_FIN_SORTIE:]}"
             )
+        # ponytail: codes réservés de pytest — 3 erreur interne, 4 usage, 5 aucun test collecté ;
+        # tout autre non-zéro est un vrai rouge (pytest 1 et 2 = collecte d'un module absent,
+        # jest/vitest 1, cargo 101). Un autre lanceur de tests qui use de 3–5 : à ajouter ici.
+        if r.code in (3, 4):
+            raise _Blocage(f"commande de tests invalide :\n{r.sortie[-_FIN_SORTIE:]}")
         if r.code == 5:
-            raise _Blocage("aucun test collecté")
+            raise _Blocage("aucun test écrit (aucun test collecté)")
         if r.code == 0:
             async with self._sessions() as s:
                 deja = await s.scalar(
@@ -480,13 +496,19 @@ class Orchestrateur:
     async def _verification(self, ctx: _Ctx) -> str:
         await self._etape(ctx, "portail", "verification")
         # d'abord : un blocage par les commandes ne doit jamais masquer une violation
-        if violations := await verifier_commits_code(ctx.espace, ctx.ex.base_sha, ctx.cfg):
-            raise _Blocage(f"{PROTECTION} : " + ", ".join(violations))
+        await self._proteger(ctx)
+        # rien d'ignoré (.venv/ piégé par une commande de l'agent…) ne survit : on réinstalle
+        await ctx.espace.remettre_a_zero()
+        await self._installer(ctx)
         for nom, fichiers in (("tests_cibles", ctx.ex.fichiers_tests), ("tests", [])):
             r = await self._commande(ctx, nom, fichiers)
             if r.code != 0:
                 raise _Blocage(f"vérification échouée ({nom}) :\n{r.sortie[-_FIN_SORTIE:]}")
         return await self._transition(ctx, "revue")
+
+    async def _proteger(self, ctx: _Ctx) -> None:
+        if violations := await verifier_commits_code(ctx.espace, ctx.ex.base_sha, ctx.cfg):
+            raise _Blocage(f"{PROTECTION} : " + ", ".join(violations))
 
     async def _revue(self, ctx: _Ctx) -> str:
         agent = self._catalogue.agents["revue"]
@@ -526,6 +548,7 @@ class Orchestrateur:
     async def _pr(self, ctx: _Ctx) -> str:
         await self._etape(ctx, "portail", "pr")
         jeton = await self._github.jeton(ctx.depot)
+        await self._proteger(ctx)  # avant chaque push
         await ctx.espace.pousser(jeton, ctx.ex.branche)
         async with self._sessions() as s:
             precedentes = (

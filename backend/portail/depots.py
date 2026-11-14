@@ -31,9 +31,17 @@ def _scrub(texte: str, jeton: str) -> str:
 
 
 async def git(
-    *args: str, cwd: Path | None, jeton: str = "", delai: int = 30, distant: bool = False
+    *args: str,
+    cwd: Path | None,
+    jeton: str = "",
+    delai: int = 30,
+    distant: bool = False,
+    codes: tuple[int, ...] = (0,),
+    litteral: bool = True,
 ) -> str:
-    """git durci : ni hook, ni fsmonitor, ni config système ou globale ; sortie brute."""
+    """git durci : ni hook, ni fsmonitor, ni config système ou globale ; sortie brute.
+    `codes` : codes de sortie acceptés (les autres lèvent `ErreurDepot`) ; `litteral=False`
+    pour les commandes qui refusent GIT_LITERAL_PATHSPECS (check-ignore)."""
     opts = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
     opts += ["-c", "protocol.file.allow=user"]
     # jamais de descente dans un sous-module : sa config (filtres…) n'est pas la nôtre
@@ -46,8 +54,9 @@ async def git(
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": "/dev/null",
-        "GIT_LITERAL_PATHSPECS": "1",  # un fichier nommé « * » ne désigne que lui-même
     }
+    if litteral:
+        env["GIT_LITERAL_PATHSPECS"] = "1"  # un fichier nommé « * » ne désigne que lui-même
     proc = await asyncio.create_subprocess_exec(
         "git",
         *opts,
@@ -66,7 +75,7 @@ async def git(
         if isinstance(e, TimeoutError):
             raise ErreurDepot(f"git {args[0]} : délai dépassé ({delai} s)") from None
         raise
-    if proc.returncode != 0:
+    if proc.returncode not in codes:
         raise ErreurDepot(_scrub(err.decode(errors="replace").strip(), jeton) or "git a échoué")
     return out.decode(errors="replace")
 

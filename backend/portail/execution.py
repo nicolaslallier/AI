@@ -24,6 +24,8 @@ CONFIG_TESTS_DEFAUT = [
     "**/vitest.config.*",
     "vitest.workspace.*",
     "**/vitest.workspace.*",
+    "vite.config.*",  # vitest y lit la section `test:` faute de vitest.config
+    "**/vite.config.*",
     ".cargo/config.toml",
 ]
 OBLIGATOIRES = ("installer", "tests", "tests_cibles")

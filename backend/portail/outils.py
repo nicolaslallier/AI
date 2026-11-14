@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal
 
 from portail.contexte import estimer_jetons
+from portail.depots import ErreurDepot, git
 from portail.execution import ConfigExecution, correspond
 
 _SECRETS = [".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*", "id_ed25519*"]
@@ -340,7 +341,7 @@ class OutilsEspace(OutilsDepot):
         )
         return [*schemas, *SCHEMAS_ECRITURE.values(), lancer]
 
-    def _cible(self, chemin: str, lien: bool = False) -> tuple[Path, str] | str:
+    async def _cible(self, chemin: str, lien: bool = False) -> tuple[Path, str] | str:
         """Chemin résolu et relatif, ou le message d'erreur si l'écriture est refusée.
 
         Avec `lien`, un lien symbolique en dernière composante est gardé tel quel (pas suivi).
@@ -365,6 +366,16 @@ class OutilsEspace(OutilsDepot):
         for partie in (*rel.parts, *Path(chemin).parts):
             if partie.casefold() in artefacts:
                 return f"erreur : écriture interdite dans {partie}"
+        # ignoré par git (venv/, build/…) : chargé par les commandes, jamais vu au diff
+        try:  # « ./ » devant : aucune magie de pathspec (« :(top)… ») n'est reconnue
+            ignore = await git(
+                "check-ignore", "--", f"./{rel.as_posix()}",
+                cwd=self.racine, codes=(0, 1), litteral=False,
+            )  # fmt: skip
+        except ErreurDepot:  # échoue fermé ; le message de git contient des chemins de l'hôte
+            return "erreur : chemin refusé (vérification git impossible)"
+        if ignore:
+            return "erreur : écriture interdite dans un chemin ignoré par git"
         # la règle de rôle porte sur le chemin résolu : un lien ne la contourne pas
         protege = correspond(rel.as_posix(), self.cfg.protege)
         permis = protege if self.role == "tests" else self.role == "code" and not protege
@@ -372,12 +383,12 @@ class OutilsEspace(OutilsDepot):
             return f"erreur : écriture interdite pour le rôle {self.role}"
         return cible, rel.as_posix()
 
-    def ecrire(self, chemin: str, contenu: str) -> str:
+    async def ecrire(self, chemin: str, contenu: str) -> str:
         if not isinstance(contenu, str):
             return "erreur : contenu invalide : du texte est attendu"
         if len(contenu) > _ECRITURE_MAX:
             return f"erreur : contenu trop long ({_ECRITURE_MAX} caractères au plus)"
-        cible = self._cible(chemin)
+        cible = await self._cible(chemin)
         if isinstance(cible, str):
             return cible
         fichier, rel = cible
@@ -389,8 +400,8 @@ class OutilsEspace(OutilsDepot):
         fichier.write_text(contenu, encoding="utf-8")
         return f"écrit : {rel}"
 
-    def supprimer(self, chemin: str) -> str:
-        cible = self._cible(chemin, lien=True)
+    async def supprimer(self, chemin: str) -> str:
+        cible = await self._cible(chemin, lien=True)
         if isinstance(cible, str):
             return cible
         fichier, rel = cible

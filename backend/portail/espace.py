@@ -124,7 +124,8 @@ class Espace:
     async def remettre_a_zero(self) -> None:
         self._vider_sous_modules(await self._sous_modules_peuples())
         await self._git("reset", "--hard", "HEAD")
-        await self._git("clean", "-ffd")  # -ff : dépôts imbriqués aussi ; sans -x : ignorés gardés
+        # -ff : dépôts imbriqués aussi ; -x : ignorés aussi (.venv/ piégé par une commande…)
+        await self._git("clean", "-ffdx")
 
     async def commiter(self, nom: str, courriel: str, message: str) -> str | None:
         if peuples := await self._sous_modules_peuples():

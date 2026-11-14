@@ -101,16 +101,19 @@ async def test_restaurer_chemin_avec_joker(espace):
     assert (espace.racine / "src" / "b.py").read_text() == "b = 2\n"
 
 
-async def test_remettre_a_zero_garde_les_ignores(espace):
+async def test_remettre_a_zero_efface_les_ignores(espace):
     r = espace.racine
     (r / "src" / "b.py").write_text("b = 3\n")
     (r / "src" / "d.py").write_text("d")
     (r / "node_modules").mkdir()
     (r / "node_modules" / "x").write_text("x")
+    (r / ".venv" / "lib").mkdir(parents=True)
+    (r / ".venv" / "lib" / "sitecustomize.py").write_text("piege")
     await espace.remettre_a_zero()
     assert await espace.changements() == []
     assert (r / "src" / "b.py").read_text() == "b = 1\n"
-    assert (r / "node_modules" / "x").exists()
+    assert not (r / "node_modules").exists() and not (r / ".venv").exists()
+    assert (r / ".git" / "info" / "exclude").exists()
 
 
 async def test_commit_auteur_et_commits(espace, origine):

@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 from portail.execution import ConfigExecution
 from portail.outils import OutilsEspace, empreinte
@@ -10,7 +11,13 @@ CFG = ConfigExecution(
 )
 
 
+def _git(racine, *args):
+    subprocess.run(["git", "-C", str(racine), *args], check=True)
+
+
 def _outils(racine, role, lances=None):
+    _git(racine, "init", "-q")  # l'espace est un clone
+
     async def lancer(nom):
         if lances is not None:
             lances.append(nom)
@@ -139,6 +146,49 @@ async def test_dossiers_d_artefacts_refuses(tmp_path):
         assert res[0] == "erreur : écriture interdite dans .venv"
     assert not (tmp_path / ".venv" / "lib" / "sitecustomize.py").exists()
     assert (tmp_path / ".venv" / "lib" / "x.pth").exists()
+
+
+async def test_chemins_ignores_par_git_refuses(tmp_path):
+    (tmp_path / ".gitignore").write_text("venv/\nbuild\n*.log\n!garde.log\n")
+    (tmp_path / "suivi.log").write_text("ancien")
+    o = _outils(tmp_path, "code")
+    _git(tmp_path, "add", "-f", "suivi.log")
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "x.py").write_text("ancien")
+    for role in ("code", "tests"):
+        o = _outils(tmp_path, role)
+        for chemin in [
+            "venv/lib/python3.12/site-packages/sitecustomize.py",
+            "tests/venv/a.pth",
+            "build/x.py",
+            "tests/build/y.py",
+            "tests/z.log",
+        ]:
+            args = json.dumps({"chemin": chemin, "contenu": "x"})
+            assert (await o.executer("ecrire", args))[0] == (
+                "erreur : écriture interdite dans un chemin ignoré par git"
+            ), (role, chemin)
+        res = await o.executer("supprimer", '{"chemin": "build/x.py"}')
+        assert res[0] == "erreur : écriture interdite dans un chemin ignoré par git"
+    assert not (tmp_path / "venv").exists()
+    assert (tmp_path / "build" / "x.py").read_text() == "ancien"
+    o = _outils(tmp_path, "code")  # suivi ou réinclus : visibles au diff, donc permis
+    assert (await o.executer("ecrire", '{"chemin": "suivi.log", "contenu": "n"}'))[0] == (
+        "écrit : suivi.log"
+    )
+    assert (await o.executer("ecrire", '{"chemin": "garde.log", "contenu": "n"}'))[0] == (
+        "écrit : garde.log"
+    )
+
+
+async def test_hors_depot_git_ecriture_refusee(tmp_path):
+    async def lancer(nom):
+        return "code 0"
+
+    o = OutilsEspace(tmp_path, "code", CFG, lancer)  # pas de .git : échoue fermé
+    res = await o.executer("ecrire", '{"chemin": "a.py", "contenu": "x"}')
+    assert res[0].startswith("erreur : ") and str(tmp_path) not in res[0]
+    assert not (tmp_path / "a.py").exists()
 
 
 async def test_revue_ne_peut_pas_ecrire(tmp_path):

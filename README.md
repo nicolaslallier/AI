@@ -41,18 +41,20 @@ La boucle de dev pousse des branches et ouvre des PR par une GitHub App, jamais 
 4. Le lanceur (service `lanceur`, seul à monter `/var/run/docker.sock`) démarre les commandes des agents dans des conteneurs jetables de l'image `ai-execution`, sur le réseau `run-net` et le proxy `run-egress` de l'Infra (PR « run-net » du dépôt Infra, à déployer avant ce dépôt). Hôte Docker en version **26 ou plus** (montage de sous-chemin de volume).
 5. **Prérequis bloquant :** les trois clés (`PORTAIL_GITHUB_APP_ID`, `PORTAIL_GITHUB_APP_CLE`, `PORTAIL_LANCEUR_SECRET` d'au moins 32 caractères) doivent exister dans OpenBao `infra/portail` **avant** la fusion et le déploiement de ce dépôt. Sinon le déploiement échoue : `scripts/vault-render-env.sh` s'arrête dès qu'une clé manque, la pile refuse un `PORTAIL_LANCEUR_SECRET` vide et le lanceur quitte (redémarrage en boucle) avec un secret de moins de 32 caractères. Une fois la pile en place, un portail sans App valide garde son ordonnanceur éteint et le reste fonctionne comme avant.
 
-Exemple de configuration d'exécution pour EA (l'image doit figurer dans `LANCEUR_IMAGES`) :
+Exemple de configuration d'exécution pour EA (l'image doit figurer dans `LANCEUR_IMAGES`). Les commandes partent de la racine du dépôt, et `{fichiers}` y est remplacé par des chemins relatifs à cette racine (`backend/tests/test_x.py`) : ne pas faire `cd backend` avant `{fichiers}`. Les motifs de `chemins_tests` désignent des fichiers : `backend/tests/**`, pas `backend/tests`.
 
 ```yaml
 image: ghcr.io/nicolaslallier/ai-execution:latest
-chemins_tests: [backend/tests]
+chemins_tests: ["backend/tests/**"]
 commandes:
-  installer: cd backend && uv sync
-  tests: cd backend && uv run pytest -q
-  tests_cibles: cd backend && uv run pytest -q {fichiers}
-  lint: cd backend && uv run ruff check .
+  installer: uv sync --project backend
+  tests: uv run --project backend pytest -q backend/tests
+  tests_cibles: uv run --project backend pytest -q {fichiers}
+  lint: uv run --project backend ruff check backend
 services:
   - nom: db
     image: pgvector/pgvector:pg16
     env: {POSTGRES_PASSWORD: test}
 ```
+
+La commande `tests_cibles` doit sortir en non-zéro seulement quand des tests échouent : à la vérification « rouge », les codes 3 et 4 (erreur interne ou d'usage de pytest) bloquent la tâche (« commande de tests invalide ») et le code 5 (aucun test collecté) la bloque comme « aucun test écrit ». Tout autre code non nul compte comme un vrai rouge (pytest 1 et 2, jest et vitest 1, cargo 101).
