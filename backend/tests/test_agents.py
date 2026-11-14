@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from portail.agents import CatalogueInvalide, charger_catalogue
+from portail.agents import OUTILS_LECTURE_PORTAIL, CatalogueInvalide, charger_catalogue
 
 VALIDE = """
 agents:
@@ -150,3 +150,33 @@ def test_verdict_exige_revue_sans_ecriture(tmp_path):
 def test_role_inconnu_refuse(tmp_path):
     with pytest.raises(CatalogueInvalide, match="systeme"):
         _avec(tmp_path, "    role: systeme")
+
+
+PORTAIL = VALIDE.replace(
+    "pipelines:\n  spec: [spec]\n",
+    "  x:\n    description: d\n    modele: m\n    contexte_max: 1000\n    prompt_systeme: p\n"
+    "    outils: [lister_projets, lire_kanban]\npipelines:\n  spec: [spec]\n",
+)
+
+
+def test_outils_portail_acceptes(tmp_path):
+    cat = charger_catalogue(ecrire(tmp_path, PORTAIL))
+    assert cat.agents["x"].outils == ["lister_projets", "lire_kanban"]
+
+
+def test_outils_portail_et_depot_melanges_refuses(tmp_path):
+    texte = PORTAIL.replace("[lister_projets, lire_kanban]", "[lire, lister_projets]")
+    with pytest.raises(CatalogueInvalide, match="« x »"):
+        charger_catalogue(ecrire(tmp_path, texte))
+
+
+def test_agent_portail_dans_un_pipeline_refuse(tmp_path):
+    with pytest.raises(CatalogueInvalide, match="« x »"):
+        charger_catalogue(ecrire(tmp_path, PORTAIL.replace("spec: [spec]", "spec: [x]")))
+
+
+def test_agents_yaml_du_depot_a_l_orchestrateur():
+    racine = Path(__file__).resolve().parents[2]
+    a = charger_catalogue(racine / "agents.yaml").agents["orchestrateur"]
+    assert set(a.outils) == set(OUTILS_LECTURE_PORTAIL)
+    assert (a.temperature, a.tours_max) == (0.3, 10)

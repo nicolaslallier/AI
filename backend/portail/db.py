@@ -85,6 +85,30 @@ class Message(Base):
     etape: Mapped[Etape] = relationship(back_populates="messages")
 
 
+class Conversation(Base):
+    __tablename__ = "conversation"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    titre: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    etat: Mapped[str] = mapped_column(String, default="pret", server_default="pret")
+    erreur: Mapped[str | None] = mapped_column(Text)
+    cree_le: Mapped[datetime] = _horodatage()
+    maj_le: Mapped[datetime] = _horodatage(onupdate=func.now())
+
+
+class MessageConversation(Base):
+    __tablename__ = "message_conversation"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversation.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String)  # user | assistant | system | tool
+    contenu: Mapped[str] = mapped_column(Text)
+    outil: Mapped[str | None] = mapped_column(String)
+    cree_le: Mapped[datetime] = _horodatage()
+
+
 class Document(Base):
     __tablename__ = "document"
 
