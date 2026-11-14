@@ -117,6 +117,30 @@ async def test_ecrire_refuse_secrets_git_et_trop_long(tmp_path):
     assert not (tmp_path / "a.py").exists()
 
 
+async def test_dossiers_d_artefacts_refuses(tmp_path):
+    (tmp_path / ".venv" / "lib").mkdir(parents=True)
+    (tmp_path / ".venv" / "lib" / "x.pth").write_text("ancien")
+    (tmp_path / "lien").symlink_to(tmp_path / "node_modules", target_is_directory=True)
+    (tmp_path / "node_modules").mkdir()
+    for role in ("code", "tests"):
+        o = _outils(tmp_path, role)
+        for chemin, dossier in [
+            (".venv/lib/sitecustomize.py", ".venv"),
+            ("src/__pycache__/a.pyc", "__pycache__"),
+            ("tests/.pytest_cache/x", ".pytest_cache"),
+            ("lien/a.js", "node_modules"),
+            (".VENV/b.pth", ".VENV"),
+        ]:
+            args = json.dumps({"chemin": chemin, "contenu": "x"})
+            assert (await o.executer("ecrire", args))[
+                0
+            ] == f"erreur : écriture interdite dans {dossier}"
+        res = await o.executer("supprimer", '{"chemin": ".venv/lib/x.pth"}')
+        assert res[0] == "erreur : écriture interdite dans .venv"
+    assert not (tmp_path / ".venv" / "lib" / "sitecustomize.py").exists()
+    assert (tmp_path / ".venv" / "lib" / "x.pth").exists()
+
+
 async def test_revue_ne_peut_pas_ecrire(tmp_path):
     o = _outils(tmp_path, "revue")
     res = await o.executer("ecrire", '{"chemin": "a.py", "contenu": "x"}')

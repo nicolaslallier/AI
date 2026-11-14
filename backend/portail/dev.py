@@ -241,13 +241,22 @@ class Orchestrateur:
             await s.commit()
         ctx.etape_id = etape.id
 
-    async def _finir_etape(self, ctx: _Ctx, erreur: str | None = None) -> None:
+    async def _transition(self, ctx: _Ctx, suivante: str, erreur: str | None = None, **champs):
+        """Termine l'étape en cours et écrit la phase suivante avec `champs`, en une transaction :
+        une reprise après un arrêt ne rejoue ni ne perd la décision (renvoi, retour aux tests)."""
         etat = Etat.ECHOUEE if erreur else Etat.TERMINEE
+        champs["phase"] = suivante
         async with self._sessions() as s:
             await s.execute(
                 update(Etape).where(Etape.id == ctx.etape_id).values(etat=etat, erreur=erreur)
             )
+            await s.execute(
+                update(ExecutionDev).where(ExecutionDev.id == ctx.ex.id).values(**champs)
+            )
             await s.commit()
+        for k, v in champs.items():
+            setattr(ctx.ex, k, v)
+        return suivante
 
     async def _message(self, ctx: _Ctx, role: str, contenu: str, outil: str | None = None):
         async with self._sessions() as s:
@@ -359,9 +368,7 @@ class Orchestrateur:
         r = await self._commande(ctx, "installer")
         if r.code != 0:
             raise _Blocage(f"installation échouée :\n{r.sortie[-_FIN_SORTIE:]}")
-        await self._maj(ctx, base_sha=sha)
-        await self._finir_etape(ctx)
-        return "tests"
+        return await self._transition(ctx, "tests", base_sha=sha)
 
     async def _tests(self, ctx: _Ctx) -> str:
         agent = self._catalogue.agents["tests"]
@@ -384,9 +391,8 @@ class Orchestrateur:
             raise _Blocage("aucun test écrit")
         await self._maj(ctx, fichiers_tests=fichiers)
         await ctx.espace.commiter(*AUTEUR_TESTS, f"test: {ctx.tache.titre}")
-        await self._finir_etape(ctx)
         # après un renvoi de la revue, le code existe déjà : pas de vérification rouge
-        return "code" if ctx.ex.renvois else "rouge"
+        return await self._transition(ctx, "code" if ctx.ex.renvois else "rouge")
 
     async def _rouge(self, ctx: _Ctx) -> str:
         await self._etape(ctx, "portail", "rouge")
@@ -408,12 +414,8 @@ class Orchestrateur:
                 )
             if deja:
                 raise _Blocage(PASSENT_DEJA)
-            await self._finir_etape(ctx, PASSENT_DEJA)
-            await self._maj(ctx, remarques=[PASSENT_DEJA])
-            return "tests"
-        await self._maj(ctx, sortie_rouge=r.sortie, remarques=[])
-        await self._finir_etape(ctx)
-        return "code"
+            return await self._transition(ctx, "tests", PASSENT_DEJA, remarques=[PASSENT_DEJA])
+        return await self._transition(ctx, "code", sortie_rouge=r.sortie, remarques=[])
 
     async def _code(self, ctx: _Ctx) -> str:
         annexes = [
@@ -429,19 +431,18 @@ class Orchestrateur:
         if annules:
             await self._message(ctx, "system", _liste("Changements de tests annulés :", annules))
         await ctx.espace.commiter(*AUTEUR_CODE, f"feat: {ctx.tache.titre}")  # vide : pas d'erreur
-        await self._finir_etape(ctx)
-        return "verification"
+        return await self._transition(ctx, "verification")
 
     async def _verification(self, ctx: _Ctx) -> str:
         await self._etape(ctx, "portail", "verification")
+        # d'abord : un blocage par les commandes ne doit jamais masquer une violation
+        if violations := await verifier_commits_code(ctx.espace, ctx.ex.base_sha, ctx.cfg):
+            raise _Blocage(f"{PROTECTION} : " + ", ".join(violations))
         for nom, fichiers in (("tests_cibles", ctx.ex.fichiers_tests), ("tests", [])):
             r = await self._commande(ctx, nom, fichiers)
             if r.code != 0:
                 raise _Blocage(f"vérification échouée ({nom}) :\n{r.sortie[-_FIN_SORTIE:]}")
-        if violations := await verifier_commits_code(ctx.espace, ctx.ex.base_sha, ctx.cfg):
-            raise _Blocage(f"{PROTECTION} : " + ", ".join(violations))
-        await self._finir_etape(ctx)
-        return "revue"
+        return await self._transition(ctx, "revue")
 
     async def _revue(self, ctx: _Ctx) -> str:
         agent = self._catalogue.agents["revue"]
@@ -469,15 +470,14 @@ class Orchestrateur:
             non_resolues = []
         elif ctx.ex.renvois < self._reglages.renvois_max:
             await self._message(ctx, "system", _resume(verdict))
-            await self._maj(ctx, renvois=ctx.ex.renvois + 1, remarques=verdict.remarques)
-            await self._finir_etape(ctx)
-            return "tests" if verdict.decision == "renvoyer_tests" else "code"
+            suivante = "tests" if verdict.decision == "renvoyer_tests" else "code"
+            return await self._transition(
+                ctx, suivante, renvois=ctx.ex.renvois + 1, remarques=verdict.remarques
+            )
         else:
             non_resolues = verdict.remarques or [f"{verdict.decision} après le dernier renvoi"]
         await self._message(ctx, "system", _resume(verdict))
-        await self._maj(ctx, remarques=non_resolues)
-        await self._finir_etape(ctx)
-        return "pr"
+        return await self._transition(ctx, "pr", remarques=non_resolues)
 
     async def _pr(self, ctx: _Ctx) -> str:
         await self._etape(ctx, "portail", "pr")
@@ -563,67 +563,99 @@ class Orchestrateur:
 
     async def bloquer(self, pipeline_id: int, raison: str) -> None:
         logger.warning("pipeline dev %s bloqué : %s", pipeline_id, raison)
+        ex = projet = None
         try:
             async with self._sessions() as s:
                 pipeline = await s.get(Pipeline, pipeline_id)
+                if pipeline is None or pipeline.etat in (Etat.TERMINEE, Etat.ECHOUEE):
+                    return
                 ex = await s.scalar(
                     select(ExecutionDev).where(ExecutionDev.pipeline_id == pipeline_id)
                 )
-                depot_url = await s.scalar(
-                    select(Projet.depot_url).where(Projet.id == pipeline.projet_id)
-                )
+                projet = await s.get(Projet, pipeline.projet_id)
         except Exception:
             logger.exception("blocage du pipeline %s : lecture impossible", pipeline_id)
-            return
-        if pipeline.etat in (Etat.TERMINEE, Etat.ECHOUEE):
-            return
-        espace = Espace(self._reglages.espaces_dir / ex.espace, depot_url)
-        pousse = False
-        if not raison.startswith(PROTECTION):
-            pousse = await self._au_mieux("pousser", self._pousser_si_commits(espace, ex))
-        await self._au_mieux("nettoyer", self._lanceur.nettoyer(ex.espace))
-        await self._au_mieux("supprimer", espace.supprimer())
+        branche = None
+        if ex is not None and projet is not None:
+            espace = Espace(self._reglages.espaces_dir / ex.espace, projet.depot_url)
+            if not raison.startswith(PROTECTION):
+                pousser = self._pousser_si_commits(espace, ex, projet.config_execution)
+                branche = ex.branche if await self._au_mieux("pousser", pousser) else None
+            await self._au_mieux("nettoyer", self._lanceur.nettoyer(ex.espace))
+            await self._au_mieux("supprimer", espace.supprimer())
         try:
-            async with self._sessions() as s:
-                await s.scalar(
-                    select(Projet.id).where(Projet.id == pipeline.projet_id).with_for_update()
-                )
-                etapes = (
-                    await s.scalars(
-                        select(Etape).where(Etape.pipeline_id == pipeline_id).order_by(Etape.ordre)
-                    )
-                ).all()
-                for e in etapes:
-                    if e.etat == Etat.EN_COURS:
-                        e.etat, e.erreur = Etat.ECHOUEE, raison
-                lignes = [raison, ""] + [
-                    f"- {e.agent}{f' ({e.action})' if e.action else ''} : {e.etat}" for e in etapes
-                ]
-                if pousse:
-                    lignes.append(f"\nbranche poussée : {ex.branche}")
-                tache = await s.get(
-                    Tache, ex.tache_id, with_for_update=True, populate_existing=True
-                )
-                if tache is not None and tache.verrou == pipeline_id:
-                    tache.verrou = None
-                    await s.flush()
-                    await deplacer_tache(s, tache, "bloquee", None, "portail")
-                    tache.resume_blocage = "\n".join(lignes)
-                await s.execute(
-                    update(Pipeline)
-                    .where(Pipeline.id == pipeline_id)
-                    .values(etat=Etat.ECHOUEE, maj_le=self._horloge())
-                )
-                await s.commit()
+            await self._enregistrer_blocage(pipeline_id, raison, branche)
         except Exception:
             logger.exception("blocage du pipeline %s : état non enregistré", pipeline_id)
+            await self._au_mieux("blocage minimal", self._blocage_minimal(pipeline_id, raison))
 
-    async def _pousser_si_commits(self, espace: Espace, ex: ExecutionDev) -> bool:
-        """Pousse la branche (sans PR) si un agent y a commité ; rend True si poussée."""
+    async def _enregistrer_blocage(self, pipeline_id: int, raison: str, branche: str | None):
+        async with self._sessions() as s:
+            projet_id = await s.scalar(select(Pipeline.projet_id).where(Pipeline.id == pipeline_id))
+            await s.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
+            etapes = (
+                await s.scalars(
+                    select(Etape).where(Etape.pipeline_id == pipeline_id).order_by(Etape.ordre)
+                )
+            ).all()
+            for e in etapes:
+                if e.etat == Etat.EN_COURS:
+                    e.etat, e.erreur = Etat.ECHOUEE, raison
+            lignes = [raison, ""] + [
+                f"- {e.agent}{f' ({e.action})' if e.action else ''} : {e.etat}" for e in etapes
+            ]
+            if branche:
+                lignes.append(f"\nbranche poussée : {branche}")
+            tache = await s.scalar(
+                select(Tache)
+                .where(Tache.verrou == pipeline_id)  # seulement si le verrou est encore le nôtre
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if tache is not None:
+                tache.verrou = None
+                await s.flush()
+                await deplacer_tache(s, tache, "bloquee", None, "portail")
+                tache.resume_blocage = "\n".join(lignes)
+            await s.execute(
+                update(Pipeline)
+                .where(Pipeline.id == pipeline_id)
+                .values(etat=Etat.ECHOUEE, maj_le=self._horloge())
+            )
+            await s.commit()
+
+    async def _blocage_minimal(self, pipeline_id: int, raison: str) -> None:
+        """Repli : la tâche ne reste jamais verrouillée (colonne écrite sans renuméroter)."""
+        async with self._sessions() as s:
+            await s.execute(
+                update(Tache)
+                .where(Tache.verrou == pipeline_id)
+                .values(verrou=None, colonne="bloquee", resume_blocage=raison)
+            )
+            await s.execute(
+                update(Etape)
+                .where(Etape.pipeline_id == pipeline_id, Etape.etat == Etat.EN_COURS)
+                .values(etat=Etat.ECHOUEE, erreur=raison)
+            )
+            await s.execute(
+                update(Pipeline)
+                .where(Pipeline.id == pipeline_id)
+                .values(etat=Etat.ECHOUEE, maj_le=self._horloge())
+            )
+            await s.commit()
+
+    async def _pousser_si_commits(
+        self, espace: Espace, ex: ExecutionDev, config: str | None
+    ) -> bool:
+        """Pousse la branche (sans PR) si un agent y a commité et qu'aucun commit de l'agent de
+        code ne touche aux tests ; toute erreur de vérification empêche le push (échoue fermé)."""
         if not ex.base_sha or not espace.racine.is_dir():
             return False
         agents = {AUTEUR_TESTS[1], AUTEUR_CODE[1]}
         if not any(a in agents for _, a, _ in await espace.commits(ex.base_sha)):
+            return False
+        if violations := await verifier_commits_code(espace, ex.base_sha, lire_config(config)):
+            logger.warning("branche %s non poussée : %s", ex.branche, ", ".join(violations))
             return False
         jeton = await self._github.jeton(self._depot_de(espace.depot_url))
         await espace.pousser(jeton, ex.branche)

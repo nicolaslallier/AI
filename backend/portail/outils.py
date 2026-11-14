@@ -360,6 +360,11 @@ class OutilsEspace(OutilsDepot):
             return "erreur : chemin interdit"
         if _secret_chemin(rel.parts) or _secret_chemin(Path(chemin).parts):
             return "erreur : fichier secret refusé"
+        # dossiers d'artefacts : jamais commités ni relus, mais chargés par les commandes
+        artefacts = {e.rstrip("/").casefold() for e in EXCLUSIONS}
+        for partie in (*rel.parts, *Path(chemin).parts):
+            if partie.casefold() in artefacts:
+                return f"erreur : écriture interdite dans {partie}"
         # la règle de rôle porte sur le chemin résolu : un lien ne la contourne pas
         protege = correspond(rel.as_posix(), self.cfg.protege)
         permis = protege if self.role == "tests" else self.role == "code" and not protege

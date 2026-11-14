@@ -50,19 +50,17 @@ def _sections(nom: str, texte: str | None) -> dict[str, object]:
             s["project.entry-points.pytest11"] = ep["pytest11"]
         return s
 
-    # Cargo.toml : `_` et `-` sont équivalents dans les clés de dépendances
-    def norm(t: dict) -> dict:
-        return {k.replace("_", "-"): v for k, v in t.items()}
-
-    d = norm(d)
-    s = {k: d[k] for k in ("dev-dependencies", "test") if k in d}
+    # Cargo.toml : `_` et `-` sont équivalents pour cargo ; chaque graphie est sa propre
+    # section (les fusionner laisserait l'une des deux changer sans être vue)
+    dev = ("dev-dependencies", "dev_dependencies")
+    s = {k: d[k] for k in (*dev, "test") if k in d}
     if isinstance(d.get("profile"), dict) and "test" in d["profile"]:
         s["profile.test"] = d["profile"]["test"]
     cibles = d.get("target", {})
     if isinstance(cibles, dict):
         for cible, v in cibles.items():
-            if isinstance(v, dict) and "dev-dependencies" in norm(v):
-                s[f"target.{cible}.dev-dependencies"] = norm(v)["dev-dependencies"]
+            if isinstance(v, dict):
+                s.update({f"target.{cible}.{k}": v[k] for k in dev if k in v})
     return s
 
 

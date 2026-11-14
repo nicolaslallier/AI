@@ -263,24 +263,82 @@ async def test_glob_protege_restaure_pour_code(monde):
     assert ro and all(r == ["tests"] for r in ro)
 
 
-async def test_violation_protection_bloque_sans_push(monde):
-    def effet(d: Path):
-        (d / "tests" / "test_z.py").write_text("triche\n")
-        git(d, "add", "tests/test_z.py")
-        subprocess.run(
-            ["git", "-c", "user.name=agent-code", "-c", "user.email=agent-code@portail.local",
-             "commit", "-qm", "triche"],
-            cwd=d, check=True,
-        )  # fmt: skip
+def triche(d: Path):
+    """Commit fabriqué de l'agent de code qui touche un test (impossible en vrai : .git en RO)."""
+    (d / "tests" / "test_z.py").write_text("triche\n")
+    git(d, "add", "tests/test_z.py")
+    subprocess.run(
+        ["git", "-c", "user.name=agent-code", "-c", "user.email=agent-code@portail.local",
+         "commit", "-qm", "triche"],
+        cwd=d, check=True,
+    )  # fmt: skip
 
-    monde.lanceur.effets = {"pytest": effet}
-    monde.lanceur.codes = {CIBLES: [1]}
-    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+
+async def test_violation_protection_bloque_sans_push(monde):
+    # commit fabriqué pendant le travail de l'agent de code ; la suite échoue en plus :
+    # la protection est vérifiée avant les commandes de la vérification
+    monde.lanceur.effets = {"pytest": triche}
+    monde.lanceur.codes = {CIBLES: [1], "pytest": [0, 1]}
+    monde.llm.reponses = [*TESTS_OK, appel("lancer", nom="tests"), texte("fait")]
     pid = await monde.lancer()
     _ex, tache, _pipeline = await monde.etat(pid)
     assert tache.colonne == "bloquee"
     assert tache.resume_blocage.startswith("protection des tests : tests/test_z.py")
     assert BRANCHE not in monde.branches()
+
+
+async def test_verification_rouge_avec_violation_ne_pousse_pas(monde):
+    # la violation naît pendant `tests` de la vérification, qui échoue : blocage
+    # « vérification échouée », et bloquer ne pousse pas pour autant
+    monde.lanceur.effets = {"pytest": triche}
+    monde.lanceur.codes = {CIBLES: [1], "pytest": [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+    pid = await monde.lancer()
+    _ex, tache, _pipeline = await monde.etat(pid)
+    assert tache.resume_blocage.startswith("vérification échouée (tests)")
+    assert "branche poussée" not in tache.resume_blocage
+    assert BRANCHE not in monde.branches()
+
+
+async def test_duree_max_apres_violation_ne_pousse_pas(monde):
+    monde.reglages.duree_max_tache_s = 3
+    monde.lanceur.effets = {"pytest": triche}
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [*TESTS_OK, appel("lancer", nom="tests"), asyncio.Event()]
+    pid = await monde.lancer()
+    _ex, tache, _pipeline = await monde.etat(pid)
+    assert tache.resume_blocage.startswith("durée maximale dépassée")
+    assert BRANCHE not in monde.branches()
+
+
+async def test_bloquer_sans_deplacement_possible_leve_le_verrou(monde, monkeypatch):
+    from portail import dev
+
+    vrai = dev.deplacer_tache
+
+    async def panne(s, t, colonne, *a):
+        if colonne == "bloquee":
+            raise RuntimeError("panne")
+        return await vrai(s, t, colonne, *a)
+
+    monkeypatch.setattr(dev, "deplacer_tache", panne)
+    monde.github.protegee = set()
+    pid = await monde.lancer()
+    _ex, tache, pipeline = await monde.etat(pid)
+    assert (tache.colonne, tache.verrou) == ("bloquee", None)
+    assert tache.resume_blocage == "branche par défaut non protégée"
+    assert pipeline.etat == "echouee"
+
+
+async def test_bloquer_sans_execution_ne_leve_pas(monde):
+    async with monde.sessions() as s:
+        p = Pipeline(projet_id=1, type="dev", etat="en_cours")
+        s.add(p)
+        await s.commit()
+    await monde.orch.bloquer(p.id, "x")
+    await monde.orch.bloquer(999, "x")
+    async with monde.sessions() as s:
+        assert (await s.get(Pipeline, p.id)).etat == "echouee"
 
 
 async def test_revue_renvoie_au_code_puis_ok(monde):

@@ -177,7 +177,16 @@ async def test_cargo_dev_dependencies_underscore(espace, cfg):
     avant = "[dev-dependencies]\nrstest = '1'\n"
     apres = "[dev_dependencies]\nrstest = '1'\nmockall = '1'\n"
     assert await _viol(espace, cfg, {"Cargo.toml": avant}, {"Cargo.toml": apres}) == [
-        "Cargo.toml (section dev-dependencies)"
+        "Cargo.toml (section dev-dependencies)",
+        "Cargo.toml (section dev_dependencies)",
+    ]
+
+
+async def test_cargo_deux_graphies_change_la_seconde(espace, cfg):
+    avant = "[dev-dependencies]\na = '1'\n\n[dev_dependencies]\nb = '1'\n"
+    apres = "[dev-dependencies]\na = '1'\n\n[dev_dependencies]\nb = '2'\n"
+    assert await _viol(espace, cfg, {"Cargo.toml": avant}, {"Cargo.toml": apres}) == [
+        "Cargo.toml (section dev_dependencies)"
     ]
 
 
@@ -185,7 +194,8 @@ async def test_cargo_target_dev_dependencies_underscore(espace, cfg):
     avant = "[target.'cfg(unix)'.dev-dependencies]\na = '1'\n"
     apres = "[target.'cfg(unix)'.dev_dependencies]\na = '2'\n"
     assert await _viol(espace, cfg, {"Cargo.toml": avant}, {"Cargo.toml": apres}) == [
-        "Cargo.toml (section target.cfg(unix).dev-dependencies)"
+        "Cargo.toml (section target.cfg(unix).dev-dependencies)",
+        "Cargo.toml (section target.cfg(unix).dev_dependencies)",
     ]
 
 
