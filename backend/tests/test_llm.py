@@ -162,3 +162,16 @@ async def test_completer_erreur_http():
     )
     with pytest.raises(ErreurLLM, match="500"):
         await client.completer("m", [], None)
+
+
+async def test_completer_envoie_response_format():
+    vues = []
+
+    def handler(requete: httpx.Request) -> httpx.Response:
+        vues.append(json.loads(requete.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    client = ClientLLM("http://l", "", transport=httpx.MockTransport(handler))
+    await client.completer("m", [], None, response_format={"type": "json_object"})
+    assert vues[0]["response_format"] == {"type": "json_object"}
+    assert "tools" not in vues[0]

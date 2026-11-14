@@ -12,6 +12,7 @@ from portail.outils import SCHEMAS_OUTILS, OutilsDepot
 
 _LIMITE = "Limite d'outils atteinte : conclus maintenant avec ce que tu as, sans appeler d'outil."
 _MAL_FORMES_MAX = 3
+_MAX_APPELS_PAR_TOUR = 8
 
 
 class ErreurOutils(Exception):
@@ -44,22 +45,46 @@ async def boucle_outils(
     outils: OutilsDepot,
     sur_appel: Callable[[str, str], Awaitable[None]],
 ) -> ResultatBoucle:
+    if not agent.outils:
+        raise ErreurOutils(f"l'agent « {agent.nom} » n'a aucun outil")
     schemas = [SCHEMAS_OUTILS[n] for n in agent.outils]
     mal_formes = 0
     for _ in range(agent.tours_max):
         elaguer_resultats_outils(messages, agent.contexte_max)
         reponse = await llm.completer(agent.modele, messages, agent.temperature, outils=schemas)
         appels = reponse.get("tool_calls")
-        if not appels:
+        if not isinstance(appels, list) or not appels:
             return ResultatBoucle(texte=_texte(reponse), limite_atteinte=False)
         messages.append(reponse)
-        for appel in appels:
-            nom = appel["function"]["name"]
-            arguments = appel["function"].get("arguments") or ""
-            resultat, mal_forme = await outils.executer(nom, arguments)
+        for i, appel in enumerate(appels):
+            appel = appel if isinstance(appel, dict) else {}
+            fonction = appel.get("function")
+            fonction = fonction if isinstance(fonction, dict) else {}
+            id_ = appel.get("id")
+            id_ = id_ if isinstance(id_, str) and id_ else f"appel_{len(messages)}_{i}"
+            nom, arguments = fonction.get("name"), fonction.get("arguments") or ""
+            if isinstance(arguments, dict):
+                arguments = json.dumps(arguments)
+            if i >= _MAX_APPELS_PAR_TOUR:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": id_,
+                        "content": "erreur : trop d'appels dans un même tour, ignoré",
+                    }
+                )
+                continue
+            if isinstance(nom, str) and nom not in agent.outils:
+                resultat, mal_forme, libelle = f"erreur : outil non autorisé : {nom}", True, nom
+            elif isinstance(nom, str) and isinstance(arguments, str):
+                resultat, mal_forme = await outils.executer(nom, arguments)
+                libelle = _libelle(nom, arguments)
+            else:
+                resultat, mal_forme = "erreur : appel d'outil mal formé", True
+                libelle = nom if isinstance(nom, str) else "outil inconnu"
             mal_formes = mal_formes + 1 if mal_forme else 0
-            messages.append({"role": "tool", "tool_call_id": appel["id"], "content": resultat})
-            await sur_appel(_libelle(nom, arguments), resultat)
+            messages.append({"role": "tool", "tool_call_id": id_, "content": resultat})
+            await sur_appel(libelle, resultat)
             if mal_formes >= _MAL_FORMES_MAX:
                 raise ErreurOutils(f"le modèle {agent.modele} ne gère pas correctement les outils")
     messages.append({"role": "user", "content": _LIMITE})
