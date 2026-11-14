@@ -1,7 +1,7 @@
 """conversations libres avec l'orchestrateur
 
-Revision ID: 0004
-Revises: 0003
+Revision ID: 0005
+Revises: 0004
 """
 
 import sqlalchemy as sa
@@ -12,8 +12,8 @@ def _ts(nom):
     return sa.Column(nom, sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False)
 
 
-revision = "0004"
-down_revision = "0003"
+revision = "0005"
+down_revision = "0004"
 
 
 def upgrade() -> None:
