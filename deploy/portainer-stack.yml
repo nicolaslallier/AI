@@ -8,9 +8,14 @@ services:
       PORTAIL_EXIGER_UTILISATEUR: "true"
       PORTAIL_DONNEES_DIR: /donnees
       PORTAIL_GITHUB_JETON: ${PORTAIL_GITHUB_JETON:-}
+      PORTAIL_LANCEUR_URL: http://lanceur:8080
+      PORTAIL_LANCEUR_SECRET: ${PORTAIL_LANCEUR_SECRET:-}
+      PORTAIL_GITHUB_APP_ID: ${PORTAIL_GITHUB_APP_ID:-}
+      PORTAIL_GITHUB_APP_CLE: ${PORTAIL_GITHUB_APP_CLE:-}
     volumes:
-      - portail-donnees:/donnees
-    networks: [infra-net]
+      - portail-donnees-2:/donnees
+      - portail-espaces:/espaces
+    networks: [infra-net, portail-lanceur]
     healthcheck:
       test:
         - CMD
@@ -24,9 +29,31 @@ services:
     mem_limit: 512m
     restart: unless-stopped
 
+  # Seul service qui touche au socket Docker ; aucun port, joignable du seul portail.
+  lanceur:
+    image: ghcr.io/nicolaslallier/ai-lanceur:${IMAGE_TAG:-latest}
+    environment:
+      LANCEUR_SECRET: ${PORTAIL_LANCEUR_SECRET:?}
+      LANCEUR_VOLUME: portail-espaces
+      LANCEUR_RESEAU: run-net
+      LANCEUR_IMAGES: ghcr.io/nicolaslallier/ai-execution:latest
+      LANCEUR_IMAGES_SERVICES: pgvector/pgvector:pg16,postgres:16-alpine,minio/minio:latest
+      LANCEUR_PROXY: http://run-egress:3128
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [portail-lanceur]
+    mem_limit: 128m
+    restart: unless-stopped
+
 volumes:
-  portail-donnees:
+  # ponytail: l'ancien volume portail-donnees reste orphelin, à supprimer à la main
+  portail-donnees-2:
+  # Nom fixe : le lanceur le désigne par ce nom.
+  portail-espaces:
+    name: portail-espaces
 
 networks:
   infra-net:
     external: true
+  portail-lanceur:
+    internal: true

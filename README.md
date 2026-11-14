@@ -14,7 +14,7 @@ uv run pytest
 
 ## Déploiement
 
-Le workflow `.github/workflows/deploy.yml` construit l'image `ghcr.io/nicolaslallier/ai-portail` (amd64) à chaque push sur `main` et la publie avec les tags `latest` et `sha-<7 premiers caractères du commit>`. Le job `deploy` enchaîne alors le redéploiement de la pile `portail` dans Portainer (voir « Redéploiement automatique »).
+Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolaslallier/ai-portail`, `ai-lanceur` et `ai-execution` (amd64) à chaque push sur `main` et la publie avec les tags `latest` et `sha-<7 premiers caractères du commit>`. Le job `deploy` enchaîne alors le redéploiement de la pile `portail` dans Portainer (voir « Redéploiement automatique »).
 
 - **Pile Portainer** : `deploy/portainer-stack.yml`, sur le réseau externe `infra-net`, sans port publié. Variables à renseigner dans la pile : `PORTAIL_DB_PASSWORD` (mot de passe du rôle `portail` de Postgres, sans `@ : / %` ni autre caractère spécial d'URL, ou alors encodé en pourcentage : il est inséré tel quel dans l'URL de la base), `PORTAIL_LITELLM_CLE` (clé LiteLLM) et `IMAGE_TAG` (le déploiement automatique l'impose à `sha-<7>` ; `latest` n'est que le défaut quand il est absent, par exemple pour une pile créée à la main).
 - **NGINX** : `deploy/nginx/portail.conf` est le vhost `portail.infra.famillelallier.net`. Il se copie dans `Infra/nginx/conf.d/` par une PR séparée sur le dépôt Infra.
@@ -23,10 +23,36 @@ Le workflow `.github/workflows/deploy.yml` construit l'image `ghcr.io/nicolaslal
   - Environnement GitHub `production` (Settings → Environments), limité à la branche `main`, qui porte les secrets `PORTAINER_API_KEY` (jeton d'accès Portainer) et `BAO_TOKEN` (jeton OpenBao, lecture seule de `infra/data/portail`). Le job `deploy` ne tourne que sur `main`.
   - Le jeton OpenBao est périodique (32 jours) et renouvelé à chaque déploiement ; sans déploiement pendant 32 jours, en créer un nouveau.
   - Variables du dépôt : `PORTAINER_URL` (défaut `https://portainer.infra.famillelallier.net`), `VAULT_URL` (défaut `https://vault.infra.famillelallier.net`), `PORTAINER_ENDPOINT_ID` (obligatoire), `VAULT_SECRET_PATH` (défaut `infra/data/portail`), `INFRA_CA_CERT_PATH` (chemin de la CA de l'Infra dans le runner, défaut `/etc/ai/infra-ca.crt`).
-  - Clés du secret KV v2 `infra/portail` (lu via l'API à `infra/data/portail`) : `PORTAIL_DB_PASSWORD`, `PORTAIL_LITELLM_CLE`, `PORTAIL_GITHUB_JETON`.
+  - Clés du secret KV v2 `infra/portail` (lu via l'API à `infra/data/portail`) : `PORTAIL_DB_PASSWORD`, `PORTAIL_LITELLM_CLE`, `PORTAIL_GITHUB_JETON`, `PORTAIL_GITHUB_APP_ID`, `PORTAIL_GITHUB_APP_CLE`, `PORTAIL_LANCEUR_SECRET`.
   - Aucun workflow du dépôt ne doit avoir de déclencheur `pull_request`, `pull_request_target`, `issue_comment` ou `workflow_run` pouvant atteindre le label self-hosted `ai` : une PR de fork peut modifier `ci.yml` elle-même. Le dépôt est public : exiger l'approbation pour tous les collaborateurs externes (Settings → Actions → General → Fork pull request workflows from outside collaborators), et le runner `ai` doit être éphémère (conteneur neuf par job, aucun volume de travail persistant).
   - Le déploiement n'attend pas la CI : activer la protection de branche sur `main` avec les contrôles de CI obligatoires.
 
 ### Jeton GitHub (lecture seule)
 
-Le portail lit les dépôts GitHub avec un jeton à grain fin (fine-grained), limité aux dépôts choisis, avec les permissions **Contents : Read** et **Metadata : Read** seulement, et sans aucune permission d'écriture. Il est rangé dans OpenBao (clé `PORTAIL_GITHUB_JETON` du secret `infra/portail`), que le déploiement automatique recopie dans la pile, et ne va jamais dans le dépôt. Les données du portail vivent dans le volume `portail-donnees`, monté sur `/donnees`.
+Le portail lit les dépôts GitHub avec un jeton à grain fin (fine-grained), limité aux dépôts choisis, avec les permissions **Contents : Read** et **Metadata : Read** seulement, et sans aucune permission d'écriture. Il est rangé dans OpenBao (clé `PORTAIL_GITHUB_JETON` du secret `infra/portail`), que le déploiement automatique recopie dans la pile, et ne va jamais dans le dépôt. Les données du portail vivent dans le volume `portail-donnees-2`, monté sur `/donnees` (l'ancien `portail-donnees` appartient à l'ancien uid et reste orphelin : à supprimer à la main).
+
+### GitHub App du portail (boucle de dev)
+
+La boucle de dev pousse des branches et ouvre des PR par une GitHub App, jamais par le jeton en lecture seule ci-dessus.
+
+1. Créer l'App (Settings → Developer settings → GitHub Apps) avec les permissions **Contents : Read & write**, **Pull requests : Read & write**, **Metadata : Read**, et **sans** Administration ni webhook. Générer une clé privée (`cle.pem`).
+2. L'installer sur les seuls dépôts voulus. La branche par défaut de chaque dépôt doit être **protégée** : sinon le portail refuse de lancer le pipeline `dev`.
+3. Ranger dans OpenBao, secret `infra/portail` : `PORTAIL_GITHUB_APP_ID` (l'id de l'App), `PORTAIL_GITHUB_APP_CLE` (le PEM en **base64 sur une seule ligne** : `base64 -w0 cle.pem` sous Linux, `base64 -i cle.pem | tr -d '\n'` sous macOS) et `PORTAIL_LANCEUR_SECRET` (`openssl rand -hex 32`, 32 caractères au moins).
+4. Le lanceur (service `lanceur`, seul à monter `/var/run/docker.sock`) démarre les commandes des agents dans des conteneurs jetables de l'image `ai-execution`, sur le réseau `run-net` et le proxy `run-egress` de l'Infra (PR « run-net » du dépôt Infra, à déployer avant ce dépôt). Hôte Docker en version **26 ou plus** (montage de sous-chemin de volume).
+5. Sans App ni secret du lanceur, l'ordonnanceur ne démarre pas et le reste du portail marche comme avant.
+
+Exemple de configuration d'exécution pour EA (l'image doit figurer dans `LANCEUR_IMAGES`) :
+
+```yaml
+image: ghcr.io/nicolaslallier/ai-execution:latest
+chemins_tests: [backend/tests]
+commandes:
+  installer: cd backend && uv sync
+  tests: cd backend && uv run pytest -q
+  tests_cibles: cd backend && uv run pytest -q {fichiers}
+  lint: cd backend && uv run ruff check .
+services:
+  - nom: db
+    image: pgvector/pgvector:pg16
+    env: {POSTGRES_PASSWORD: test}
+```
