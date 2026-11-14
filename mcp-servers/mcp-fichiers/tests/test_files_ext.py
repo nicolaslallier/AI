@@ -130,3 +130,12 @@ def test_accepts(name, mime, ok):
 )
 def test_accepts_nom_et_mime(name, mime, ok):
     assert accepts(name, mime, X_MCP_FILE["accept"]) is ok
+
+
+async def test_annotations_lecture_ecriture(http):
+    r = await call(http, "tools/list", {}, {"upload"})
+    ann = {t["name"]: t.get("annotations", {}) for t in r["result"]["tools"]}
+    for nom in ("vault_search", "vault_read_note", "vault_export"):
+        assert ann[nom]["readOnlyHint"] is True
+    for nom in ("vault_import_file", "vault_import_base64"):
+        assert ann[nom]["readOnlyHint"] is False and ann[nom]["destructiveHint"] is False

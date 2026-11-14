@@ -19,7 +19,7 @@ d'un service tiers quand un modèle local suffit.
 
 | Outil | Type | À quoi il sert |
 |---|---|---|
-| _aucun pour l'instant_ | | |
+| [`mcp-fichiers`](mcp-servers/mcp-fichiers/) | Serveur MCP (HTTP) | Déposer des fichiers dans une copie d'un coffre Obsidian et en ressortir, avec l'extension expérimentale `io.modelcontextprotocol/files` ; client `mcpf` |
 
 Chaque outil ajoute sa ligne ici, dans la même PR que l'outil lui-même.
 

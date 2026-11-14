@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from mcp_types import BlobResourceContents, EmbeddedResource
+from mcp_types import BlobResourceContents, EmbeddedResource, ToolAnnotations
 from pydantic import Field
 
 from server.digest import digest_obj
@@ -69,8 +69,13 @@ async def import_bytes(
     return {"fichier": dest.relative_to(vault.root).as_posix(), "note": note.relative_to(vault.root).as_posix()}
 
 
+LECTURE = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+# Écrit dans le coffre, mais ne remplace ni ne supprime rien (suffixe -2, -3...).
+ECRITURE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
+
+
 def register_tools(server: MCPServer, vault: Vault, store) -> None:
-    @server.tool()
+    @server.tool(annotations=LECTURE)
     def vault_search(query: str, limit: int = 10) -> list[dict[str, str]]:
         """Cherche (sans tenir compte de la casse) dans les notes .md du coffre."""
         q, out = query.lower(), []
@@ -92,7 +97,7 @@ def register_tools(server: MCPServer, vault: Vault, store) -> None:
                 break
         return out
 
-    @server.tool()
+    @server.tool(annotations=LECTURE)
     def vault_read_note(chemin: str) -> str:
         """Lit une note du coffre."""
         if not chemin.endswith(".md"):
@@ -102,13 +107,14 @@ def register_tools(server: MCPServer, vault: Vault, store) -> None:
             raise FileNotFoundError(f"Note introuvable : {chemin}")
         return p.read_text(encoding="utf-8")
 
-    @server.tool()
+    @server.tool(annotations=ECRITURE)
     async def vault_import_file(
         file: Annotated[FileInput, Field(json_schema_extra={"x-mcp-file": X_MCP_FILE})],
         dossier: str = "00 - Inbox",
         note_liée: str | None = None,
     ) -> dict[str, str]:
-        """Importe un fichier dans `<dossier>/Pièces jointes/` et le lie à une note."""
+        """ÉCRIT dans le coffre : importe un fichier dans `<dossier>/Pièces jointes/` et crée ou complète une note
+        qui le lie. Ne remplace jamais un fichier existant (suffixe -2, -3...)."""
         # data absent et size > 0 : traité par FilesExtension.intercept_tool_call (upload_required)
         _verifier(file.name or "", file.mimeType, file.size)
         if len(file.data or "") > MAX_INLINE * 4 // 3 + 8:  # avant de décoder
@@ -121,11 +127,12 @@ def register_tools(server: MCPServer, vault: Vault, store) -> None:
             raise ToolError("Taille ou digest ne correspondent pas aux données")
         return await import_bytes(vault, data, file.name or "", file.mimeType, dossier, note_liée)
 
-    @server.tool()
+    @server.tool(annotations=ECRITURE)
     async def vault_import_base64(
         name: str, mimeType: str, data_base64: str, dossier: str = "00 - Inbox", note_liée: str | None = None
     ) -> dict[str, str]:
-        """Comme vault_import_file, pour les clients sans l'extension files (limite 1 Mio)."""
+        """ÉCRIT dans le coffre, comme vault_import_file, pour les clients sans l'extension files (limite 1 Mio).
+        Ne remplace jamais un fichier existant."""
         if len(data_base64) > MAX_INLINE * 4 // 3 + 8:  # avant de décoder
             raise ToolError(f"Fichier trop gros (> {MAX_INLINE} octets) : utilisez l'envoi hors bande")
         try:
@@ -135,7 +142,7 @@ def register_tools(server: MCPServer, vault: Vault, store) -> None:
         _verifier(name, mimeType, len(data))
         return await import_bytes(vault, data, name, mimeType, dossier, note_liée)
 
-    @server.tool()
+    @server.tool(annotations=LECTURE)
     def vault_export(chemin: str) -> list[EmbeddedResource]:
         """Exporte un fichier du coffre. Avec la capacité `download` (extension files), la réponse
         porte un lien de téléchargement ; sinon le fichier revient en ligne (limite 1 Mio)."""
