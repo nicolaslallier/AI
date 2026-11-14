@@ -144,7 +144,7 @@ class OutilsDepot:
             raise _Interdit
         try:
             resolu = (self.racine / brut).resolve()
-        except (ValueError, OSError):
+        except (ValueError, OSError, RuntimeError):  # 3.12 : RuntimeError sur une boucle de liens
             raise _Interdit from None
         try:
             rel = resolu.relative_to(self.racine)
@@ -305,7 +305,9 @@ class OutilsDepot:
             if inspect.isawaitable(resultat):
                 resultat = await resultat
             return resultat, False
-        except (ValueError, OSError) as e:
+        except OSError as e:  # sans le message complet : il contient des chemins de l'hôte
+            return f"erreur : {e.strerror or type(e).__name__}", False
+        except ValueError as e:
             return f"erreur : {e}", False
 
 
@@ -338,13 +340,24 @@ class OutilsEspace(OutilsDepot):
         )
         return [*schemas, *SCHEMAS_ECRITURE.values(), lancer]
 
-    def _cible(self, chemin: str) -> tuple[Path, str] | str:
-        """Chemin résolu et relatif, ou le message d'erreur si l'écriture est refusée."""
+    def _cible(self, chemin: str, lien: bool = False) -> tuple[Path, str] | str:
+        """Chemin résolu et relatif, ou le message d'erreur si l'écriture est refusée.
+
+        Avec `lien`, un lien symbolique en dernière composante est gardé tel quel (pas suivi).
+        """
         try:
-            cible = self._resoudre(chemin)
+            cible = None
+            if lien and isinstance(chemin, str):
+                brut = Path(chemin)
+                parent = self._resoudre(str(brut.parent))
+                if brut.name not in ("", ".", "..") and (parent / brut.name).is_symlink():
+                    cible = parent / brut.name
+            cible = cible or self._resoudre(chemin)
         except _Interdit:
             return "erreur : chemin interdit"
         rel = cible.relative_to(self.racine)
+        if _est_git(rel.parts):
+            return "erreur : chemin interdit"
         if _secret_chemin(rel.parts) or _secret_chemin(Path(chemin).parts):
             return "erreur : fichier secret refusé"
         # la règle de rôle porte sur le chemin résolu : un lien ne la contourne pas
@@ -372,11 +385,11 @@ class OutilsEspace(OutilsDepot):
         return f"écrit : {rel}"
 
     def supprimer(self, chemin: str) -> str:
-        cible = self._cible(chemin)
+        cible = self._cible(chemin, lien=True)
         if isinstance(cible, str):
             return cible
         fichier, rel = cible
-        if not fichier.is_file():
+        if not fichier.is_symlink() and not fichier.is_file():
             return "erreur : fichier introuvable"
         fichier.unlink()
         return f"supprimé : {rel}"

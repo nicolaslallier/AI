@@ -14,8 +14,16 @@ CONFIG_TESTS_DEFAUT = [
     "**/conftest.py",
     "pytest.ini",
     "**/pytest.ini",
+    ".pytest.ini",
+    "**/.pytest.ini",
+    "tox.ini",
+    "**/tox.ini",
     "jest.config.*",
+    "**/jest.config.*",
     "vitest.config.*",
+    "**/vitest.config.*",
+    "vitest.workspace.*",
+    "**/vitest.workspace.*",
     ".cargo/config.toml",
 ]
 OBLIGATOIRES = ("installer", "tests", "tests_cibles")

@@ -1,7 +1,7 @@
 """Client HTTP du lanceur : seul le lanceur parle à Docker."""
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from portail.execution import Service
 
@@ -26,15 +26,21 @@ class ClientLanceur:
         self._transport = transport
 
     async def _poster(self, route: str, corps: dict, delai: float) -> dict:
-        async with httpx.AsyncClient(transport=self._transport, timeout=delai) as c:
-            r = await c.post(self._url + route, json=corps, headers=self._entetes)
+        try:
+            async with httpx.AsyncClient(transport=self._transport, timeout=delai) as c:
+                r = await c.post(self._url + route, json=corps, headers=self._entetes)
+        except httpx.HTTPError as e:
+            raise ErreurLanceur(0, f"lanceur injoignable : {type(e).__name__} {e}") from None
         if r.status_code >= 400:
             try:
                 message = str(r.json()["erreur"])
             except (ValueError, KeyError, TypeError):
                 message = r.text[:500]
             raise ErreurLanceur(r.status_code, message)
-        return r.json() if r.content else {}
+        try:
+            return r.json() if r.content else {}
+        except ValueError:
+            raise ErreurLanceur(0, f"réponse non JSON : {r.text[:500]}") from None
 
     async def lancer(
         self, espace: str, image: str, commande: str, delai_s: int, lecture_seule: list[str]
@@ -43,7 +49,11 @@ class ClientLanceur:
             "espace": espace, "image": image, "commande": commande,
             "delai_s": delai_s, "lecture_seule": lecture_seule,
         }  # fmt: skip
-        return Resultat.model_validate(await self._poster("/lancer", corps, delai_s + 60))
+        brut = await self._poster("/lancer", corps, delai_s + 60)
+        try:
+            return Resultat.model_validate(brut)
+        except ValidationError as e:
+            raise ErreurLanceur(0, f"réponse invalide : {e}") from None
 
     async def services(self, espace: str, services: list[Service]) -> None:
         corps = {"espace": espace, "services": [s.model_dump() for s in services]}

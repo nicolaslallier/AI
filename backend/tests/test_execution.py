@@ -161,3 +161,14 @@ def test_chemins_tests_vide_en_francais():
     with pytest.raises(Refus) as e:
         lire_config(BASE.replace('["backend/tests/**", "frontend/**/*.spec.ts"]', "[]"))
     assert "au moins un chemin" in e.value.message
+
+
+@pytest.mark.parametrize(
+    "chemin",
+    ["tox.ini", "a/tox.ini", ".pytest.ini", "a/.pytest.ini", "front/jest.config.ts",
+     "front/vitest.config.ts", "vitest.workspace.ts", "front/vitest.workspace.js"],
+)  # fmt: skip
+def test_config_tests_par_defaut_protegee(chemin):
+    from portail.execution import correspond
+
+    assert correspond(chemin, lire_config(BASE).protege)

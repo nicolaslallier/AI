@@ -69,3 +69,22 @@ async def test_faux_lanceur(tmp_path):
     assert (await f.lancer("e", "img", "pytest", 600, [])).code == 2
     assert (await f.lancer("e", "img", "pytest", 600, [])).code == 0
     assert (tmp_path / "e/x").exists() and len(f.appels) == 3
+
+
+async def test_client_lanceur_erreur_reseau():
+    def gestionnaire(req):
+        raise httpx.ConnectError("refusé")
+
+    with pytest.raises(ErreurLanceur) as exc:
+        await _client(gestionnaire).arreter("e")
+    assert exc.value.statut == 0
+
+
+async def test_client_lanceur_reponse_invalide():
+    c = _client(lambda req: httpx.Response(200, text="pas du json"))
+    with pytest.raises(ErreurLanceur) as exc:
+        await c.lancer("e", "img", "pytest", 600, [])
+    assert exc.value.statut == 0
+    c = _client(lambda req: httpx.Response(200, json={"code": "x"}))
+    with pytest.raises(ErreurLanceur):
+        await c.lancer("e", "img", "pytest", 600, [])

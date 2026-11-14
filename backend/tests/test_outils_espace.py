@@ -158,3 +158,38 @@ async def test_lien_physique_vers_tests_refuse(tmp_path):
     res = await o.executer("ecrire", '{"chemin": "a.py", "contenu": "x"}')
     assert res[0].startswith("erreur")
     assert (tmp_path / "tests/test_a.py").read_text() == "t"
+
+
+async def test_boucle_de_liens_refusee(tmp_path):
+    (tmp_path / "boucle").symlink_to("boucle")
+    o = _outils(tmp_path, "code")
+    for nom, args in [
+        ("lire", {"chemin": "boucle/x"}),
+        ("lister", {"chemin": "boucle/x"}),
+        ("ecrire", {"chemin": "boucle/x", "contenu": "x"}),
+        ("supprimer", {"chemin": "boucle/x"}),
+    ]:
+        res, _ = await o.executer(nom, json.dumps(args))
+        assert res.startswith("erreur : "), (nom, res)
+    assert (await o.executer("supprimer", '{"chemin": "boucle"}'))[0] == "supprimé : boucle"
+
+
+async def test_supprimer_un_lien_supprime_le_lien(tmp_path):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/a.py").write_text("t")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/lien").symlink_to("../tests/a.py")
+    res = await _outils(tmp_path, "tests").executer("supprimer", '{"chemin": "src/lien"}')
+    assert res[0] == "erreur : écriture interdite pour le rôle tests"
+    assert (tmp_path / "src/lien").is_symlink()
+    res = await _outils(tmp_path, "code").executer("supprimer", '{"chemin": "src/lien"}')
+    assert res[0] == "supprimé : src/lien"
+    assert not (tmp_path / "src/lien").is_symlink()
+    assert (tmp_path / "tests/a.py").read_text() == "t"
+
+
+async def test_erreur_os_sans_chemin_absolu(tmp_path):
+    (tmp_path / "f").write_text("x")
+    o = _outils(tmp_path, "code")
+    res, _ = await o.executer("ecrire", '{"chemin": "f/a.py", "contenu": "x"}')
+    assert res.startswith("erreur : ") and str(tmp_path) not in res
