@@ -5,7 +5,7 @@ from conftest import FauxLLM
 
 from portail.agents import Agent
 from portail.boucle import ErreurOutils, boucle_outils
-from portail.contexte import elaguer_resultats_outils
+from portail.contexte import elaguer_resultats_outils, estimer_jetons
 from portail.outils import OutilsDepot
 
 
@@ -112,9 +112,11 @@ def test_elagage():
 
 
 def test_elagage_sous_le_seuil():
-    messages = [{"role": "tool", "tool_call_id": "1", "content": "x" * 100}]
+    # ~800 jetons : dans la bande 0,75-0,90, rien ne doit être retiré
+    messages = [{"role": "tool", "tool_call_id": "1", "content": "x" * 3190}]
+    assert 750 <= estimer_jetons(messages) < 900
     assert elaguer_resultats_outils(messages, 1000) == 0
-    assert messages[0]["content"] == "x" * 100
+    assert messages[0]["content"] == "x" * 3190
 
 
 def _appel_brut(tool_call):
@@ -203,3 +205,31 @@ async def test_trop_d_appels_par_tour(outils):
     assert [t["tool_call_id"] for t in tools] == [f"c{i}" for i in range(10)]
     assert len(vus) == 8
     assert tools[9]["content"] == "erreur : trop d'appels dans un même tour, ignoré"
+
+
+async def test_message_assistant_normalise_rejouable(outils):
+    llm = FauxLLM()
+    bon = '{"chemin": "README.md"}'
+    llm.reponses = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"function": {"name": "lire", "arguments": bon}},  # id manquant
+                {"id": "d", "function": {"name": "lire", "arguments": {"chemin": "README.md"}}},
+                "n'importe quoi",  # entrée non dict
+                {"id": "d", "function": {"name": "lire", "arguments": bon}},  # id dupliqué
+                {"id": "e", "function": {"name": "lire", "arguments": 42}},
+            ]
+            + [{"id": f"x{i}", "function": {"name": "lire", "arguments": bon}} for i in range(5)],
+        },
+        _texte("fin"),
+    ]
+    _, _, messages = await _go(llm, outils)
+    assistant = next(m for m in messages if m.get("tool_calls"))
+    ids = [t["id"] for t in assistant["tool_calls"]]
+    assert len(ids) == len(set(ids)) == 10
+    for t in assistant["tool_calls"]:
+        assert t["type"] == "function" and isinstance(t["function"]["arguments"], str)
+        assert isinstance(t["function"]["name"], str)
+    assert [m["tool_call_id"] for m in messages if m["role"] == "tool"] == ids

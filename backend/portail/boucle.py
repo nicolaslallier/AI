@@ -49,22 +49,48 @@ async def boucle_outils(
         raise ErreurOutils(f"l'agent « {agent.nom} » n'a aucun outil")
     schemas = [SCHEMAS_OUTILS[n] for n in agent.outils]
     mal_formes = 0
+    ids: set[str] = set()
     for _ in range(agent.tours_max):
         elaguer_resultats_outils(messages, agent.contexte_max)
         reponse = await llm.completer(agent.modele, messages, agent.temperature, outils=schemas)
         appels = reponse.get("tool_calls")
         if not isinstance(appels, list) or not appels:
             return ResultatBoucle(texte=_texte(reponse), limite_atteinte=False)
-        messages.append(reponse)
-        for i, appel in enumerate(appels):
+        normalises = []
+        for appel in appels:
             appel = appel if isinstance(appel, dict) else {}
             fonction = appel.get("function")
             fonction = fonction if isinstance(fonction, dict) else {}
             id_ = appel.get("id")
-            id_ = id_ if isinstance(id_, str) and id_ else f"appel_{len(messages)}_{i}"
+            if not isinstance(id_, str) or not id_ or id_ in ids:
+                id_ = f"appel_{len(ids)}"
+                while id_ in ids:
+                    id_ += "_"
+            ids.add(id_)
             nom, arguments = fonction.get("name"), fonction.get("arguments") or ""
-            if isinstance(arguments, dict):
-                arguments = json.dumps(arguments)
+            valide = isinstance(arguments, str | dict)
+            if not isinstance(arguments, str):
+                arguments = json.dumps(arguments, default=str)
+            normalises.append((id_, nom, arguments, valide))
+        # message rejouable tel quel : ids uniques, arguments en chaîne, un appel par entrée
+        messages.append(
+            {
+                "role": "assistant",
+                "content": reponse.get("content"),
+                "tool_calls": [
+                    {
+                        "id": id_,
+                        "type": "function",
+                        "function": {
+                            "name": nom if isinstance(nom, str) else "inconnu",
+                            "arguments": arguments,
+                        },
+                    }
+                    for id_, nom, arguments, _ in normalises
+                ],
+            }
+        )
+        for i, (id_, nom, arguments, valide) in enumerate(normalises):
             if i >= _MAX_APPELS_PAR_TOUR:
                 messages.append(
                     {
@@ -76,7 +102,7 @@ async def boucle_outils(
                 continue
             if isinstance(nom, str) and nom not in agent.outils:
                 resultat, mal_forme, libelle = f"erreur : outil non autorisé : {nom}", True, nom
-            elif isinstance(nom, str) and isinstance(arguments, str):
+            elif isinstance(nom, str) and valide:
                 resultat, mal_forme = await outils.executer(nom, arguments)
                 libelle = _libelle(nom, arguments)
             else:
