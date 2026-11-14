@@ -203,6 +203,8 @@ class OutilsDepot:
             limit=_MAX_SORTIE_GREP,
         )  # fmt: skip
 
+        tache_err = asyncio.ensure_future(proc.stderr.read())
+
         async def lire_sortie() -> tuple[list[bytes], bool, bytes]:
             lignes: list[bytes] = []
             octets = 0
@@ -218,7 +220,7 @@ class OutilsDepot:
                 if len(lignes) > _MAX_RESULTATS + _MARGE_COMPTE or octets > _MAX_SORTIE_GREP:
                     return lignes, True, b""
             await proc.wait()
-            return lignes, False, await proc.stderr.read()
+            return lignes, False, await tache_err
 
         try:
             brutes, coupe, err = await asyncio.wait_for(lire_sortie(), _DELAI_GREP)
@@ -228,17 +230,20 @@ class OutilsDepot:
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
             await proc.wait()
+            tache_err.cancel()
         if not coupe and proc.returncode == 1:
             return "aucun résultat"
         if not coupe and proc.returncode != 0:
             msg = err.decode(errors="replace").strip()[:300]
-            if proc.returncode == 128:
+            if proc.returncode == 128 and ("command line" in msg or "-e option" in msg):
                 return "erreur : motif invalide : " + msg
             return "erreur : git grep : " + msg
         lignes = [b.decode(errors="replace").rstrip("\n") for b in brutes]
         gardees = [ligne[:_MAX_LIGNE_RESULTAT] for ligne in lignes[:_MAX_RESULTATS]]
         if coupe:
-            gardees.append(f"[… plus de {len(lignes) - 1} résultats]")
+            gardees.append(
+                f"[… plus de {len(lignes)} résultats]" if lignes else "[… résultats tronqués]"
+            )
         elif len(lignes) > _MAX_RESULTATS:
             gardees.append(f"[… {len(lignes)} résultats au total]")
         return "\n".join(gardees)
@@ -246,7 +251,7 @@ class OutilsDepot:
     async def executer(self, nom: str, arguments: str) -> tuple[str, bool]:
         try:
             args = json.loads(arguments or "{}")
-        except ValueError:
+        except (ValueError, RecursionError):
             return "erreur : arguments JSON invalides", True
         if nom not in SCHEMAS_OUTILS or not isinstance(args, dict):
             return f"erreur : outil inconnu ou arguments invalides : {nom}", True

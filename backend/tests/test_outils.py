@@ -189,3 +189,13 @@ async def test_chercher_coupe_tot_sur_gros_resultat(racine):
     sortie = await outils.chercher("tas")
     assert sortie.splitlines()[-1].startswith("[… plus de ")
     assert len(sortie.splitlines()) == 101
+
+
+async def test_json_trop_imbrique_est_mal_forme(racine):
+    assert (await OutilsDepot(racine).executer("lire", "[" * 100_000))[1] is True
+
+
+async def test_chercher_ligne_geante(racine):
+    (racine / "g.txt").write_text("tas" * 500_000 + "\n")
+    sortie = await valider(racine).chercher("tas")
+    assert sortie == "[… résultats tronqués]"
