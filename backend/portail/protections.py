@@ -31,10 +31,10 @@ def _sections(nom: str, texte: str | None) -> dict[str, object]:
         if nom == "setup.cfg":
             c = configparser.ConfigParser(interpolation=None)
             c.read_string(texte)
-            # `options.entry_points` peut déclarer un plugin pytest11 chargé à chaque lancement
-            return {
-                k: dict(c[k]) for k in ("tool:pytest", "options.entry_points") if c.has_section(k)
-            }
+            # `options` (entry_points, `file:`…) et `options.entry_points` peuvent déclarer un
+            # plugin pytest11 chargé à chaque lancement : protégés en entier
+            sections = ("tool:pytest", "options", "options.entry_points")
+            return {k: dict(c[k]) for k in sections if c.has_section(k)}
         d = tomllib.loads(texte)
     except (ValueError, configparser.Error, RecursionError) as e:
         raise _Illisible from e
@@ -47,10 +47,17 @@ def _sections(nom: str, texte: str | None) -> dict[str, object]:
                 s.update({f"tool.{cle}.{k}": x for k, x in v.items()})
             else:
                 s[f"tool.{cle}"] = v
+        # ponytail: entry points, champs dynamiques (`file:`) et config du backend de build
+        # protégés en entier — l'agent de code n'y touche presque jamais
+        if isinstance(outil, dict) and "setuptools" in outil:
+            s["tool.setuptools"] = outil["setuptools"]
+        if "build-system" in d:
+            s["build-system"] = d["build-system"]
         projet = d.get("project")
-        ep = projet.get("entry-points") if isinstance(projet, dict) else None
-        if isinstance(ep, dict) and "pytest11" in ep:
-            s["project.entry-points.pytest11"] = ep["pytest11"]
+        if isinstance(projet, dict):
+            for cle in ("entry-points", "dynamic"):
+                if cle in projet:
+                    s[f"project.{cle}"] = projet[cle]
         return s
 
     # Cargo.toml : `_` et `-` sont équivalents pour cargo ; chaque graphie est sa propre

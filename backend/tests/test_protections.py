@@ -173,7 +173,31 @@ async def test_pytest11_entry_point(espace, cfg):
     avant = "[project]\nname = 'x'\n"
     apres = avant + "[project.entry-points.pytest11]\nx = 'evil'\n"
     assert await _viol(espace, cfg, {"pyproject.toml": avant}, {"pyproject.toml": apres}) == [
-        "pyproject.toml (section project.entry-points.pytest11)"
+        "pyproject.toml (section project.entry-points)"
+    ]
+
+
+@pytest.mark.parametrize(
+    "ajout, section",
+    [
+        ("[project]\nname = 'x'\ndynamic = ['entry-points']\n", "project.dynamic"),
+        ("[project]\nname = 'x'\n[tool.setuptools.dynamic]\nreadme = {file = 'p.txt'}\n",
+         "tool.setuptools"),
+        ("[project]\nname = 'x'\n[build-system]\nrequires = ['evil']\n", "build-system"),
+    ],
+)  # fmt: skip
+async def test_pyproject_build_et_dynamique(espace, cfg, ajout, section):
+    avant = "[project]\nname = 'x'\n"
+    assert await _viol(espace, cfg, {"pyproject.toml": avant}, {"pyproject.toml": ajout}) == [
+        f"pyproject.toml (section {section})"
+    ]
+
+
+async def test_setup_cfg_options(espace, cfg):
+    avant = "[metadata]\nname = x\n"
+    apres = avant + "[options]\nentry_points = file: ep.cfg\n"
+    assert await _viol(espace, cfg, {"setup.cfg": avant}, {"setup.cfg": apres}) == [
+        "setup.cfg (section options)"
     ]
 
 

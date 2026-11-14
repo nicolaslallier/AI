@@ -36,6 +36,12 @@ CONFIG_TESTS_DEFAUT = [
     "**/usercustomize.py",
     "*.pth",
     "**/*.pth",
+    "entry_points.txt",
+    "**/entry_points.txt",
+    "*.egg-info/**",
+    "**/*.egg-info/**",
+    "*.dist-info/**",
+    "**/*.dist-info/**",
 ]
 OBLIGATOIRES = ("installer", "tests", "tests_cibles")
 
