@@ -39,7 +39,7 @@ La boucle de dev pousse des branches et ouvre des PR par une GitHub App, jamais 
 2. L'installer sur les seuls dépôts voulus. La branche par défaut de chaque dépôt doit être **protégée** : sinon le portail refuse de lancer le pipeline `dev`.
 3. Ranger dans OpenBao, secret `infra/portail` : `PORTAIL_GITHUB_APP_ID` (l'id de l'App), `PORTAIL_GITHUB_APP_CLE` (le PEM en **base64 sur une seule ligne** : `base64 -w0 cle.pem` sous Linux, `base64 -i cle.pem | tr -d '\n'` sous macOS) et `PORTAIL_LANCEUR_SECRET` (`openssl rand -hex 32`, 32 caractères au moins).
 4. Le lanceur (service `lanceur`, seul à monter `/var/run/docker.sock`) démarre les commandes des agents dans des conteneurs jetables de l'image `ai-execution`, sur le réseau `run-net` et le proxy `run-egress` de l'Infra (PR « run-net » du dépôt Infra, à déployer avant ce dépôt). Hôte Docker en version **26 ou plus** (montage de sous-chemin de volume).
-5. Sans App ni secret du lanceur, l'ordonnanceur ne démarre pas et le reste du portail marche comme avant.
+5. **Prérequis bloquant :** les trois clés (`PORTAIL_GITHUB_APP_ID`, `PORTAIL_GITHUB_APP_CLE`, `PORTAIL_LANCEUR_SECRET` d'au moins 32 caractères) doivent exister dans OpenBao `infra/portail` **avant** la fusion et le déploiement de ce dépôt. Sinon le déploiement échoue : `scripts/vault-render-env.sh` s'arrête dès qu'une clé manque, la pile refuse un `PORTAIL_LANCEUR_SECRET` vide et le lanceur quitte (redémarrage en boucle) avec un secret de moins de 32 caractères. Une fois la pile en place, un portail sans App valide garde son ordonnanceur éteint et le reste fonctionne comme avant.
 
 Exemple de configuration d'exécution pour EA (l'image doit figurer dans `LANCEUR_IMAGES`) :
 
