@@ -36,6 +36,8 @@ async def creer_pipeline(
     session: AsyncSession, catalogue: Catalogue, projet_id: int, type_: str
 ) -> tuple[Pipeline, Etape | None]:
     """Renvoie le pipeline et l'étape à lancer (agent auto), à lancer après le commit."""
+    if type_ == "dev":  # créé par l'orchestrateur seul, depuis une tâche Prête
+        raise Refus(422, "un pipeline dev se lance depuis une tâche Prête du kanban")
     if type_ not in catalogue.pipelines:
         raise Refus(404, f"type de pipeline inconnu : {type_}")
     if type_ == "planification":

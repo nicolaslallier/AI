@@ -169,6 +169,7 @@ class FauxLanceur:
         self.dossier = Path(dossier)
         self.codes: dict[str, list[int]] = {}  # rendus tour à tour par commande exacte, 0 sinon
         self.effets: dict[str, Callable[[Path], None]] = {}  # appliqués au dossier de l'espace
+        self.delais: set[str] = set()  # commandes exactes qui dépassent leur délai
         self.appels: list[dict] = []
 
     async def lancer(self, espace, image, commande, delai_s, lecture_seule) -> Resultat:
@@ -180,6 +181,9 @@ class FauxLanceur:
         )  # fmt: skip
         if commande in self.effets:
             self.effets[commande](self.dossier / espace)
+        if commande in self.delais:
+            sortie = f"sortie de {commande}\n[délai dépassé : {delai_s} s]"
+            return Resultat(code=None, sortie=sortie, delai_depasse=True)
         codes = self.codes.get(commande)
         code = codes.pop(0) if codes else 0
         return Resultat(code=code, sortie=f"sortie de {commande}", delai_depasse=False)
@@ -224,6 +228,10 @@ class FauxGitHub:
     def _verifier(self):
         if self.erreur:
             raise self.erreur
+
+    async def jeton(self, depot) -> str:
+        self._verifier()
+        return ""
 
     async def branche_defaut(self, depot) -> str:
         self._verifier()
