@@ -17,15 +17,28 @@ from portail.agents import Catalogue, charger_catalogue
 from portail.chat import Diffuseur, ServiceChat, annexes
 from portail.config import Reglages
 from portail.contexte import construire, jauge
-from portail.db import Etape, Pipeline, Projet, creer_moteur, fabrique_sessions
+from portail.db import (
+    Etape,
+    Pipeline,
+    Projet,
+    Proposition,
+    Tache,
+    TacheDependance,
+    creer_moteur,
+    fabrique_sessions,
+)
 from portail.depots import Depots, ErreurDepot
 from portail.etats import Etat
 from portail.llm import ClientLLM
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
 from portail.schemas import (
     DEPOT_RE,
+    Deplacement,
     DocumentOut,
+    DonneesTache,
+    DonneesTachePartielles,
     EtapeOut,
+    Kanban,
     PipelineDetail,
     PipelineIn,
     PipelineResume,
@@ -34,7 +47,17 @@ from portail.schemas import (
     ProjetOut,
     ProjetPatch,
     ProjetRef,
+    PropositionVue,
     SpecCourante,
+    TacheVue,
+)
+from portail.taches import (
+    creer_tache,
+    definir_dependances,  # noqa: F401
+    deplacer_tache,
+    modifier_tache,
+    supprimer_tache,
+    verifier_modifiable,  # noqa: F401
 )
 
 logger = logging.getLogger(__name__)
@@ -90,6 +113,54 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
         maj_le=pipeline.maj_le,
         etapes=etapes,
     )
+
+
+async def _vues(session: AsyncSession, taches: list[Tache]) -> list[TacheVue]:
+    ids = [t.id for t in taches]
+    deps: dict[int, list[int]] = {}
+    for a, b in (
+        await session.execute(
+            select(TacheDependance.tache_id, TacheDependance.depend_de_id)
+            .where(TacheDependance.tache_id.in_(ids))
+            .order_by(TacheDependance.depend_de_id)
+        )
+    ).all():
+        deps.setdefault(a, []).append(b)
+    colonnes = dict(
+        (
+            await session.execute(
+                select(Tache.id, Tache.colonne).where(
+                    Tache.id.in_({d for v in deps.values() for d in v})
+                )
+            )
+        ).all()
+    )
+    return [
+        TacheVue.model_validate(
+            {
+                **{c: getattr(t, c) for c in TacheVue.model_fields if hasattr(t, c)},
+                "depend_de": deps.get(t.id, []),
+                "dependances_non_terminees": [
+                    d for d in deps.get(t.id, []) if colonnes[d] != "terminee"
+                ],
+            }
+        )
+        for t in taches
+    ]
+
+
+async def _vue(session: AsyncSession, tache_id: int) -> TacheVue:
+    t = await session.scalar(
+        select(Tache).where(Tache.id == tache_id).execution_options(populate_existing=True)
+    )
+    return (await _vues(session, [t]))[0]
+
+
+async def _tache(session: AsyncSession, tache_id: int) -> Tache:
+    t = await session.get(Tache, tache_id)
+    if t is None:
+        raise Refus(404, "tâche introuvable")
+    return t
 
 
 def _verifier_depot(url: str | None) -> None:
@@ -245,6 +316,76 @@ def create_app(
     async def annuler(pipeline_id: int, request: Request, s: Session):
         await request.app.state.chat.annuler(pipeline_id)
         return await _detail(s, request.app.state.catalogue, pipeline_id)
+
+    @app.get("/api/projets/{projet_id}/kanban", response_model=Kanban)
+    async def kanban(projet_id: int, s: Session):
+        if await s.get(Projet, projet_id) is None:
+            raise Refus(404, "projet introuvable")
+        taches = (
+            await s.scalars(
+                select(Tache)
+                .where(Tache.projet_id == projet_id)
+                .order_by(Tache.colonne, Tache.rang, Tache.id)
+            )
+        ).all()
+        props = (
+            await s.scalars(
+                select(Proposition)
+                .where(Proposition.projet_id == projet_id, Proposition.etat == "ouverte")
+                .order_by(Proposition.id)
+            )
+        ).all()
+        return Kanban(
+            taches=await _vues(s, list(taches)),
+            propositions=[PropositionVue.model_validate(p, from_attributes=True) for p in props],
+        )
+
+    @app.post("/api/projets/{projet_id}/taches", status_code=201, response_model=TacheVue)
+    async def ajouter_tache(projet_id: int, corps: DonneesTache, s: Session):
+        t = await creer_tache(s, projet_id, corps, "nicolas")
+        await s.commit()
+        return await _vue(s, t.id)
+
+    @app.patch("/api/taches/{tache_id}", response_model=TacheVue)
+    async def modifier(tache_id: int, corps: DonneesTachePartielles, s: Session):
+        t = await _tache(s, tache_id)
+        await modifier_tache(s, t, corps, "nicolas")
+        await s.commit()
+        return await _vue(s, tache_id)
+
+    @app.post("/api/taches/{tache_id}/deplacer", response_model=TacheVue)
+    async def deplacer(tache_id: int, corps: Deplacement, s: Session):
+        t = await _tache(s, tache_id)
+        await deplacer_tache(s, t, corps.colonne, corps.avant_id, "nicolas")
+        await s.commit()
+        return await _vue(s, tache_id)
+
+    @app.delete("/api/taches/{tache_id}", status_code=204)
+    async def supprimer(tache_id: int, s: Session):
+        t = await _tache(s, tache_id)
+        await supprimer_tache(s, t, "nicolas")
+        await s.commit()
+
+    @app.post("/api/taches/{tache_id}/annuler", response_model=TacheVue)
+    async def annuler_tache(tache_id: int, request: Request, s: Session):
+        t = await _tache(s, tache_id)
+        verrou = t.verrou
+        if verrou is None:
+            raise Refus(409, "rien à annuler")
+        etat = await s.scalar(select(Pipeline.etat).where(Pipeline.id == verrou))
+        await s.rollback()  # libère la transaction avant que le service ouvre la sienne
+        if etat is not None and etat not in (Etat.TERMINEE, Etat.ECHOUEE):
+            await request.app.state.chat.annuler(verrou)  # même chemin que /pipelines/{id}/annuler
+        t = await s.scalar(
+            select(Tache)
+            .where(Tache.id == tache_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        t.verrou = None
+        await deplacer_tache(s, t, "a_faire", None, "nicolas")
+        await s.commit()
+        return await _vue(s, tache_id)
 
     class MessageIn(BaseModel):
         contenu: str
