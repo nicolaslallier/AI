@@ -32,6 +32,8 @@ from portail.db import (
 from portail.depots import Depots, ErreurDepot
 from portail.dev import Orchestrateur
 from portail.etats import Etat
+from portail.evenements import bus
+from portail.evenements import flux as flux_evenements
 from portail.execution import lire_config
 from portail.github import ErreurGitHub, GitHubApp
 from portail.lanceur import ClientLanceur
@@ -599,6 +601,14 @@ def create_app(
         chat = request.app.state.chat
         await chat.etat(etape_id)  # 404 avant de commencer le flux
         return StreamingResponse(chat.flux(etape_id), media_type="text/event-stream")
+
+    @app.get("/api/evenements")
+    async def evenements():
+        return StreamingResponse(
+            flux_evenements(bus),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     if r.static_dir:
         racine = r.static_dir.resolve()

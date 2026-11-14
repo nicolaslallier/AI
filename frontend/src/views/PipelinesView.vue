@@ -9,6 +9,7 @@ import {
   type PipelineResume,
   type Projet,
 } from '../api'
+import { ecouterEvenements, regrouper } from '../evenements'
 import EtatBadge from '../components/EtatBadge.vue'
 
 const router = useRouter()
@@ -21,6 +22,7 @@ const projets = ref<Projet[]>([])
 const projetId = ref<number | ''>('')
 const nouveauNom = ref('')
 let minuteur: ReturnType<typeof setInterval> | undefined
+let arreter: (() => void) | undefined
 
 async function charger() {
   try {
@@ -55,9 +57,13 @@ async function creer() {
 watch(filtre, charger)
 onMounted(() => {
   charger()
-  minuteur = setInterval(charger, 5000)
+  minuteur = setInterval(charger, 60000) // filet de sécurité ; les événements font le reste
+  arreter = ecouterEvenements({ pipelines: regrouper(charger) })
 })
-onUnmounted(() => clearInterval(minuteur))
+onUnmounted(() => {
+  clearInterval(minuteur)
+  arreter?.()
+})
 </script>
 
 <template>
