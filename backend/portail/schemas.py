@@ -4,8 +4,14 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
 from portail.contexte import Jauge
+from portail.moteur import Refus
 
 DEPOT_RE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?(\.git)?$")
+
+
+def verifier_depot(url: str | None) -> None:
+    if url is not None and not DEPOT_RE.fullmatch(url):
+        raise Refus(422, "URL de dépôt GitHub invalide")
 
 
 def _nom_valide(v: str | None) -> str:

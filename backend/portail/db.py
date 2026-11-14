@@ -109,6 +109,23 @@ class MessageConversation(Base):
     cree_le: Mapped[datetime] = _horodatage()
 
 
+class ActionConversation(Base):
+    __tablename__ = "action_conversation"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversation.id", ondelete="CASCADE"), index=True
+    )
+    nom: Mapped[str] = mapped_column(String)
+    parametres: Mapped[dict] = mapped_column(JSON, default=dict)
+    # proposee | confirmee | refusee | echouee | perimee
+    etat: Mapped[str] = mapped_column(String, default="proposee", server_default="proposee")
+    resultat: Mapped[str | None] = mapped_column(Text)
+    lien: Mapped[str | None] = mapped_column(String)  # ex. /projets/12, /pipelines/34
+    cree_le: Mapped[datetime] = _horodatage()
+    maj_le: Mapped[datetime] = _horodatage(onupdate=func.now())
+
+
 class Document(Base):
     __tablename__ = "document"
 

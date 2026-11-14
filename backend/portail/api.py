@@ -41,7 +41,6 @@ from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_c
 from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.schemas import (
-    DEPOT_RE,
     Acceptation,
     CommandeVue,
     ConversationDetail,
@@ -67,6 +66,7 @@ from portail.schemas import (
     PropositionVue,
     SpecCourante,
     TacheVue,
+    verifier_depot,
 )
 from portail.suivi_pr import SuiviPR
 from portail.taches import (
@@ -223,11 +223,6 @@ async def _tache(session: AsyncSession, tache_id: int) -> Tache:
     return t
 
 
-def _verifier_depot(url: str | None) -> None:
-    if url is not None and not DEPOT_RE.fullmatch(url):
-        raise Refus(422, "URL de dépôt GitHub invalide")
-
-
 def _resume(p: Pipeline, nom: str) -> PipelineResume:
     return PipelineResume(
         id=p.id, projet_id=p.projet_id, projet_nom=nom, type=p.type, etat=p.etat, maj_le=p.maj_le
@@ -380,7 +375,7 @@ def create_app(
 
     @app.post("/api/projets", status_code=201, response_model=ProjetOut)
     async def creer_projet(corps: ProjetIn, s: Session):
-        _verifier_depot(corps.depot_url)
+        verifier_depot(corps.depot_url)
         projet = Projet(**corps.model_dump())
         s.add(projet)
         await s.commit()
@@ -392,7 +387,7 @@ def create_app(
         projet = await s.get(Projet, projet_id)
         if projet is None:
             raise Refus(404, "projet introuvable")
-        _verifier_depot(corps.depot_url)
+        verifier_depot(corps.depot_url)
         for champ in corps.model_fields_set:
             setattr(projet, champ, getattr(corps, champ))
         await s.commit()
