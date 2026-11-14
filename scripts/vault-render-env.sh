@@ -10,6 +10,9 @@ VAULT_URL="${VAULT_URL:-https://vault.infra.famillelallier.net}"
 VAULT_SECRET_PATH="${VAULT_SECRET_PATH:-infra/data/portail}"
 # variable de la pile <- clé du coffre
 MAP="PORTAIL_DB_PASSWORD=PORTAIL_DB_PASSWORD PORTAIL_LITELLM_CLE=PORTAIL_LITELLM_CLE PORTAIL_GITHUB_JETON=PORTAIL_GITHUB_JETON PORTAIL_GITHUB_APP_ID=PORTAIL_GITHUB_APP_ID PORTAIL_GITHUB_APP_CLE=PORTAIL_GITHUB_APP_CLE PORTAIL_LANCEUR_SECRET=PORTAIL_LANCEUR_SECRET PORTAIL_NTFY_JETON=PORTAIL_NTFY_JETON"
+# Clés facultatives : absentes, elles sont écrites vides (le portail garde l'ordonnanceur
+# et les notifications éteints). Portainer réécrit toute la liste, on les envoie donc quand même.
+FACULTATIVES=" PORTAIL_GITHUB_APP_ID PORTAIL_GITHUB_APP_CLE PORTAIL_NTFY_JETON "
 
 die() { echo "::error::vault-render-env.sh : $*" >&2; exit 1; }
 BAO_TOKEN="${BAO_TOKEN//[[:space:]]/}"
@@ -34,11 +37,15 @@ secret="$(printf 'header = "X-Vault-Token: %s"\n' "$BAO_TOKEN" \
 chmod 600 "$OUT"
 for pair in $MAP; do
   var="${pair%%=*}"; key="${pair#*=}"
-  val="$(jq -er --arg k "$key" '.[$k]' <<<"$secret")" || die "clé $key absente de $VAULT_SECRET_PATH"
+  if ! val="$(jq -er --arg k "$key" '.[$k]' <<<"$secret")"; then
+    case "$FACULTATIVES" in *" $key "*) ;; *) die "clé $key absente de $VAULT_SECRET_PATH" ;; esac
+    echo "::warning::clé facultative $key absente de $VAULT_SECRET_PATH, écrite vide" >&2
+    val=""
+  fi
   # Un retour à la ligne injecterait une autre variable dans le fichier.
   case "$val" in *$'\n'* | *$'\r'*) die "$key contient un retour à la ligne" ;; esac
   # Avant toute autre sortie : le journal Actions masque la valeur.
-  [ "${GITHUB_ACTIONS:-}" != true ] || printf '::add-mask::%s\n' "$val"
+  [ "${GITHUB_ACTIONS:-}" != true ] || [ -z "$val" ] || printf '::add-mask::%s\n' "$val"
   printf '%s=%s\n' "$var" "$val" >> "$OUT"
   echo "  $var <- $VAULT_SECRET_PATH:$key"
 done

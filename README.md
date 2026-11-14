@@ -39,13 +39,13 @@ La boucle de dev pousse des branches et ouvre des PR par une GitHub App, jamais 
 2. L'installer sur les seuls dépôts voulus. La branche par défaut de chaque dépôt doit être **protégée** : sinon le portail refuse de lancer le pipeline `dev`.
 3. Ranger dans OpenBao, secret `infra/portail` : `PORTAIL_GITHUB_APP_ID` (l'id de l'App), `PORTAIL_GITHUB_APP_CLE` (le PEM en **base64 sur une seule ligne** : `base64 -w0 cle.pem` sous Linux, `base64 -i cle.pem | tr -d '\n'` sous macOS) et `PORTAIL_LANCEUR_SECRET` (`openssl rand -hex 32`, 32 caractères au moins).
 4. Le lanceur (service `lanceur`, seul à monter `/var/run/docker.sock`) démarre les commandes des agents dans des conteneurs jetables de l'image `ai-execution`, sur le réseau `run-net` et le proxy `run-egress` de l'Infra (PR « run-net » du dépôt Infra, à déployer avant ce dépôt). Hôte Docker en version **26 ou plus** (montage de sous-chemin de volume).
-5. **Prérequis bloquant :** les trois clés (`PORTAIL_GITHUB_APP_ID`, `PORTAIL_GITHUB_APP_CLE`, `PORTAIL_LANCEUR_SECRET` d'au moins 32 caractères) doivent exister dans OpenBao `infra/portail` **avant** la fusion et le déploiement de ce dépôt. Sinon le déploiement échoue : `scripts/vault-render-env.sh` s'arrête dès qu'une clé manque, la pile refuse un `PORTAIL_LANCEUR_SECRET` vide et le lanceur quitte (redémarrage en boucle) avec un secret de moins de 32 caractères. Une fois la pile en place, un portail sans App valide garde son ordonnanceur éteint et le reste fonctionne comme avant.
+5. **Prérequis bloquant :** `PORTAIL_LANCEUR_SECRET` (32 caractères au moins) doit exister dans OpenBao `infra/portail` **avant** la fusion et le déploiement de ce dépôt. Sinon le déploiement échoue : `scripts/vault-render-env.sh` s'arrête si la clé manque et le lanceur quitte (redémarrage en boucle) avec un secret de moins de 32 caractères. `PORTAIL_GITHUB_APP_ID` et `PORTAIL_GITHUB_APP_CLE` sont facultatives : absentes, le script les écrit vides avec un avertissement, et le portail garde son ordonnanceur éteint ; le reste fonctionne comme avant.
 
 ### Reprise sur commentaires et ntfy
 
 Quand Nicolas commente la PR d'une tâche *En revue*, le portail reprend la boucle de dev sur la même branche et la même PR, puis notifie par ntfy.
 
-- Le jeton ntfy s'obtient avec `make ntfy-provision app=portail` dans l'Infra et se range dans OpenBao, secret `infra/portail`, clé `PORTAIL_NTFY_JETON`, **avant** la fusion (**prérequis bloquant** : `scripts/vault-render-env.sh` s'arrête si la clé manque).
+- Le jeton ntfy s'obtient avec `make ntfy-provision app=portail` dans l'Infra et se range dans OpenBao, secret `infra/portail`, clé `PORTAIL_NTFY_JETON`, clé facultative : absente, `scripts/vault-render-env.sh` l'écrit vide avec un avertissement et le portail n'envoie pas de notification.
 - Seuls les commentaires de `PORTAIL_GITHUB_PROPRIETAIRE` déclenchent une reprise.
 - Une revue part tout de suite ; des commentaires isolés partent 10 minutes après le dernier.
 - Recommenter relance une reprise échouée.
