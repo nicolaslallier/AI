@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
@@ -13,24 +14,54 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from portail.agents import Catalogue, charger_catalogue
-from portail.chat import Diffuseur, ServiceChat
+from portail.chat import Diffuseur, ServiceChat, annexes
 from portail.config import Reglages
 from portail.contexte import construire, jauge
-from portail.db import Document, Etape, Pipeline, Projet, creer_moteur, fabrique_sessions
+from portail.db import (
+    Etape,
+    Pipeline,
+    Projet,
+    Proposition,
+    Tache,
+    TacheDependance,
+    creer_moteur,
+    fabrique_sessions,
+)
+from portail.depots import Depots, ErreurDepot
+from portail.etats import Etat
 from portail.llm import ClientLLM
-from portail.moteur import Refus, creer_pipeline, recuperer_interrompues
+from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
+from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.schemas import (
+    DEPOT_RE,
+    Acceptation,
+    Deplacement,
     DocumentOut,
+    DonneesTache,
+    DonneesTachePartielles,
     EtapeOut,
+    Kanban,
+    KanbanToutAccepte,
     PipelineDetail,
     PipelineIn,
     PipelineResume,
     ProjetDetail,
     ProjetIn,
     ProjetOut,
+    ProjetPatch,
     ProjetRef,
+    PropositionVue,
     SpecCourante,
+    TacheVue,
 )
+from portail.taches import (
+    creer_tache,
+    deplacer_tache,
+    modifier_tache,
+    supprimer_tache,
+)
+
+logger = logging.getLogger(__name__)
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
@@ -57,14 +88,18 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
     etapes = []
     for e in pipeline.etapes:
         agent = catalogue.agents.get(e.agent)
-        j = jauge(agent, construire(agent, e.messages, e.document)) if agent else None
+        j = None
+        if agent:
+            a = await annexes(session, agent, e, pipeline.projet_id)
+            j = jauge(agent, construire(agent, e.messages, e.document, annexes=a))
         etapes.append(
             EtapeOut.model_validate(
                 {
                     **{
                         k: getattr(e, k)
-                        for k in ("id", "ordre", "agent", "etat", "erreur", "action")
+                        for k in ("id", "ordre", "agent", "etat", "erreur", "action", "sha")
                     },
+                    "produit": agent.produit if agent else None,
                     "messages": e.messages,
                     "document": e.document,
                     "jauge": j,
@@ -80,6 +115,80 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
         maj_le=pipeline.maj_le,
         etapes=etapes,
     )
+
+
+async def _vues(session: AsyncSession, taches: list[Tache]) -> list[TacheVue]:
+    ids = [t.id for t in taches]
+    deps: dict[int, list[int]] = {}
+    for a, b in (
+        await session.execute(
+            select(TacheDependance.tache_id, TacheDependance.depend_de_id)
+            .where(TacheDependance.tache_id.in_(ids))
+            .order_by(TacheDependance.depend_de_id)
+        )
+    ).all():
+        deps.setdefault(a, []).append(b)
+    colonnes = dict(
+        (
+            await session.execute(
+                select(Tache.id, Tache.colonne).where(
+                    Tache.id.in_({d for v in deps.values() for d in v})
+                )
+            )
+        ).all()
+    )
+    return [
+        TacheVue.model_validate(t, from_attributes=True).model_copy(
+            update={
+                "depend_de": deps.get(t.id, []),
+                "dependances_non_terminees": [
+                    d for d in deps.get(t.id, []) if colonnes[d] != "terminee"
+                ],
+            }
+        )
+        for t in taches
+    ]
+
+
+async def _kanban(session: AsyncSession, projet_id: int) -> Kanban:
+    taches = (
+        await session.scalars(
+            select(Tache)
+            .where(Tache.projet_id == projet_id)
+            .order_by(Tache.colonne, Tache.rang, Tache.id)
+            .execution_options(populate_existing=True)
+        )
+    ).all()
+    props = (
+        await session.scalars(
+            select(Proposition)
+            .where(Proposition.projet_id == projet_id, Proposition.etat == "ouverte")
+            .order_by(Proposition.id)
+        )
+    ).all()
+    return Kanban(
+        taches=await _vues(session, list(taches)),
+        propositions=[PropositionVue.model_validate(p, from_attributes=True) for p in props],
+    )
+
+
+async def _vue(session: AsyncSession, tache_id: int) -> TacheVue:
+    t = await session.scalar(
+        select(Tache).where(Tache.id == tache_id).execution_options(populate_existing=True)
+    )
+    return (await _vues(session, [t]))[0]
+
+
+async def _tache(session: AsyncSession, tache_id: int) -> Tache:
+    t = await session.get(Tache, tache_id)
+    if t is None:
+        raise Refus(404, "tâche introuvable")
+    return t
+
+
+def _verifier_depot(url: str | None) -> None:
+    if url is not None and not DEPOT_RE.fullmatch(url):
+        raise Refus(422, "URL de dépôt GitHub invalide")
 
 
 def _resume(p: Pipeline, nom: str) -> PipelineResume:
@@ -105,9 +214,18 @@ def create_app(
         async with app.state.sessions() as s:
             await recuperer_interrompues(s)
             await s.commit()
+            en_attente = set(
+                (await s.scalars(select(Etape.id).where(Etape.etat == Etat.EN_ATTENTE))).all()
+            )
+        depots = Depots(r.donnees_dir, r.github_jeton)
+        try:
+            # au démarrage, aucune étape n'est au milieu d'une préparation : nettoyer sans verrou
+            await depots.nettoyer(garder=en_attente)
+        except ErreurDepot:
+            logger.exception("nettoyage des arbres de travail incomplet")
         app.state.diffuseur = Diffuseur()
         app.state.chat = ServiceChat(
-            app.state.sessions, app.state.catalogue, app.state.llm, app.state.diffuseur
+            app.state.sessions, app.state.catalogue, app.state.llm, app.state.diffuseur, depots
         )
         yield
         taches = list(app.state.chat.taches.values())
@@ -153,8 +271,21 @@ def create_app(
 
     @app.post("/api/projets", status_code=201, response_model=ProjetOut)
     async def creer_projet(corps: ProjetIn, s: Session):
-        projet = Projet(nom=corps.nom, description=corps.description)
+        _verifier_depot(corps.depot_url)
+        projet = Projet(**corps.model_dump())
         s.add(projet)
+        await s.commit()
+        await s.refresh(projet)
+        return projet
+
+    @app.patch("/api/projets/{projet_id}", response_model=ProjetOut)
+    async def modifier_projet(projet_id: int, corps: ProjetPatch, s: Session):
+        projet = await s.get(Projet, projet_id)
+        if projet is None:
+            raise Refus(404, "projet introuvable")
+        _verifier_depot(corps.depot_url)
+        for champ in corps.model_fields_set:
+            setattr(projet, champ, getattr(corps, champ))
         await s.commit()
         await s.refresh(projet)
         return projet
@@ -171,16 +302,7 @@ def create_app(
                 .order_by(Pipeline.maj_le.desc())
             )
         ).all()
-        spec = await s.scalar(
-            select(Document)
-            .where(
-                Document.projet_id == projet_id,
-                Document.type == "spec",
-                Document.etat == "validee",
-            )
-            .order_by(Document.maj_le.desc())
-            .limit(1)
-        )
+        spec = await spec_courante(s, projet_id)
         return ProjetDetail(
             **ProjetOut.model_validate(projet, from_attributes=True).model_dump(),
             pipelines=[_resume(p, projet.nom) for p in pipelines],
@@ -203,13 +325,137 @@ def create_app(
         if await s.get(Projet, corps.projet_id) is None:
             raise Refus(404, "projet introuvable")
         cat = request.app.state.catalogue
-        pipeline = await creer_pipeline(s, cat, corps.projet_id, corps.type)
+        pipeline, a_lancer = await creer_pipeline(s, cat, corps.projet_id, corps.type)
         await s.commit()
+        if a_lancer:
+            request.app.state.chat.lancer(a_lancer.id)
         return await _detail(s, cat, pipeline.id)
 
     @app.get("/api/pipelines/{pipeline_id}", response_model=PipelineDetail)
     async def lire_pipeline(pipeline_id: int, request: Request, s: Session):
         return await _detail(s, request.app.state.catalogue, pipeline_id)
+
+    @app.post("/api/pipelines/{pipeline_id}/annuler", response_model=PipelineDetail)
+    async def annuler(pipeline_id: int, request: Request, s: Session):
+        await request.app.state.chat.annuler(pipeline_id)
+        return await _detail(s, request.app.state.catalogue, pipeline_id)
+
+    @app.get("/api/projets/{projet_id}/kanban", response_model=Kanban)
+    async def kanban(projet_id: int, s: Session):
+        if await s.get(Projet, projet_id) is None:
+            raise Refus(404, "projet introuvable")
+        return await _kanban(s, projet_id)
+
+    async def _proposition(s: AsyncSession, proposition_id: int) -> Proposition:
+        p = await s.get(Proposition, proposition_id)
+        if p is None:
+            raise Refus(404, "proposition introuvable")
+        return p
+
+    async def _fermer(request: Request, s: AsyncSession, etape_id: int) -> None:
+        """Commite ; termine l'étape si plus rien n'est ouvert et lance la suivante."""
+        suivante = await fermer_si_fini(s, request.app.state.catalogue, etape_id)
+        await s.commit()
+        if suivante:
+            request.app.state.chat.lancer(suivante.id)
+
+    @app.post("/api/propositions/{proposition_id}/accepter", response_model=Kanban)
+    async def accepter_proposition(
+        proposition_id: int, request: Request, s: Session, corps: Acceptation | None = None
+    ):
+        p = await _proposition(s, proposition_id)
+        try:
+            await accepter(s, p, corps.donnees if corps else None)
+        except Refus:
+            if p.etat == "perimee":  # le marquage est gardé, même si l'acceptation échoue
+                await _fermer(request, s, p.etape_id)
+            raise
+        await _fermer(request, s, p.etape_id)
+        return await _kanban(s, p.projet_id)
+
+    @app.post("/api/propositions/{proposition_id}/rejeter", response_model=Kanban)
+    async def rejeter_proposition(proposition_id: int, request: Request, s: Session):
+        p = await _proposition(s, proposition_id)
+        await rejeter(s, p)
+        await _fermer(request, s, p.etape_id)
+        return await _kanban(s, p.projet_id)
+
+    @app.post("/api/etapes/{etape_id}/propositions/tout-accepter", response_model=KanbanToutAccepte)
+    async def tout_accepter(etape_id: int, request: Request, s: Session):
+        etape = await s.get(Etape, etape_id)
+        if etape is None:
+            raise Refus(404, "étape introuvable")
+        projet_id = await s.scalar(
+            select(Pipeline.projet_id).where(Pipeline.id == etape.pipeline_id)
+        )
+        ids = (
+            await s.scalars(
+                select(Proposition.id)
+                .where(Proposition.etape_id == etape_id, Proposition.etat == "ouverte")
+                .order_by(Proposition.id)
+            )
+        ).all()
+        perimees = 0
+        for i in ids:
+            p = await s.get(Proposition, i)
+            try:
+                await accepter(s, p, None)
+            except Refus:
+                if p.etat != "perimee":
+                    raise
+                perimees += 1
+        await _fermer(request, s, etape_id)
+        k = await _kanban(s, projet_id)
+        return KanbanToutAccepte(**k.model_dump(), perimees=perimees)
+
+    @app.post("/api/projets/{projet_id}/taches", status_code=201, response_model=TacheVue)
+    async def ajouter_tache(projet_id: int, corps: DonneesTache, s: Session):
+        t = await creer_tache(s, projet_id, corps, "nicolas")
+        await s.commit()
+        return await _vue(s, t.id)
+
+    @app.patch("/api/taches/{tache_id}", response_model=TacheVue)
+    async def modifier(tache_id: int, corps: DonneesTachePartielles, s: Session):
+        t = await _tache(s, tache_id)
+        await modifier_tache(s, t, corps, "nicolas")
+        await s.commit()
+        return await _vue(s, tache_id)
+
+    @app.post("/api/taches/{tache_id}/deplacer", response_model=TacheVue)
+    async def deplacer(tache_id: int, corps: Deplacement, s: Session):
+        t = await _tache(s, tache_id)
+        await deplacer_tache(s, t, corps.colonne, corps.avant_id, "nicolas")
+        await s.commit()
+        return await _vue(s, tache_id)
+
+    @app.delete("/api/taches/{tache_id}", status_code=204)
+    async def supprimer(tache_id: int, s: Session):
+        t = await _tache(s, tache_id)
+        await supprimer_tache(s, t, "nicolas")
+        await s.commit()
+
+    @app.post("/api/taches/{tache_id}/annuler", response_model=TacheVue)
+    async def annuler_tache(tache_id: int, request: Request, s: Session):
+        t = await _tache(s, tache_id)
+        verrou, projet_id = t.verrou, t.projet_id
+        if verrou is None:
+            raise Refus(409, "rien à annuler")
+        etat = await s.scalar(select(Pipeline.etat).where(Pipeline.id == verrou))
+        await s.rollback()  # libère la transaction avant que le service ouvre la sienne
+        if etat is not None and etat not in (Etat.TERMINEE, Etat.ECHOUEE):
+            await request.app.state.chat.annuler(verrou)  # même chemin que /pipelines/{id}/annuler
+        # ordre des verrous : projet d'abord, comme partout ailleurs
+        await s.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
+        t = await s.scalar(
+            select(Tache)
+            .where(Tache.id == tache_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        t.verrou = None
+        await deplacer_tache(s, t, "a_faire", None, "nicolas")
+        await s.commit()
+        return await _vue(s, tache_id)
 
     class MessageIn(BaseModel):
         contenu: str

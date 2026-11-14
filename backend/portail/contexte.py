@@ -7,16 +7,20 @@ from portail.db import Document, Message
 
 
 def construire(
-    agent: Agent, messages: list[Message], document: Document | None, consigne: str | None = None
+    agent: Agent,
+    messages: list[Message],
+    document: Document | None,
+    consigne: str | None = None,
+    annexes: list[str] | None = None,
 ) -> list[dict]:
     sortie = [{"role": "system", "content": agent.prompt_systeme}]
+    sortie += [{"role": "system", "content": a} for a in annexes or []]
     gardes = [m for m in messages if m.role in ("user", "assistant")]
     if document:
         sortie.append(
             {
                 "role": "system",
-                "content": "Brouillon courant de la spec (corrections de Nicolas incluses) :\n\n"
-                + document.contenu,
+                "content": "Brouillon courant :\n\n" + document.contenu,
             }
         )
         if document.dernier_message_id is not None:
@@ -28,7 +32,25 @@ def construire(
 
 
 def estimer_jetons(messages: list[dict]) -> int:
-    return sum(len(m["content"]) // 4 + 4 for m in messages)
+    # content peut être None (message assistant qui n'a fait qu'appeler des outils)
+    return sum(len(m.get("content") or "") // 4 + 4 for m in messages)
+
+
+RESULTAT_RETIRE = "[résultat retiré : relire si besoin]"
+
+
+def elaguer_resultats_outils(messages: list[dict], contexte_max: int) -> int:
+    """Remplace les résultats d'outils, du plus ancien au plus récent, de 0,90 à 0,75."""
+    if estimer_jetons(messages) < 0.90 * contexte_max:
+        return 0
+    n = 0
+    for m in messages:
+        if estimer_jetons(messages) < 0.75 * contexte_max:
+            break
+        if m["role"] == "tool" and m["content"] != RESULTAT_RETIRE:
+            m["content"] = RESULTAT_RETIRE
+            n += 1
+    return n
 
 
 class Jauge(BaseModel):

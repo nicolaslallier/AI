@@ -20,10 +20,10 @@ class FauxEventSource {
   }
 }
 
-let rappels: { partiel: any; delta: any; fin: any; erreur: any }
+let rappels: { partiel: any; delta: any; fin: any; erreur: any; outil: any }
 beforeEach(() => {
   ;(globalThis as any).EventSource = FauxEventSource
-  rappels = { partiel: vi.fn(), delta: vi.fn(), fin: vi.fn(), erreur: vi.fn() }
+  rappels = { partiel: vi.fn(), delta: vi.fn(), fin: vi.fn(), erreur: vi.fn(), outil: vi.fn() }
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -35,6 +35,12 @@ it('partiel puis delta appellent les rappels', () => {
   s.emettre('delta', { texte: 'jour' })
   expect(rappels.partiel).toHaveBeenCalledWith('Bon')
   expect(rappels.delta).toHaveBeenCalledWith('jour')
+})
+
+it('outil appelle outil(libelle)', () => {
+  ecouterFlux(1, rappels)
+  FauxEventSource.derniere.emettre('outil', { libelle: 'lire(README.md)' })
+  expect(rappels.outil).toHaveBeenCalledWith('lire(README.md)')
 })
 
 it('fin appelle fin() puis ferme', () => {

@@ -3,6 +3,7 @@ export interface RappelsFlux {
   delta(t: string): void
   fin(): void
   erreur(m: string): void
+  outil(libelle: string): void
 }
 
 export function ecouterFlux(etapeId: number, rappels: RappelsFlux): () => void {
@@ -11,6 +12,7 @@ export function ecouterFlux(etapeId: number, rappels: RappelsFlux): () => void {
   const donnee = (e: Event) => JSON.parse((e as MessageEvent).data)
   source.addEventListener('partiel', (e) => rappels.partiel(donnee(e).texte))
   source.addEventListener('delta', (e) => rappels.delta(donnee(e).texte))
+  source.addEventListener('outil', (e) => rappels.outil(donnee(e).libelle))
   source.addEventListener('fin', () => {
     termine = true
     source.close()

@@ -135,3 +135,43 @@ async def test_flux_coupe_sans_done():
     )
     with pytest.raises(ErreurLLM, match="flux interrompu"):
         _ = [m async for m in client.flux("m", [], None)]
+
+
+async def test_completer_envoie_tools_et_lit_le_message():
+    vues = []
+
+    def handler(requete: httpx.Request) -> httpx.Response:
+        vues.append(json.loads(requete.content))
+        return httpx.Response(
+            200, json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+        )
+
+    client = ClientLLM("http://litellm:4000", "", transport=httpx.MockTransport(handler))
+    outils = [{"type": "function", "function": {"name": "lire"}}]
+    message = await client.completer("m", [{"role": "user", "content": "x"}], 0.2, outils=outils)
+    assert message == {"role": "assistant", "content": "ok"}
+    assert vues[0]["tools"] == outils
+    assert vues[0]["temperature"] == 0.2
+    assert not vues[0].get("stream")
+    assert "response_format" not in vues[0]
+
+
+async def test_completer_erreur_http():
+    client = ClientLLM(
+        "http://l", "", transport=httpx.MockTransport(lambda r: httpx.Response(500, text="boum"))
+    )
+    with pytest.raises(ErreurLLM, match="500"):
+        await client.completer("m", [], None)
+
+
+async def test_completer_envoie_response_format():
+    vues = []
+
+    def handler(requete: httpx.Request) -> httpx.Response:
+        vues.append(json.loads(requete.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    client = ClientLLM("http://l", "", transport=httpx.MockTransport(handler))
+    await client.completer("m", [], None, response_format={"type": "json_object"})
+    assert vues[0]["response_format"] == {"type": "json_object"}
+    assert "tools" not in vues[0]

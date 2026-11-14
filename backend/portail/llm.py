@@ -58,6 +58,41 @@ class ClientLLM:
         except httpx.HTTPError as e:
             raise ErreurLLM(f"LiteLLM injoignable : {e}") from e
 
+    async def completer(
+        self,
+        modele: str,
+        messages: list[dict],
+        temperature: float | None,
+        outils: list[dict] | None = None,
+        response_format: dict | None = None,
+    ) -> dict:
+        corps: dict = {"model": modele, "messages": messages, "stream": False}
+        if temperature is not None:
+            corps["temperature"] = temperature
+        if outils is not None:
+            corps["tools"] = outils
+        if response_format is not None:
+            corps["response_format"] = response_format
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(300, connect=10), transport=self._transport
+            ) as client:
+                reponse = await client.post(
+                    f"{self._url}/v1/chat/completions",
+                    json=corps,
+                    headers={"Authorization": f"Bearer {self._cle}"} if self._cle else {},
+                )
+        except httpx.TimeoutException as e:
+            raise ErreurLLM(f"LiteLLM : délai dépassé ({e.__class__.__name__})") from e
+        except httpx.HTTPError as e:
+            raise ErreurLLM(f"LiteLLM injoignable : {e}") from e
+        if not reponse.is_success:
+            raise ErreurLLM(f"LiteLLM a répondu {reponse.status_code} : {reponse.text[:300]}")
+        try:
+            return reponse.json()["choices"][0]["message"]
+        except (ValueError, KeyError, IndexError, TypeError) as e:
+            raise ErreurLLM(f"Réponse de LiteLLM illisible : {reponse.text[:200]}") from e
+
 
 def _suffixe_prefixe(texte: str, balise: str) -> int:
     """Longueur du plus long suffixe de `texte` qui commence `balise`."""

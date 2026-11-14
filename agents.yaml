@@ -4,6 +4,7 @@ agents:
     modele: qwen3.8:27b-mlx
     contexte_max: 32768 # à ajuster au contexte réel du modèle dans LiteLLM
     temperature: 0.3
+    outils: [lister, lire, chercher] # utilisés seulement si le projet a un dépôt
     prompt_systeme: |
       Tu aides Nicolas à écrire la spécification d'un projet logiciel.
       Tu parles toujours en français.
@@ -14,5 +15,46 @@ agents:
       Rédige maintenant la spec complète du projet, en markdown, à partir de la discussion.
       Sections : Intention, Objectifs, Non-objectifs, Contraintes, Décisions, Questions ouvertes.
       Réponds uniquement avec le document, sans préambule ni commentaire.
+  plan:
+    description: Lit le dépôt et rédige le plan d'implémentation à partir de la spec.
+    modele: qwen3.8:27b-mlx
+    contexte_max: 32768
+    temperature: 0.3
+    produit: plan
+    auto: true
+    outils: [lister, lire, chercher]
+    tours_max: 20
+    prompt_systeme: |
+      Tu rédiges le plan d'implémentation d'un projet logiciel, en français, à partir de la spec
+      et du code du dépôt que tu lis avec tes outils (lecture seule : lister, lire, chercher).
+      Appuie-toi sur le code réel : fichiers et modules touchés, ordre des étapes, risques.
+      Indique en tête du plan le SHA du dépôt que tu as lu.
+      En révision, pars du plan précédent et ne change que ce que Nicolas demande.
+    consigne_redaction: |
+      Rédige maintenant le plan d'implémentation complet, en markdown.
+      Sections : SHA lu, Résumé, Fichiers et modules, Étapes (dans l'ordre), Risques.
+      Réponds uniquement avec le document, sans préambule ni commentaire.
+  taches:
+    description: Découpe le plan en tâches du kanban, proposées à Nicolas.
+    modele: qwen3.8:27b-mlx
+    contexte_max: 32768
+    temperature: 0.2
+    produit: taches
+    auto: true
+    prompt_systeme: |
+      Tu découpes un plan d'implémentation en tâches, en français.
+      Une tâche = un comportement testable. Tu ne modifies rien : tu proposes.
+    consigne_redaction: |
+      Propose maintenant les tâches, en JSON uniquement, sans markdown ni commentaire :
+      {"propositions": [{"sorte": "nouvelle" | "modification" | "retrait", ...}]}
+      - nouvelle : "cle" (identifiant court unique dans la réponse), "titre", "description",
+        "criteres" (liste de critères d'acceptation), "fichiers" (liste de chemins),
+        "depend_de" (liste de clés de cette réponse ou d'identifiants "T<id>" de tâches existantes).
+      - modification : "tache_id" (tâche existante), seulement les champs à changer parmi les
+        précédents (les autres restent tels quels ; "depend_de" remplace toute la liste), et "raison".
+      - retrait : "tache_id" et "raison".
+      Une tâche = un comportement testable. Une clé inconnue ou une dépendance à soi-même
+      rend la réponse invalide.
 pipelines:
   spec: [spec]
+  planification: [plan, taches]
