@@ -50,6 +50,7 @@ class FauxLLM:
         self.morceaux: list[str | asyncio.Event] = []  # un Event met le flux en pause
         self.exception: Exception | None = None
         self.appels: list[dict] = []  # {"modele", "messages", "temperature"}
+        self.reponses: list[dict] = []  # messages renvoyés tour à tour par `completer`
 
     async def flux(self, modele, messages, temperature):
         self.appels.append({"modele": modele, "messages": messages, "temperature": temperature})
@@ -60,6 +61,20 @@ class FauxLLM:
                 yield m
         if self.exception:
             raise self.exception
+
+    async def completer(self, modele, messages, temperature, outils=None, response_format=None):
+        self.appels.append(
+            {
+                "modele": modele,
+                "messages": [dict(m) for m in messages],  # copie : la boucle ajoute ensuite
+                "temperature": temperature,
+                "outils": outils,
+                "response_format": response_format,
+            }
+        )
+        if self.exception:
+            raise self.exception
+        return self.reponses.pop(0)
 
 
 def _agent(nom, contexte_max=32768, **kw):
