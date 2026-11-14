@@ -415,10 +415,10 @@ async def test_confirmer_execute_et_relance(client, faux_llm):
     assert projet["nom"] == "Beta"
     assert (a["etat"], a["resultat"], a["lien"]) == (
         "confirmee",
-        "projet « Beta » créé",
+        f"projet n°{projet['id']} « Beta » créé",
         f"/projets/{projet['id']}",
     )
-    systeme = f"Action n°{a['id']} (creer_projet) confirmée par Nicolas : projet « Beta » créé"
+    systeme = f"Action n°{a['id']} (creer_projet) confirmée par Nicolas : projet n°{projet['id']} « Beta » créé"
     assert [(m["role"], m["contenu"]) for m in d["messages"][-2:]] == [
         ("system", systeme),
         ("assistant", "C'est fait."),
@@ -515,7 +515,13 @@ async def test_nouveau_message_perime_l_action(client, faux_llm):
     faux_llm.reponses = [_texte("Autre chose.")]
     await _envoyer(client, cid, "finalement non")
     await _attendre(client, cid)
-    assert (await _detail(client, cid))["actions"][0]["etat"] == "perimee"
+    d = await _detail(client, cid)
+    assert d["actions"][0]["etat"] == "perimee"
+    note = f"Action(s) n°{a['id']} périmée(s) : Nicolas a écrit un nouveau message sans confirmer."
+    assert [(m["role"], m["contenu"]) for m in d["messages"] if m["role"] == "system"] == [
+        ("system", note)
+    ]
+    assert {"role": "system", "content": note} in faux_llm.appels[-1]["messages"]
     r = await _confirmer(client, a["id"])
     assert r.status_code == 409 and r.json()["detail"] == "action périmée"
     assert await _projets(client) == []

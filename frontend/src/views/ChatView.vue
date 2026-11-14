@@ -95,7 +95,7 @@ async function nouvelle() {
   }
 }
 
-const bloque = () => conv.value?.etat !== 'pret' || conv.value.jauge?.niveau === 'plein'
+const bloque = () => conv.value?.etat === 'en_cours' || conv.value.jauge?.niveau === 'plein'
 
 async function envoyer() {
   const t = saisie.value.trim()

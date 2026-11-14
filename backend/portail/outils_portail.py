@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from portail.actions import ACTIONS, valider_action
 from portail.agents import Catalogue
+from portail.boucle import _IGNORE
 from portail.db import ActionConversation, Etape, Pipeline, Projet, Tache
 from portail.moteur import Refus, spec_courante
 from portail.outils import _fonction
@@ -105,8 +106,6 @@ SCHEMAS_ACTIONS: dict[str, dict] = {
     }
     for nom, description in _DESCRIPTIONS_ACTIONS.items()
 }
-
-_IGNORE = "ignoré : une action attend la confirmation de Nicolas"
 
 
 def _borner(texte: str) -> str:

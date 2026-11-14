@@ -128,7 +128,7 @@ async def executer_action(
         projet = Projet(**p.model_dump())
         s.add(projet)
         await s.flush()
-        return Execution(f"projet « {projet.nom} » créé", f"/projets/{projet.id}")
+        return Execution(f"projet n°{projet.id} « {projet.nom} » créé", f"/projets/{projet.id}")
     if nom == "deposer_spec":
         pipeline, _ = await creer_pipeline(s, catalogue, p.projet_id, "spec")
         etape = pipeline.etapes[0]
@@ -145,22 +145,30 @@ async def executer_action(
         await s.flush()
         suivante = await terminer_etape(s, catalogue, etape)
         lancer = [suivante.id] if suivante else []
-        return Execution("spec déposée et validée", f"/pipelines/{pipeline.id}", lancer)
+        return Execution(
+            f"spec déposée et validée (pipeline n°{pipeline.id})",
+            f"/pipelines/{pipeline.id}",
+            lancer,
+        )
     if nom == "lancer_pipeline":
         pipeline, etape = await creer_pipeline(s, catalogue, p.projet_id, p.type)
         lancer = [etape.id] if etape else []
-        return Execution(f"pipeline {p.type} lancé", f"/pipelines/{pipeline.id}", lancer)
+        return Execution(
+            f"pipeline n°{pipeline.id} ({p.type}) lancé", f"/pipelines/{pipeline.id}", lancer
+        )
     if nom == "creer_tache":
         t = await creer_tache(s, p.projet_id, p, AUTEUR)
-        return Execution(f"tâche « {t.titre} » créée", f"/projets/{t.projet_id}/kanban")
+        return Execution(f"tâche n°{t.id} « {t.titre} » créée", f"/projets/{t.projet_id}/kanban")
     tache = await s.get(Tache, p.tache_id)
     if nom == "modifier_tache":
         await modifier_tache(s, tache, p, AUTEUR)
-        return Execution(f"tâche « {tache.titre} » modifiée", f"/projets/{tache.projet_id}/kanban")
+        return Execution(
+            f"tâche n°{tache.id} « {tache.titre} » modifiée", f"/projets/{tache.projet_id}/kanban"
+        )
     if nom == "deplacer_tache":
         await deplacer_tache(s, tache, p.colonne, None, AUTEUR)
         return Execution(
-            f"tâche « {tache.titre} » déplacée vers {p.colonne}",
+            f"tâche n°{tache.id} « {tache.titre} » déplacée vers {p.colonne}",
             f"/projets/{tache.projet_id}/kanban",
         )
     raise ValueError(f"action non exécutée ici : {nom}")  # annuler_tache : voir chat

@@ -123,11 +123,27 @@ class ServiceConversation:
 
     async def _perimer(self, s: AsyncSession, cid: int) -> None:
         """Sous le verrou de la conversation : une action ne s'exécute jamais hors de son fil."""
-        await s.execute(
-            update(ActionConversation)
-            .where(ActionConversation.conversation_id == cid, ActionConversation.etat == "proposee")
-            .values(etat="perimee")
-        )
+        ids = (
+            await s.scalars(
+                update(ActionConversation)
+                .where(
+                    ActionConversation.conversation_id == cid,
+                    ActionConversation.etat == "proposee",
+                )
+                .values(etat="perimee")
+                .returning(ActionConversation.id)
+            )
+        ).all()
+        if ids:
+            n = ", ".join(f"n°{i}" for i in sorted(ids))
+            s.add(
+                MessageConversation(
+                    conversation_id=cid,
+                    role="system",
+                    contenu=f"Action(s) {n} périmée(s) : Nicolas a écrit un nouveau message "
+                    "sans confirmer.",
+                )
+            )
 
     async def envoyer(self, cid: int, contenu: str) -> None:
         async with self._sessions() as s:
@@ -141,8 +157,8 @@ class ServiceConversation:
             avec = construire_conversation(agent, await self._messages(s, cid))
             if jauge(agent, avec + [{"role": "user", "content": contenu}]).niveau == "plein":
                 raise Refus(409, "contexte plein : ouvre une nouvelle conversation")
-            s.add(MessageConversation(conversation_id=cid, role="user", contenu=contenu))
             await self._perimer(s, cid)
+            s.add(MessageConversation(conversation_id=cid, role="user", contenu=contenu))
             if not c.titre:
                 c.titre = contenu[:60]
             c.etat, c.erreur = "en_cours", None
