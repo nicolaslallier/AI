@@ -286,3 +286,19 @@ async def test_annuler_reprise_en_attente_laisse_la_tache(monde):
     _ex, tache, _pipeline = await monde.etat(pid)
     assert (tache.colonne, tache.verrou) == ("en_revue", origine)
     assert not await demarrer(monde, pid)  # une reprise annulée ne démarre jamais
+
+
+async def test_demarrer_reprise_annulee_entre_temps_ne_demarre_pas(monde):
+    await en_revue(monde)
+    pid = await creer(monde, [commentaire("conversation", 1)])
+    async with monde.sessions() as s:
+        ex = await s.scalar(select(ExecutionDev).where(ExecutionDev.pipeline_id == pid))
+        garde = await s.get(Pipeline, pid)  # référence gardée : reste dans l'identity map
+        assert garde.etat == "en_attente"
+        async with monde.sessions() as autre:  # Nicolas annule entre-temps
+            (await autre.get(Pipeline, pid)).etat = "echouee"
+            await autre.commit()
+        assert not await monde.orch.demarrer_reprise(s, ex)
+        await s.commit()
+    ex, tache, pipeline = await monde.etat(pid)
+    assert (pipeline.etat, ex.phase, tache.colonne) == ("echouee", "attente", "en_revue")

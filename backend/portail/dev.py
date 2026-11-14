@@ -258,7 +258,12 @@ class Orchestrateur:
             .with_for_update()
             .execution_options(populate_existing=True)
         )
-        pipeline = await session.get(Pipeline, ex.pipeline_id, with_for_update=True)
+        pipeline = await session.scalar(
+            select(Pipeline)
+            .where(Pipeline.id == ex.pipeline_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)  # jamais un état périmé de la session
+        )
         if pipeline.etat != Etat.EN_ATTENTE:  # annulée entre-temps
             return False
         a_nous = tache.verrou is not None and await session.scalar(
