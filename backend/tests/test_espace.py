@@ -337,3 +337,43 @@ async def test_sous_module_peuple_au_sha_livre_refuse(tmp_path, origine, nettoya
     (e.racine / "src" / "b.py").write_text("b = 3\n")
     assert await e.commiter("agent-code", "agent-code@portail.local", "code")
     assert not temoin.exists()
+
+
+@pytest.mark.parametrize("nettoyage", ["restaurer", "remettre_a_zero"])
+@pytest.mark.parametrize("lien", ["d", "d/sub"])
+async def test_sous_module_derriere_un_lien(tmp_path, origine, nettoyage, lien):
+    """Le dossier `d` (ou `d/sub`) du gitlink livré `d/sub` devient un lien vers un dépôt
+    extérieur : le nettoyage efface le lien, jamais ce qu'il vise, et le gitlink survit."""
+    amont = tmp_path / "amont"
+    (amont / "d").mkdir()
+    (amont / "d" / "k").write_text("k\n")
+    git(amont, "add", "-A")
+    git(amont, "commit", "-m", "d")
+    sha = git(amont, "rev-parse", "HEAD")
+    git(amont, "update-index", "--add", "--cacheinfo", f"160000,{sha},d/sub")
+    git(amont, "commit", "-m", "gitlink")
+    git(amont, "push", "origin", "main")
+    e = Espace(tmp_path / "espaces" / "tache-1-1")
+    await e.cloner(url(origine), "", "main", "portail/tache-1-x")
+    exterieur = tmp_path / "exterieur"
+    exterieur.mkdir()
+    git(tmp_path, "clone", str(origine), str(exterieur / "sub"))
+    git(exterieur / "sub", "checkout", "-q", sha)
+    if lien == "d":
+        shutil.rmtree(e.racine / "d")
+        (e.racine / "d").symlink_to(exterieur)
+    else:
+        (e.racine / "d" / "sub").rmdir()
+        (e.racine / "d" / "sub").symlink_to(exterieur / "sub")
+    with pytest.raises(ErreurDepot, match="dépôt imbriqué refusé : d/sub"):
+        await e.commiter("agent-code", "agent-code@portail.local", "code")
+    if nettoyage == "restaurer":
+        await e.restaurer(lambda p: True)
+    else:
+        await e.remettre_a_zero()
+    assert not (e.racine / "d").is_symlink() and not (e.racine / "d" / "sub").is_symlink()
+    assert (e.racine / "d" / "k").read_text() == "k\n"
+    assert (exterieur / "sub" / ".git").is_dir()
+    (e.racine / "src" / "b.py").write_text("b = 2\n")
+    assert await e.commiter("agent-code", "agent-code@portail.local", "code")
+    assert any("d/sub" in ligne for ligne in gitlinks(e.racine))

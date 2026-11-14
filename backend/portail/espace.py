@@ -85,10 +85,21 @@ class Espace:
         else:
             p.unlink(missing_ok=True)
 
-    def _vider_sous_modules(self, chemins: list[str]) -> None:
+    def _vider_sous_modules(self, chemins: list[str]) -> list[str]:
+        """Efface le `.git` de chaque gitlink peuplé ; si un composant du chemin est un lien,
+        efface le plus haut (le lien lui-même, rien de ce qu'il vise). Rend ces liens."""
+        liens = []
         for c in chemins:
-            # un lien posé à la place du dossier du gitlink : on efface le lien lui-même
-            self._effacer(c if (self.racine / c).is_symlink() else f"{c}/.git")
+            courant = self.racine
+            for partie in Path(c).parts:
+                courant = courant / partie
+                if courant.is_symlink():
+                    courant.unlink()
+                    liens.append(courant.relative_to(self.racine).as_posix())
+                    break
+            else:
+                self._effacer(f"{c}/.git")
+        return liens
 
     async def changements(self) -> list[str]:
         chemins = [chemin for _, chemin in await self._statut()]
@@ -96,7 +107,10 @@ class Espace:
 
     async def restaurer(self, garder: Callable[[str], bool]) -> list[str]:
         peuples = await self._sous_modules_peuples()
-        self._vider_sous_modules(peuples)  # toujours : `commiter` les refuserait de toute façon
+        # toujours : `commiter` les refuserait de toute façon ; un dossier suivi remplacé par
+        # un lien est restauré, pour ne jamais perdre en silence le gitlink livré
+        if liens := self._vider_sous_modules(peuples):
+            await self._git("checkout", "--", *liens)
         annules = [(suivi, c) for suivi, c in await self._statut() if not garder(c)]
         # non suivis d'abord : un lien posé à la place d'un dossier suivi disparaît avant checkout
         for suivi, chemin in annules:
