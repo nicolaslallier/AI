@@ -1,6 +1,7 @@
 """Espace de travail git d'une tâche (`/espaces/<espace>`), manipulé par le portail seul."""
 
 import asyncio
+import os
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -19,9 +20,11 @@ def _rev(rev: str) -> str:
 
 
 class Espace:
-    """git ne descend jamais dans un sous-module. Un dépôt imbriqué non suivi apparaît dans
-    `changements` ; `restaurer` et `remettre_a_zero` le suppriment. `commiter` refuse
-    (`ErreurDepot`) tout gitlink nouveau ou modifié par rapport à `HEAD`. Le push ne va
+    """git ne descend jamais dans un sous-module. Un dépôt imbriqué non suivi, ou un gitlink
+    de l'index dont le dossier contient un `.git`, apparaît dans `changements` ; `restaurer`
+    et `remettre_a_zero` suppriment le premier et le `.git` du second. `commiter` refuse
+    (`ErreurDepot`, avant tout `add`) un gitlink peuplé, et tout gitlink nouveau ou modifié
+    par rapport à `HEAD`. Le push ne va
     qu'à l'URL du clone (`depot_url`), jamais à `origin` lu dans `.git/config`."""
 
     def __init__(self, racine: Path, depot_url: str | None = None):
@@ -66,33 +69,52 @@ class Espace:
         )
         return [(e[:2] != "??", e[3:].rstrip("/")) for e in sortie.split("\0") if e]
 
+    async def _sous_modules_peuples(self) -> list[str]:
+        """Gitlinks de l'index dont le dossier contient un `.git` (dossier, fichier ou lien) :
+        `add` y lancerait un `git status` avec la config de ce dépôt (filtres…)."""
+        liens = await self._gitlinks("ls-files", "-s", "-z")
+        return sorted(c for c, _ in liens if os.path.lexists(self.racine / c / ".git"))
+
+    def _effacer(self, chemin: str) -> None:
+        """Supprime `chemin` sans suivre de lien, confiné à l'espace."""
+        p = self.racine.resolve() / chemin
+        if p.parent.resolve() != p.parent:  # parent hors de l'espace ou via un lien
+            raise ErreurDepot(f"chemin hors de l'espace : {chemin}")
+        if p.is_dir() and not p.is_symlink():
+            shutil.rmtree(p)
+        else:
+            p.unlink(missing_ok=True)
+
+    def _vider_sous_modules(self, chemins: list[str]) -> None:
+        for c in chemins:
+            # un lien posé à la place du dossier du gitlink : on efface le lien lui-même
+            self._effacer(c if (self.racine / c).is_symlink() else f"{c}/.git")
+
     async def changements(self) -> list[str]:
-        return [chemin for _, chemin in await self._statut()]
+        chemins = [chemin for _, chemin in await self._statut()]
+        return chemins + [c for c in await self._sous_modules_peuples() if c not in chemins]
 
     async def restaurer(self, garder: Callable[[str], bool]) -> list[str]:
+        peuples = await self._sous_modules_peuples()
+        self._vider_sous_modules(peuples)  # toujours : `commiter` les refuserait de toute façon
         annules = [(suivi, c) for suivi, c in await self._statut() if not garder(c)]
-        racine = self.racine.resolve()
         # non suivis d'abord : un lien posé à la place d'un dossier suivi disparaît avant checkout
         for suivi, chemin in annules:
-            if suivi:
-                continue
-            p = racine / chemin
-            if p.parent.resolve() != p.parent:  # parent hors de l'espace ou via un lien
-                raise ErreurDepot(f"chemin hors de l'espace : {chemin}")
-            if p.is_dir() and not p.is_symlink():
-                shutil.rmtree(p)  # dépôt imbriqué, listé comme dossier
-            else:
-                p.unlink(missing_ok=True)
+            if not suivi:
+                self._effacer(chemin)
         suivis = [c for suivi, c in annules if suivi]
         if suivis:
             await self._git("checkout", "--", *suivis)
-        return [c for _, c in annules]
+        return [c for _, c in annules] + peuples
 
     async def remettre_a_zero(self) -> None:
+        self._vider_sous_modules(await self._sous_modules_peuples())
         await self._git("reset", "--hard", "HEAD")
         await self._git("clean", "-ffd")  # -ff : dépôts imbriqués aussi ; sans -x : ignorés gardés
 
     async def commiter(self, nom: str, courriel: str, message: str) -> str | None:
+        if peuples := await self._sous_modules_peuples():
+            raise ErreurDepot("dépôt imbriqué refusé : " + ", ".join(peuples))
         await self._git("add", "-A")
         nouveaux = await self._gitlinks("ls-files", "-s", "-z") - await self._gitlinks(
             "ls-tree", "-r", "-z", "HEAD"

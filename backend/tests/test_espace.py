@@ -1,5 +1,6 @@
 import base64
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -297,3 +298,42 @@ async def test_pousser_apres_redemarrage(espace, origine):
         await Espace(espace.racine).pousser("", "portail/tache-1-x")
     await Espace(espace.racine, url(origine)).pousser("", "portail/tache-1-x")
     assert git(origine, "rev-parse", "portail/tache-1-x") == git(espace.racine, "rev-parse", "HEAD")
+
+
+def planter_sous_module_au_bon_sha(racine: Path, origine: Path, sha: str, temoin: Path) -> Path:
+    """Dépôt imbriqué dont HEAD == le sha du gitlink livré : `add` le croirait sous-module."""
+    sub = racine / "sub"
+    shutil.rmtree(sub, ignore_errors=True)
+    git(racine.parent, "clone", str(origine), str(sub))
+    git(sub, "checkout", "-q", sha)
+    with (sub / ".git" / "config").open("a") as f:
+        f.write(f'[filter "x"]\n\tclean = touch {temoin}; cat\n')
+    (sub / ".gitattributes").write_text("* filter=x\n")
+    (sub / "src" / "b.py").write_text("b = 9\n")  # même taille : git doit relire (et filtrer)
+    return sub
+
+
+@pytest.mark.parametrize("nettoyage", ["restaurer", "remettre_a_zero"])
+async def test_sous_module_peuple_au_sha_livre_refuse(tmp_path, origine, nettoyage):
+    temoin = tmp_path / "filtre-temoin"
+    amont = tmp_path / "amont"
+    sha = git(amont, "rev-parse", "HEAD")
+    git(amont, "update-index", "--add", "--cacheinfo", f"160000,{sha},sub")
+    git(amont, "commit", "-m", "gitlink")
+    git(amont, "push", "origin", "main")
+    e = Espace(tmp_path / "espaces" / "tache-1-1")
+    await e.cloner(url(origine), "", "main", "portail/tache-1-x")
+    sub = planter_sous_module_au_bon_sha(e.racine, origine, sha, temoin)
+    (e.racine / "src" / "b.py").write_text("b = 2\n")
+    assert "sub" in await e.changements()
+    with pytest.raises(ErreurDepot, match="dépôt imbriqué refusé : sub"):
+        await e.commiter("agent-code", "agent-code@portail.local", "code")
+    assert not temoin.exists()
+    if nettoyage == "restaurer":
+        assert "sub" in await e.restaurer(lambda p: True)
+    else:
+        await e.remettre_a_zero()
+    assert not os.path.lexists(sub / ".git")
+    (e.racine / "src" / "b.py").write_text("b = 3\n")
+    assert await e.commiter("agent-code", "agent-code@portail.local", "code")
+    assert not temoin.exists()
