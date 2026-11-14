@@ -80,3 +80,11 @@ async def test_sortie_bornee(sessions):
         await s.commit()
     texte, _ = await OutilsPortail(sessions, TOUS).executer("lister_projets", "{}")
     assert len(texte) <= 8000 + 20 and texte.endswith("(tronqué)")
+
+
+async def test_ids_hors_bornes_mal_formes(sessions):
+    o = OutilsPortail(sessions, TOUS)
+    for arg in ("99999999999", "-1", "0"):
+        assert (await o.executer("lire_projet", f'{{"projet_id": {arg}}}'))[1] is True
+        assert (await o.executer("lire_pipeline", f'{{"pipeline_id": {arg}}}'))[1] is True
+        assert (await o.executer("lister_pipelines", f'{{"projet_id": {arg}}}'))[1] is True

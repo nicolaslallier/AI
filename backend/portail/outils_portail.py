@@ -1,8 +1,9 @@
 """Outils de lecture du portail (projets, pipelines, kanban) pour l'agent orchestrateur."""
 
 import json
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, StrictInt, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -15,6 +16,9 @@ _MAX_SORTIE = 8_000
 _MAX_SPEC = 3_000
 
 
+_Id = Annotated[int, Field(strict=True, ge=1, le=2**31 - 1)]
+
+
 class _Args(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -24,15 +28,15 @@ class _Vide(_Args):
 
 
 class _ProjetId(_Args):
-    projet_id: StrictInt
+    projet_id: _Id
 
 
 class _PipelineId(_Args):
-    pipeline_id: StrictInt
+    pipeline_id: _Id
 
 
 class _Pipelines(_Args):
-    projet_id: StrictInt | None = None
+    projet_id: _Id | None = None
     etat: str | None = None
 
 
