@@ -97,8 +97,9 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
                 {
                     **{
                         k: getattr(e, k)
-                        for k in ("id", "ordre", "agent", "etat", "erreur", "action")
+                        for k in ("id", "ordre", "agent", "etat", "erreur", "action", "sha")
                     },
+                    "produit": agent.produit if agent else None,
                     "messages": e.messages,
                     "document": e.document,
                     "jauge": j,

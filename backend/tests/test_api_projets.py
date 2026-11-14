@@ -36,6 +36,7 @@ async def test_creer_pipeline_spec(client):
     e = d["etapes"][0]
     assert (e["agent"], e["etat"], e["document"]) == ("spec", "en_attente", None)
     assert e["jauge"]["niveau"] == "ok"
+    assert (e["sha"], e["produit"]) == (None, "spec")
     assert (await client.get(f"/api/pipelines/{d['id']}")).json() == d
 
 

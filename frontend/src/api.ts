@@ -2,6 +2,8 @@ export interface Projet {
   id: number
   nom: string
   description: string
+  depot_url: string | null
+  branche_ref: string | null
   cree_le: string
 }
 export interface PipelineResume {
@@ -25,6 +27,7 @@ export interface Message {
   id: number
   role: string
   contenu: string
+  outil: string | null
   cree_le: string
 }
 export interface Document {
@@ -32,6 +35,15 @@ export interface Document {
   contenu: string
   etat: string
   maj_le: string
+}
+export interface Proposition {
+  id: number
+  etape_id: number
+  etat: string
+}
+export interface Kanban {
+  taches: unknown[]
+  propositions: Proposition[]
 }
 export interface Jauge {
   utilises: number
@@ -46,6 +58,8 @@ export interface Etape {
   etat: string
   erreur: string | null
   action: string | null
+  sha: string | null
+  produit: string | null
   messages: Message[]
   document: Document | null
   jauge: Jauge | null
@@ -90,14 +104,26 @@ async function appel<T>(methode: string, chemin: string, corps?: unknown): Promi
 }
 
 export const listerProjets = () => appel<Projet[]>('GET', '/projets')
-export const creerProjet = (nom: string, description = '') =>
-  appel<Projet>('POST', '/projets', { nom, description })
+export const creerProjet = (
+  nom: string,
+  description = '',
+  depot_url: string | null = null,
+  branche_ref: string | null = null,
+) => appel<Projet>('POST', '/projets', { nom, description, depot_url, branche_ref })
+export const modifierProjet = (
+  id: number,
+  champs: Partial<Pick<Projet, 'nom' | 'description' | 'depot_url' | 'branche_ref'>>,
+) => appel<Projet>('PATCH', `/projets/${id}`, champs)
 export const lireProjet = (id: number) => appel<ProjetDetail>('GET', `/projets/${id}`)
+
+export const lireKanban = (projetId: number) => appel<Kanban>('GET', `/projets/${projetId}/kanban`)
 
 export const listerPipelines = (etat?: string) =>
   appel<PipelineResume[]>('GET', '/pipelines' + (etat ? `?etat=${encodeURIComponent(etat)}` : ''))
 export const creerPipeline = (projet_id: number, type: string) =>
   appel<PipelineDetail>('POST', '/pipelines', { projet_id, type })
+export const annulerPipeline = (id: number) =>
+  appel<PipelineDetail>('POST', `/pipelines/${id}/annuler`)
 export const lirePipeline = (id: number) => appel<PipelineDetail>('GET', `/pipelines/${id}`)
 
 export const envoyerMessage = (etapeId: number, contenu: string) =>

@@ -14,7 +14,7 @@ const validee = computed(() => doc.value.etat === 'validee')
 
 <template>
   <section>
-    <h2>Spec <span v-if="validee" class="valide">Validée</span></h2>
+    <h2>{{ etape.produit === 'plan' ? 'Plan' : 'Spec' }} <span v-if="validee" class="valide">Validée</span></h2>
     <div class="cote">
       <textarea v-if="!validee" v-model="texte" rows="20"></textarea>
       <div class="apercu" v-html="rendreMarkdown(validee ? doc.contenu : texte)"></div>

@@ -82,6 +82,7 @@ class MessageOut(BaseModel):
     id: int
     role: str
     contenu: str
+    outil: str | None
     cree_le: datetime
 
 
@@ -99,6 +100,8 @@ class EtapeOut(BaseModel):
     etat: str
     erreur: str | None
     action: str | None
+    sha: str | None
+    produit: str | None
     messages: list[MessageOut]
     document: DocumentOut | None
     jauge: Jauge | None

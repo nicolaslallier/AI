@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import {
-  enregistrerDocument, envoyerMessage, ErreurApi, lirePipeline, reessayer, rediger, valider,
-  type PipelineDetail,
+  annulerPipeline, enregistrerDocument, lireKanban, envoyerMessage, ErreurApi, lirePipeline, reessayer, rediger, valider,
+  type PipelineDetail, type Proposition,
 } from '../api'
 import { ecouterFlux } from '../flux'
 import EtatBadge from '../components/EtatBadge.vue'
@@ -13,6 +13,8 @@ const props = defineProps<{ id: string }>()
 const pipeline = ref<PipelineDetail | null>(null)
 const partiels = reactive<Record<number, string>>({})
 const message = ref('')
+const outils = reactive<Record<number, string[]>>({})
+const propositions = ref<Proposition[]>([])
 const abonnements = new Map<number, () => void>()
 let demonte = false
 
@@ -20,6 +22,7 @@ function desabonner(etapeId: number) {
   abonnements.get(etapeId)?.()
   abonnements.delete(etapeId)
   delete partiels[etapeId]
+  delete outils[etapeId]
 }
 
 function abonner(etapeId: number) {
@@ -33,6 +36,7 @@ function abonner(etapeId: number) {
     ecouterFlux(etapeId, {
       partiel: (t) => (partiels[etapeId] = t),
       delta: (t) => (partiels[etapeId] = (partiels[etapeId] ?? '') + t),
+      outil: (l) => (outils[etapeId] = [...(outils[etapeId] ?? []), l]),
       fin: fini,
       erreur: fini,
     }),
@@ -44,6 +48,8 @@ async function charger(ecouter = true) {
     const p = await lirePipeline(Number(props.id))
     if (demonte) return
     pipeline.value = p
+    if (p.etapes.some((e) => e.produit === 'taches'))
+      propositions.value = (await lireKanban(p.projet.id)).propositions
   } catch (e) {
     if (demonte) return
     message.value = (e as Error).message
@@ -67,6 +73,11 @@ async function action(f: () => Promise<unknown>, ecouter = true): Promise<boolea
   return true
 }
 
+async function annuler() {
+  if (!confirm('Annuler ce pipeline ? Cette action est définitive.')) return
+  await action(() => annulerPipeline(Number(props.id)), false)
+}
+
 onMounted(charger)
 onBeforeUnmount(() => {
   demonte = true
@@ -77,9 +88,15 @@ onBeforeUnmount(() => {
 <template>
   <template v-if="pipeline">
     <h1>{{ pipeline.type }} n°{{ pipeline.id }} <EtatBadge :etat="pipeline.etat" /></h1>
+    <button v-if="pipeline.etat !== 'terminee' && pipeline.etat !== 'echouee'" @click="annuler">
+      Annuler le pipeline
+    </button>
     <p>Projet : <RouterLink :to="`/projets/${pipeline.projet.id}`">{{ pipeline.projet.nom }}</RouterLink></p>
     <div v-for="e in pipeline.etapes" :key="e.id">
-      <h2>{{ e.agent }} <EtatBadge :etat="e.etat" /></h2>
+      <h2>
+        {{ e.agent }} <EtatBadge :etat="e.etat" />
+        <small v-if="e.sha">SHA {{ e.sha.slice(0, 7) }}</small>
+      </h2>
       <template v-if="e.etat !== 'a_faire'">
         <EditeurDocument
           v-if="e.document"
@@ -92,6 +109,9 @@ onBeforeUnmount(() => {
           v-if="e.etat !== 'terminee'"
           :etape="e"
           :partiel="partiels[e.id]"
+          :outils="outils[e.id]"
+          :propositions="e.produit === 'taches' ? propositions.filter((x) => x.etape_id === e.id).length : undefined"
+          :projet-id="pipeline.projet.id"
           :message="e.document ? '' : message"
           @envoyer="(c, vider) => action(() => envoyerMessage(e.id, c)).then((ok) => ok && vider())"
           @rediger="action(() => rediger(e.id))"
