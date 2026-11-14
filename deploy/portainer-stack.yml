@@ -12,6 +12,11 @@ services:
       PORTAIL_LANCEUR_SECRET: ${PORTAIL_LANCEUR_SECRET:-}
       PORTAIL_GITHUB_APP_ID: ${PORTAIL_GITHUB_APP_ID:-}
       PORTAIL_GITHUB_APP_CLE: ${PORTAIL_GITHUB_APP_CLE:-}
+      PORTAIL_GITHUB_PROPRIETAIRE: nicolaslallier
+      PORTAIL_NTFY_URL: http://ntfy
+      PORTAIL_NTFY_SUJET: portail
+      PORTAIL_URL_PUBLIQUE: https://portail.infra.famillelallier.net
+      PORTAIL_NTFY_JETON: ${PORTAIL_NTFY_JETON:-}
     volumes:
       - portail-donnees-2:/donnees
       - portail-espaces:/espaces

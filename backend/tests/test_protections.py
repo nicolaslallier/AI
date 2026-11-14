@@ -3,7 +3,7 @@ import pytest
 
 from portail.depots import ErreurDepot
 from portail.execution import ConfigExecution
-from portail.protections import verifier_commits_code
+from portail.protections import section_de_test, verifier_commits_code
 from tests.test_espace import espace, git, origine  # noqa: F401  (fixtures réutilisées)
 
 
@@ -103,6 +103,18 @@ async def test_setup_cfg_tool_pytest(espace, cfg):
     assert await verifier_commits_code(espace, base, cfg) == ["lib/setup.cfg (section tool:pytest)"]
 
 
+async def test_setup_cfg_entry_points(espace, cfg):
+    await _base(espace, {"setup.cfg": "[metadata]\nname = x\n"})
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(
+        espace,
+        {"setup.cfg": "[metadata]\nname = x\n[options.entry_points]\npytest11 =\n    p = x.p\n"},
+    )
+    assert await verifier_commits_code(espace, base, cfg) == [
+        "setup.cfg (section options.entry_points)"
+    ]
+
+
 async def test_manifeste_ajoute_avec_sections_de_tests(espace, cfg):
     base = git(espace.racine, "rev-parse", "HEAD")
     await _code(espace, {"pyproject.toml": "[tool.pytest.ini_options]\na = 1\n"})
@@ -161,7 +173,31 @@ async def test_pytest11_entry_point(espace, cfg):
     avant = "[project]\nname = 'x'\n"
     apres = avant + "[project.entry-points.pytest11]\nx = 'evil'\n"
     assert await _viol(espace, cfg, {"pyproject.toml": avant}, {"pyproject.toml": apres}) == [
-        "pyproject.toml (section project.entry-points.pytest11)"
+        "pyproject.toml (section project.entry-points)"
+    ]
+
+
+@pytest.mark.parametrize(
+    "ajout, section",
+    [
+        ("[project]\nname = 'x'\ndynamic = ['entry-points']\n", "project.dynamic"),
+        ("[project]\nname = 'x'\n[tool.setuptools.dynamic]\nreadme = {file = 'p.txt'}\n",
+         "tool.setuptools"),
+        ("[project]\nname = 'x'\n[build-system]\nrequires = ['evil']\n", "build-system"),
+    ],
+)  # fmt: skip
+async def test_pyproject_build_et_dynamique(espace, cfg, ajout, section):
+    avant = "[project]\nname = 'x'\n"
+    assert await _viol(espace, cfg, {"pyproject.toml": avant}, {"pyproject.toml": ajout}) == [
+        f"pyproject.toml (section {section})"
+    ]
+
+
+async def test_setup_cfg_options(espace, cfg):
+    avant = "[metadata]\nname = x\n"
+    apres = avant + "[options]\nentry_points = file: ep.cfg\n"
+    assert await _viol(espace, cfg, {"setup.cfg": avant}, {"setup.cfg": apres}) == [
+        "setup.cfg (section options)"
     ]
 
 
@@ -216,3 +252,42 @@ async def test_erreur_git_propagee(espace, cfg):
     with pytest.raises(ErreurDepot):
         await espace.fichier_a("0" * 40, "Cargo.toml")
     assert await espace.fichier_a(base, "absent.toml") is None
+
+
+PYPROJECT = """[project]
+name = "x"
+dependencies = ["httpx"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+"""
+PACKAGE = """{
+  "name": "x",
+  "scripts": {
+    "test": "jest"
+  },
+  "dependencies": {
+    "a": "1"
+  }
+}
+"""
+CARGO = """[package]
+name = "x"
+
+[dev-dependencies]
+proptest = "1"
+"""
+
+
+@pytest.mark.parametrize(
+    ("nom", "texte", "ligne", "attendu"),
+    [
+        ("pyproject.toml", PYPROJECT, 6, True),
+        ("pyproject.toml", PYPROJECT, 3, False),
+        ("package.json", PACKAGE, 4, True),
+        ("package.json", PACKAGE, 7, False),
+        ("Cargo.toml", CARGO, 5, True),
+    ],
+)
+def test_section_de_test(nom, texte, ligne, attendu):
+    assert section_de_test(nom, texte, ligne) is attendu

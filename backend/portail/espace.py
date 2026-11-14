@@ -11,6 +11,7 @@ from portail.outils import EXCLUSIONS
 
 _DIFF_MAX = 200_000
 _SANS_EXTERNE = ("--no-ext-diff", "--no-textconv")
+AUTEUR_PORTAIL = ("portail", "portail@portail.local")
 
 
 def _rev(rev: str) -> str:
@@ -38,24 +39,57 @@ class Espace:
         await git("check-ref-format", "--branch", _rev(nom), cwd=None)
         return nom
 
-    async def cloner(self, depot_url: str, jeton: str, base: str, branche: str) -> str:
-        base, branche = await self._branche(base), await self._branche(branche)
+    async def _cloner(self, depot_url: str, jeton: str, branche: str) -> None:
+        """Clone neuf de la seule `branche`, avec les exclusions du portail."""
         await self.supprimer()
         self.depot_url = depot_url
         self.racine.parent.mkdir(parents=True, exist_ok=True)
         try:
             await git(
-                "clone", "--branch", base, "--single-branch", "--", depot_url, str(self.racine),
-                cwd=None, jeton=jeton, delai=120, distant=True,
+                "clone", "--branch", branche, "--single-branch", "--", depot_url,
+                str(self.racine), cwd=None, jeton=jeton, delai=120, distant=True,
             )  # fmt: skip
         except BaseException:
             await self.supprimer()
             raise
-        await self._git("checkout", "-b", branche)
         info = self.racine / ".git" / "info"
         info.mkdir(exist_ok=True)
         (info / "exclude").write_text("\n".join(EXCLUSIONS) + "\n")
+
+    async def _head(self) -> str:
         return (await self._git("rev-parse", "HEAD")).strip()
+
+    async def cloner(self, depot_url: str, jeton: str, base: str, branche: str) -> str:
+        base, branche = await self._branche(base), await self._branche(branche)
+        await self._cloner(depot_url, jeton, base)
+        await self._git("checkout", "-b", branche)
+        return await self._head()
+
+    async def recuperer(self, depot_url: str, jeton: str, branche: str) -> str:
+        """Clone neuf de la branche telle qu'elle est sur le dépôt ; rend le SHA de `HEAD`."""
+        await self._cloner(depot_url, jeton, await self._branche(branche))
+        return await self._head()
+
+    async def fusionner(self, jeton: str, base: str) -> str | None:
+        """Fusionne `base` du dépôt distant (commit du portail) ; « déjà à jour » n'est pas une
+        erreur. Conflit : fusion abandonnée, espace propre, None. Sinon le SHA de `HEAD`."""
+        ref = f"refs/heads/{await self._branche(base)}"
+        if not self.depot_url:
+            raise ErreurDepot("URL du dépôt inconnue pour cet espace")
+        await self._git("fetch", "--", self.depot_url, ref, jeton=jeton, delai=120, distant=True)
+        nom, courriel = AUTEUR_PORTAIL
+        try:
+            await self._git(
+                "-c", f"user.name={nom}", "-c", f"user.email={courriel}",
+                "merge", "--no-ff", "--no-edit", "FETCH_HEAD",
+            )  # fmt: skip
+        except ErreurDepot:
+            en_cours = await self._git("rev-parse", "-q", "--verify", "MERGE_HEAD", codes=(0, 1))
+            if not en_cours.strip():
+                raise
+            await self._git("merge", "--abort")
+            return None
+        return await self._head()
 
     async def _statut(self) -> list[tuple[bool, str]]:
         """(suivi, chemin) de chaque changement ; les ignorés n'y sont pas."""

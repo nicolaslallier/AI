@@ -391,3 +391,51 @@ async def test_fichier_a_erreur_git_non_absent(espace):
 async def test_fichier_a_parent_du_commit_racine(espace):
     racine = git(espace.racine, "rev-list", "--max-parents=0", "HEAD").split()[0]
     assert await espace.fichier_a(f"{racine}^", "src/b.py") is None
+
+
+def _commit(travail: Path, branche: str, fichiers: dict[str, str]) -> None:
+    git(travail, "checkout", branche)
+    for chemin, texte in fichiers.items():
+        (travail / chemin).write_text(texte)
+    git(travail, "add", "-A")
+    git(travail, "commit", "-m", f"sur {branche}")
+    git(travail, "push", "origin", branche)
+
+
+async def _recuperee(tmp_path, origine, sur_branche, sur_main):
+    """La branche de PR part de main avec `sur_branche`, puis main avance avec `sur_main`."""
+    travail = tmp_path / "amont"
+    git(travail, "branch", "portail/t", "main")
+    _commit(travail, "portail/t", sur_branche)
+    if sur_main:
+        _commit(travail, "main", sur_main)
+    e = Espace(tmp_path / "espaces" / "tache-1-2")
+    sha = await e.recuperer(url(origine), "", "portail/t")
+    assert sha == git(origine, "rev-parse", "portail/t")
+    assert git(e.racine, "branch", "--show-current") == "portail/t"
+    return e, sha
+
+
+async def test_recuperer_puis_fusionner(tmp_path, origine):
+    e, sha = await _recuperee(tmp_path, origine, {"src/b.py": "b = 2\n"}, {"README.md": "x\n"})
+    head = await e.fusionner("", "main")
+    assert head not in (None, sha) and head == git(e.racine, "rev-parse", "HEAD")
+    assert git(e.racine, "log", "-1", "--format=%ae %ce") == (
+        "portail@portail.local portail@portail.local"
+    )
+    assert len(git(e.racine, "rev-list", "--parents", "-n1", "HEAD").split()) == 3  # fusion
+    assert (e.racine / "README.md").read_text() == "x\n"
+    assert (e.racine / "src" / "b.py").read_text() == "b = 2\n"
+
+
+async def test_fusionner_conflit_rend_none_et_espace_propre(tmp_path, origine):
+    e, sha = await _recuperee(tmp_path, origine, {"src/b.py": "b = 2\n"}, {"src/b.py": "b = 3\n"})
+    assert await e.fusionner("", "main") is None
+    assert await e.changements() == []
+    assert git(e.racine, "rev-parse", "HEAD") == sha
+    assert not (e.racine / ".git" / "MERGE_HEAD").exists()
+
+
+async def test_fusionner_deja_a_jour(tmp_path, origine):
+    e, sha = await _recuperee(tmp_path, origine, {"src/b.py": "b = 2\n"}, {})
+    assert await e.fusionner("", "main") == sha

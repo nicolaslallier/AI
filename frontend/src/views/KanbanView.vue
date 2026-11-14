@@ -4,6 +4,7 @@ import {
   accepterProposition, annulerTache, creerTache, deplacerTache, lireKanban, modifierTache, rejeterProposition,
   supprimerTache, toutAccepter, type DonneesTache, type Kanban, type Proposition, type Tache,
 } from '../api'
+import { ecouterEvenements, regrouper } from '../evenements'
 import { COLONNES, filtrer, grouperParColonne } from '../kanban'
 import CarteTache from '../components/CarteTache.vue'
 import EditionTache from '../components/EditionTache.vue'
@@ -19,6 +20,7 @@ const glissee = ref<Tache | null>(null)
 const edition = ref<{ tache?: Tache; proposition?: Proposition } | null>(null)
 const erreurModale = ref('')
 let minuteur: ReturnType<typeof setInterval> | undefined
+let arreter: (() => void) | undefined
 
 const colonnes = computed(() => grouperParColonne(filtrer(kanban.value.taches, texte.value)))
 
@@ -90,9 +92,14 @@ const cibleDe = (p: Proposition) => kanban.value.taches.find((t) => t.id === p.t
 
 onMounted(() => {
   charger()
-  minuteur = setInterval(charger, 5000)
+  minuteur = setInterval(charger, 60000) // filet de sécurité ; les événements font le reste
+  const recharger = regrouper(charger)
+  arreter = ecouterEvenements({ kanban: (id) => (id === null || id === projetId) && recharger() })
 })
-onBeforeUnmount(() => clearInterval(minuteur))
+onBeforeUnmount(() => {
+  clearInterval(minuteur)
+  arreter?.()
+})
 </script>
 
 <template>
