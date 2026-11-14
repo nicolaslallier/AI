@@ -6,11 +6,16 @@ from portail.db import Document, Message
 
 
 def _agent(contexte_max=100):
-    return Agent(nom="a", description="d", modele="m", prompt_systeme="SYS", contexte_max=contexte_max)
+    return Agent(
+        nom="a", description="d", modele="m", prompt_systeme="SYS", contexte_max=contexte_max
+    )
 
 
 def _msgs(n):
-    return [Message(id=i, role="user" if i % 2 else "assistant", contenu=f"m{i}") for i in range(1, n + 1)]
+    return [
+        Message(id=i, role="user" if i % 2 else "assistant", contenu=f"m{i}")
+        for i in range(1, n + 1)
+    ]
 
 
 def test_sans_brouillon_tout_l_historique():
@@ -24,7 +29,9 @@ def test_avec_brouillon_seulement_les_messages_apres():
     r = construire(_agent(), _msgs(4), doc)
     assert [m["content"] for m in r[2:]] == ["m3", "m4"]
     assert r[1]["role"] == "system"
-    assert r[1]["content"] == "Brouillon courant de la spec (corrections de Nicolas incluses) :\n\nTXT"
+    assert (
+        r[1]["content"] == "Brouillon courant de la spec (corrections de Nicolas incluses) :\n\nTXT"
+    )
     assert len(r) == 4
 
 
