@@ -1,0 +1,134 @@
+# ruff: noqa: F811
+import pytest
+
+from portail.execution import ConfigExecution
+from portail.protections import verifier_commits_code
+from tests.test_espace import espace, git, origine  # noqa: F401  (fixtures réutilisées)
+
+
+@pytest.fixture
+def cfg():
+    return ConfigExecution(
+        image="x",
+        chemins_tests=["tests/**"],
+        commandes={"installer": "i", "tests": "t", "tests_cibles": "t {fichiers}"},
+    )
+
+
+async def _base(espace, fichiers: dict[str, str]):
+    """Commit initial (auteur neutre) avec les fichiers donnés ; renvoie son sha."""
+    for chemin, contenu in fichiers.items():
+        p = espace.racine / chemin
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(contenu)
+    return await espace.commiter("humain", "h@x.fr", "base")
+
+
+async def _code(espace, fichiers: dict[str, str | None], auteur="agent-code"):
+    for chemin, contenu in fichiers.items():
+        p = espace.racine / chemin
+        if contenu is None:
+            p.unlink()
+        else:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(contenu)
+    await espace.commiter(auteur, f"{auteur}@portail.local", "c")
+
+
+async def test_commit_code_touche_un_test(espace, cfg):
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(espace, {"tests/a.py": "a = 2\n", "src/b.py": "b = 2\n"})
+    assert await verifier_commits_code(espace, base, cfg) == ["tests/a.py (fichier de tests)"]
+
+
+async def test_commit_code_supprime_un_test(espace, cfg):
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(espace, {"tests/a.py": None})
+    assert await verifier_commits_code(espace, base, cfg) == ["tests/a.py (fichier de tests)"]
+
+
+async def test_commit_code_change_tool_pytest(espace, cfg):
+    await _base(espace, {"pyproject.toml": "[tool.pytest.ini_options]\naddopts = '-q'\n"})
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(espace, {"pyproject.toml": "[tool.pytest.ini_options]\naddopts = '-q --lf'\n"})
+    assert await verifier_commits_code(espace, base, cfg) == [
+        "pyproject.toml (section tool.pytest.ini_options)"
+    ]
+
+
+async def test_commit_code_ajoute_une_dependance_permis(espace, cfg):
+    await _base(
+        espace, {"pyproject.toml": "[project]\nname = 'x'\n[tool.pytest.ini_options]\na = 1\n"}
+    )
+    base = git(espace.racine, "rev-parse", "HEAD")
+    # dépendance ajoutée et mise en forme différente : pas une violation
+    await _code(
+        espace,
+        {
+            "pyproject.toml": "[project]\nname = 'x'\ndependencies = ['y']\n\n[tool.pytest.ini_options]\na   = 1\n"
+        },
+    )
+    assert await verifier_commits_code(espace, base, cfg) == []
+
+
+async def test_package_json_script_test(espace, cfg):
+    await _base(
+        espace,
+        {"web/package.json": '{"scripts": {"test": "jest", "build": "tsc"}, "jest": {"a": 1}}'},
+    )
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(
+        espace,
+        {"web/package.json": '{"scripts": {"test": "true", "build": "vite"}, "jest": {"a": 1}}'},
+    )
+    assert await verifier_commits_code(espace, base, cfg) == [
+        "web/package.json (section scripts.test)"
+    ]
+
+
+async def test_cargo_dev_dependencies(espace, cfg):
+    await _base(espace, {"Cargo.toml": "[dev-dependencies]\nrstest = '1'\n"})
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(espace, {"Cargo.toml": "[dev-dependencies]\nrstest = '1'\nmockall = '1'\n"})
+    assert await verifier_commits_code(espace, base, cfg) == [
+        "Cargo.toml (section dev-dependencies)"
+    ]
+
+
+async def test_setup_cfg_tool_pytest(espace, cfg):
+    await _base(espace, {"lib/setup.cfg": "[tool:pytest]\naddopts = -q\n[metadata]\nname = x\n"})
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(
+        espace, {"lib/setup.cfg": "[tool:pytest]\naddopts = -q -k nothing\n[metadata]\nname = x\n"}
+    )
+    assert await verifier_commits_code(espace, base, cfg) == ["lib/setup.cfg (section tool:pytest)"]
+
+
+async def test_manifeste_ajoute_avec_sections_de_tests(espace, cfg):
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(espace, {"pyproject.toml": "[tool.pytest.ini_options]\na = 1\n"})
+    assert await verifier_commits_code(espace, base, cfg) == [
+        "pyproject.toml (section tool.pytest.ini_options)"
+    ]
+
+
+async def test_manifeste_supprime_avec_sections_de_tests(espace, cfg):
+    await _base(espace, {"Cargo.toml": "[dev-dependencies]\nrstest = '1'\n"})
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(espace, {"Cargo.toml": None})
+    assert await verifier_commits_code(espace, base, cfg) == [
+        "Cargo.toml (section dev-dependencies)"
+    ]
+
+
+async def test_manifeste_illisible(espace, cfg):
+    await _base(espace, {"package.json": "{}"})
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(espace, {"package.json": "{pas du json"})
+    assert await verifier_commits_code(espace, base, cfg) == ["package.json (illisible)"]
+
+
+async def test_commit_d_un_autre_auteur_ignore(espace, cfg):
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(espace, {"tests/a.py": "a = 2\n"}, auteur="agent-tests")
+    assert await verifier_commits_code(espace, base, cfg) == []
