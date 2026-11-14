@@ -366,13 +366,15 @@ def create_app(
     @app.post("/api/taches/{tache_id}/annuler", response_model=TacheVue)
     async def annuler_tache(tache_id: int, request: Request, s: Session):
         t = await _tache(s, tache_id)
-        verrou = t.verrou
+        verrou, projet_id = t.verrou, t.projet_id
         if verrou is None:
             raise Refus(409, "rien à annuler")
         etat = await s.scalar(select(Pipeline.etat).where(Pipeline.id == verrou))
         await s.rollback()  # libère la transaction avant que le service ouvre la sienne
         if etat is not None and etat not in (Etat.TERMINEE, Etat.ECHOUEE):
             await request.app.state.chat.annuler(verrou)  # même chemin que /pipelines/{id}/annuler
+        # ordre des verrous : projet d'abord, comme partout ailleurs
+        await s.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
         t = await s.scalar(
             select(Tache)
             .where(Tache.id == tache_id)
