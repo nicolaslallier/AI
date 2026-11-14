@@ -167,6 +167,36 @@ class Orchestrateur:
 
         tache.add_done_callback(_fini)
 
+    async def annuler(self, pipeline_id: int) -> None:
+        """Arrête la tâche de fond (même absente : pipeline terminé, ou après un redémarrage),
+        nettoie l'espace et marque l'annulation ; la tâche du kanban reste à l'appelant."""
+        if (tache := self.taches.get(pipeline_id)) is not None:
+            tache.cancel()
+            await asyncio.wait([tache])
+        async with self._sessions() as s:
+            pipeline = await s.get(Pipeline, pipeline_id)
+            if pipeline is None:
+                raise Refus(404, "pipeline introuvable")
+            ex = await s.scalar(select(ExecutionDev).where(ExecutionDev.pipeline_id == pipeline_id))
+            projet = await s.get(Projet, pipeline.projet_id)
+        if ex is not None:
+            await self._au_mieux("arrêter", self._lanceur.arreter(ex.espace))
+            await self._au_mieux("nettoyer", self._lanceur.nettoyer(ex.espace))
+            espace = Espace(self._reglages.espaces_dir / ex.espace, projet.depot_url)
+            await self._au_mieux("supprimer", espace.supprimer())
+        async with self._sessions() as s:
+            await s.execute(
+                update(Etape)
+                .where(Etape.pipeline_id == pipeline_id, Etape.etat == Etat.EN_COURS)
+                .values(etat=Etat.ECHOUEE, erreur="annulé")
+            )
+            await s.execute(
+                update(Pipeline)
+                .where(Pipeline.id == pipeline_id, Pipeline.etat != Etat.TERMINEE)
+                .values(etat=Etat.ECHOUEE, maj_le=self._horloge())
+            )
+            await s.commit()
+
     async def executer(self, pipeline_id: int) -> None:
         delai = asyncio.timeout(self._reglages.duree_max_tache_s)
         try:

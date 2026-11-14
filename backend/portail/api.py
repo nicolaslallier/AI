@@ -28,10 +28,14 @@ from portail.db import (
     fabrique_sessions,
 )
 from portail.depots import Depots, ErreurDepot
+from portail.dev import Orchestrateur
 from portail.etats import Etat
 from portail.execution import lire_config
+from portail.github import ErreurGitHub, GitHubApp
+from portail.lanceur import ClientLanceur
 from portail.llm import ClientLLM
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
+from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.schemas import (
     DEPOT_RE,
@@ -199,10 +203,45 @@ def _resume(p: Pipeline, nom: str) -> PipelineResume:
     )
 
 
+def _reveiller(request: Request) -> None:
+    if ordonnanceur := request.app.state.ordonnanceur:
+        ordonnanceur.reveiller()
+
+
+async def _annuler(request: Request, s: AsyncSession, pipeline_id: int, clos: bool) -> None:
+    """Un pipeline `dev` passe par l'orchestrateur (même terminé : nettoyage), les autres par le
+    chat, qui refuse un pipeline clos (`clos` : le lui demander quand même). Libère la
+    transaction de `s` avant que le service ouvre la sienne."""
+    p = await s.get(Pipeline, pipeline_id)
+    if p is None:
+        raise Refus(404, "pipeline introuvable")
+    type_, etat = p.type, p.etat
+    await s.rollback()
+    orchestrateur = request.app.state.orchestrateur
+    if type_ == "dev" and orchestrateur:
+        await orchestrateur.annuler(pipeline_id)
+    elif clos or etat not in (Etat.TERMINEE, Etat.ECHOUEE):
+        await request.app.state.chat.annuler(pipeline_id)
+
+
+def _orchestrateur(r: Reglages, sessions, catalogue, llm) -> Orchestrateur | None:
+    """Seulement si l'App GitHub et le lanceur sont configurés ; sinon rien, sans erreur."""
+    if not (r.github_app_id and r.github_app_cle and r.lanceur_secret):
+        return None
+    try:
+        github = GitHubApp(r.github_app_id, r.github_app_cle)
+    except ErreurGitHub:
+        logger.exception("App GitHub mal configurée : pas d'ordonnanceur")
+        return None
+    lanceur = ClientLanceur(r.lanceur_url, r.lanceur_secret)
+    return Orchestrateur(sessions, catalogue, llm, lanceur, github, r)
+
+
 def create_app(
     reglages: Reglages | None = None,
     llm: ClientLLM | None = None,
     catalogue: Catalogue | None = None,
+    orchestrateur: Orchestrateur | None = None,
 ) -> FastAPI:
     r = reglages or Reglages()
 
@@ -229,8 +268,18 @@ def create_app(
         app.state.chat = ServiceChat(
             app.state.sessions, app.state.catalogue, app.state.llm, app.state.diffuseur, depots
         )
+        orch = orchestrateur or _orchestrateur(
+            r, app.state.sessions, app.state.catalogue, app.state.llm
+        )
+        app.state.orchestrateur, app.state.ordonnanceur, boucle = orch, None, None
+        if orch:
+            await reprendre_interrompues(app.state.sessions, orch)
+            app.state.ordonnanceur = Ordonnanceur(app.state.sessions, orch, r.paralleles_max)
+            boucle = asyncio.create_task(app.state.ordonnanceur.tourner())
         yield
         taches = list(app.state.chat.taches.values())
+        if orch:
+            taches += [boucle, *orch.taches.values()]
         for t in taches:
             t.cancel()
         await asyncio.gather(*taches, return_exceptions=True)
@@ -354,7 +403,7 @@ def create_app(
 
     @app.post("/api/pipelines/{pipeline_id}/annuler", response_model=PipelineDetail)
     async def annuler(pipeline_id: int, request: Request, s: Session):
-        await request.app.state.chat.annuler(pipeline_id)
+        await _annuler(request, s, pipeline_id, clos=True)
         return await _detail(s, request.app.state.catalogue, pipeline_id)
 
     @app.get("/api/projets/{projet_id}/kanban", response_model=Kanban)
@@ -388,6 +437,7 @@ def create_app(
                 await _fermer(request, s, p.etape_id)
             raise
         await _fermer(request, s, p.etape_id)
+        _reveiller(request)
         return await _kanban(s, p.projet_id)
 
     @app.post("/api/propositions/{proposition_id}/rejeter", response_model=Kanban)
@@ -422,27 +472,31 @@ def create_app(
                     raise
                 perimees += 1
         await _fermer(request, s, etape_id)
+        _reveiller(request)
         k = await _kanban(s, projet_id)
         return KanbanToutAccepte(**k.model_dump(), perimees=perimees)
 
     @app.post("/api/projets/{projet_id}/taches", status_code=201, response_model=TacheVue)
-    async def ajouter_tache(projet_id: int, corps: DonneesTache, s: Session):
+    async def ajouter_tache(projet_id: int, corps: DonneesTache, request: Request, s: Session):
         t = await creer_tache(s, projet_id, corps, "nicolas")
         await s.commit()
+        _reveiller(request)
         return await _vue(s, t.id)
 
     @app.patch("/api/taches/{tache_id}", response_model=TacheVue)
-    async def modifier(tache_id: int, corps: DonneesTachePartielles, s: Session):
+    async def modifier(tache_id: int, corps: DonneesTachePartielles, request: Request, s: Session):
         t = await _tache(s, tache_id)
         await modifier_tache(s, t, corps, "nicolas")
         await s.commit()
+        _reveiller(request)
         return await _vue(s, tache_id)
 
     @app.post("/api/taches/{tache_id}/deplacer", response_model=TacheVue)
-    async def deplacer(tache_id: int, corps: Deplacement, s: Session):
+    async def deplacer(tache_id: int, corps: Deplacement, request: Request, s: Session):
         t = await _tache(s, tache_id)
         await deplacer_tache(s, t, corps.colonne, corps.avant_id, "nicolas")
         await s.commit()
+        _reveiller(request)
         return await _vue(s, tache_id)
 
     @app.delete("/api/taches/{tache_id}", status_code=204)
@@ -457,10 +511,7 @@ def create_app(
         verrou, projet_id = t.verrou, t.projet_id
         if verrou is None:
             raise Refus(409, "rien à annuler")
-        etat = await s.scalar(select(Pipeline.etat).where(Pipeline.id == verrou))
-        await s.rollback()  # libère la transaction avant que le service ouvre la sienne
-        if etat is not None and etat not in (Etat.TERMINEE, Etat.ECHOUEE):
-            await request.app.state.chat.annuler(verrou)  # même chemin que /pipelines/{id}/annuler
+        await _annuler(request, s, verrou, clos=False)  # même chemin que /pipelines/{id}/annuler
         # ordre des verrous : projet d'abord, comme partout ailleurs
         await s.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
         t = await s.scalar(
@@ -472,6 +523,7 @@ def create_app(
         t.verrou = None
         await deplacer_tache(s, t, "a_faire", None, "nicolas")
         await s.commit()
+        _reveiller(request)
         return await _vue(s, tache_id)
 
     class MessageIn(BaseModel):

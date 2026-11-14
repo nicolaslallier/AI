@@ -129,7 +129,13 @@ async def annuler_pipeline(session: AsyncSession, pipeline: Pipeline) -> None:
 
 
 async def recuperer_interrompues(session: AsyncSession) -> int:
-    etapes = (await session.scalars(select(Etape).where(Etape.etat == Etat.EN_COURS))).all()
+    etapes = (
+        await session.scalars(
+            select(Etape)
+            .join(Pipeline, Pipeline.id == Etape.pipeline_id)
+            .where(Etape.etat == Etat.EN_COURS, Pipeline.type != "dev")  # dev : son orchestrateur
+        )
+    ).all()
     for e in etapes:
         await changer_etat(session, e, Etat.ECHOUEE, "interrompue par un redémarrage du serveur")
     return len(etapes)
