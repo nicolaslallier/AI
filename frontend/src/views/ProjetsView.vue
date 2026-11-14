@@ -8,10 +8,12 @@ const description = ref('')
 const depot = ref('')
 const branche = ref('')
 const erreur = ref('')
+const charge = ref(false)
 
 async function charger() {
   try {
     projets.value = await listerProjets()
+    charge.value = true
   } catch (e) {
     erreur.value = (e as Error).message
   }
@@ -33,18 +35,25 @@ onMounted(charger)
 <template>
   <h1>Projets</h1>
   <p v-if="erreur" class="erreur">{{ erreur }}</p>
-  <ul>
-    <li v-for="p in projets" :key="p.id">
-      <RouterLink :to="`/projets/${p.id}`">{{ p.nom }}</RouterLink>
-      <RouterLink :to="`/projets/${p.id}/kanban`"> (Kanban)</RouterLink>
-      <span v-if="p.description"> : {{ p.description }}</span>
-    </li>
-  </ul>
-  <form @submit.prevent="creer">
-    <input v-model="nom" placeholder="Nom du projet" required />
-    <input v-model="description" placeholder="Description" />
-    <input v-model="depot" placeholder="Dépôt GitHub (URL)" />
-    <input v-model="branche" placeholder="Branche de référence (vide = branche par défaut)" />
-    <button>Créer le projet</button>
-  </form>
+  <div v-if="projets.length" class="grille">
+    <article v-for="p in projets" :key="p.id" class="carte pile">
+      <h2><RouterLink :to="`/projets/${p.id}`">{{ p.nom }}</RouterLink></h2>
+      <p class="discret">{{ p.description || 'Pas de description.' }}</p>
+      <div class="rangee">
+        <RouterLink :to="`/projets/${p.id}`" class="bouton">Ouvrir</RouterLink>
+        <RouterLink :to="`/projets/${p.id}/kanban`" class="bouton">Kanban</RouterLink>
+      </div>
+    </article>
+  </div>
+  <p v-else-if="charge" class="vide">Aucun projet pour l'instant. Crée le premier juste en dessous.</p>
+  <section class="carte pile">
+    <h2>Nouveau projet</h2>
+    <form class="champs" @submit.prevent="creer">
+      <label>Nom <input v-model="nom" required /></label>
+      <label>Description <input v-model="description" /></label>
+      <label>Dépôt GitHub (URL) <input v-model="depot" placeholder="https://github.com/…" /></label>
+      <label>Branche de référence <input v-model="branche" placeholder="branche par défaut" /></label>
+      <button>Créer le projet</button>
+    </form>
+  </section>
 </template>

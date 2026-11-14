@@ -36,10 +36,10 @@ async function enregistrer() {
 </script>
 
 <template>
-  <form @submit.prevent="enregistrer">
-    <textarea v-model="yaml" rows="14" cols="70" spellcheck="false" aria-label="Configuration d'exécution (YAML)"></textarea>
+  <form class="pile" @submit.prevent="enregistrer">
+    <textarea v-model="yaml" rows="14" spellcheck="false" aria-label="Configuration d'exécution (YAML)"></textarea>
     <div><button>Enregistrer</button></div>
     <p v-if="erreur" class="erreur">{{ erreur }}</p>
-    <p v-if="ok">Configuration enregistrée.</p>
+    <p v-if="ok" class="discret">Configuration enregistrée.</p>
   </form>
 </template>

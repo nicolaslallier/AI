@@ -42,7 +42,7 @@ function supprimer() {
       <p v-if="erreur" class="erreur">{{ erreur }}</p>
       <label>Titre <input v-model="titre" required /></label>
       <label>Description (markdown) <textarea v-model="description" rows="5" /></label>
-      <div v-if="description" class="apercu" v-html="apercu" />
+      <div v-if="description" class="apercu markdown" v-html="apercu" />
       <label>Critères (un par ligne) <textarea v-model="criteres" rows="3" /></label>
       <label>Fichiers (un par ligne) <textarea v-model="fichiers" rows="3" /></label>
       <fieldset v-if="autres.length">
@@ -54,17 +54,16 @@ function supprimer() {
       <div class="actions">
         <button type="submit">{{ libelle ?? 'Enregistrer' }}</button>
         <button type="button" @click="emit('fermer')">Fermer</button>
-        <button v-if="tache" type="button" @click="supprimer">Supprimer</button>
+        <button v-if="tache" type="button" class="danger pousse" @click="supprimer">Supprimer</button>
       </div>
     </form>
   </div>
 </template>
 
 <style scoped>
-.fond { position: fixed; inset: 0; background: #0006; display: flex; align-items: center; justify-content: center; z-index: 10; }
-.modale { background: #fff; padding: 1rem; border-radius: 0.5rem; width: min(40rem, 95vw); max-height: 90vh; overflow: auto; display: flex; flex-direction: column; gap: 0.5rem; }
-.modale label { display: flex; flex-direction: column; }
-.dep { flex-direction: row !important; gap: 0.4rem; }
-.apercu { border: 1px dashed #d1d5db; padding: 0.4rem; }
+.fond { position: fixed; inset: 0; background: #0008; display: flex; align-items: center; justify-content: center; z-index: 10; }
+.modale { background: var(--surface); padding: 1.25rem; border-radius: var(--rayon); width: min(40rem, 95vw); max-height: 90vh; overflow: auto; display: flex; flex-direction: column; gap: 0.75rem; box-sizing: border-box; }
+.dep { flex-direction: row; align-items: center; gap: 0.4rem; color: var(--texte); font-weight: 400; }
+.apercu { border: 1px dashed var(--bord); border-radius: 0.55rem; padding: 0.5rem 0.75rem; }
 .actions { display: flex; gap: 0.5rem; }
 </style>

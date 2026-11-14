@@ -95,30 +95,35 @@ onBeforeUnmount(() => {
 
 <template>
   <template v-if="pipeline">
-    <h1>{{ pipeline.type }} n°{{ pipeline.id }} <EtatBadge :etat="pipeline.etat" /></h1>
-    <button
-      v-if="pipeline.etat !== 'terminee' && !pipeline.etapes.some((e) => e.erreur === 'annulé')"
-      @click="annuler"
-    >
-      Annuler le pipeline
-    </button>
-    <p>Projet : <RouterLink :to="`/projets/${pipeline.projet.id}`">{{ pipeline.projet.nom }}</RouterLink></p>
-    <p v-if="pipeline.type === 'dev' && pipeline.execution" class="bandeau">
-      Branche <code>{{ pipeline.execution.branche }}</code> · phase {{ pipeline.execution.phase }} ·
-      renvois {{ pipeline.execution.renvois }}
-      <template v-if="lienPrSur(pipeline.execution.pr_url)">
-        ·
-        <a :href="pipeline.execution.pr_url" target="_blank" rel="noopener noreferrer">{{
-          numeroPr(pipeline.execution.pr_url)
-        }}</a>
-      </template>
+    <div class="titre">
+      <h1>{{ pipeline.type }} n°{{ pipeline.id }}</h1>
+      <EtatBadge :etat="pipeline.etat" />
+      <button
+        v-if="pipeline.etat !== 'terminee' && !pipeline.etapes.some((e) => e.erreur === 'annulé')"
+        class="danger pousse"
+        @click="annuler"
+      >
+        Annuler le pipeline
+      </button>
+    </div>
+    <p class="discret">
+      Projet : <RouterLink :to="`/projets/${pipeline.projet.id}`">{{ pipeline.projet.nom }}</RouterLink>
     </p>
-    <div v-for="e in pipeline.etapes" :key="e.id">
-      <h2>
-        {{ e.agent }} <EtatBadge :etat="e.etat" />
-        <small v-if="e.sha">SHA {{ e.sha.slice(0, 7) }}</small>
-      </h2>
-      <details v-for="(c, i) in pipeline.commandes.filter((x) => x.etape_id === e.id)" :key="i">
+    <p v-if="pipeline.type === 'dev' && pipeline.execution" class="carte rangee">
+      <span>Branche <code>{{ pipeline.execution.branche }}</code></span>
+      <span>phase {{ pipeline.execution.phase }}</span>
+      <span>renvois {{ pipeline.execution.renvois }}</span>
+      <a v-if="lienPrSur(pipeline.execution.pr_url)" :href="pipeline.execution.pr_url" target="_blank" rel="noopener noreferrer">{{
+        numeroPr(pipeline.execution.pr_url)
+      }}</a>
+    </p>
+    <section v-for="(e, i) in pipeline.etapes" :key="e.id" class="carte pile">
+      <div class="titre">
+        <h2>{{ i + 1 }}. {{ e.agent }}</h2>
+        <EtatBadge :etat="e.etat" />
+        <small v-if="e.sha">SHA <code>{{ e.sha.slice(0, 7) }}</code></small>
+      </div>
+      <details v-for="(c, j) in pipeline.commandes.filter((x) => x.etape_id === e.id)" :key="j">
         <summary>
           {{ c.nom }} · code {{ c.code ?? '—' }}<template v-if="c.delai_depasse"> · délai dépassé</template> ·
           {{ duree(c.debut, c.fin) }}
@@ -146,7 +151,8 @@ onBeforeUnmount(() => {
           @reessayer="action(() => reessayer(e.id))"
         />
       </template>
-    </div>
+      <p v-else class="discret">Cette étape démarre quand la précédente est terminée.</p>
+    </section>
   </template>
   <p v-else-if="message" class="erreur">{{ message }}</p>
 </template>

@@ -96,14 +96,14 @@ onBeforeUnmount(() => clearInterval(minuteur))
 </script>
 
 <template>
-  <h1>Kanban</h1>
-  <p><RouterLink :to="`/projets/${projetId}`">← Projet</RouterLink></p>
-  <p v-if="erreur" class="erreur">{{ erreur }}</p>
-  <p v-if="!kanban.config_execution">Sans config d'exécution, aucune tâche Prête ne démarre.</p>
-  <div class="barre">
-    <input v-model="texte" placeholder="Filtrer…" aria-label="Filtrer les tâches" />
-    <button @click="((erreurModale = ''), (edition = {}))">Nouvelle tâche</button>
+  <div class="titre">
+    <h1>Kanban</h1>
+    <RouterLink :to="`/projets/${projetId}`">← Retour au projet</RouterLink>
+    <input v-model="texte" class="pousse" type="search" placeholder="Filtrer…" aria-label="Filtrer les tâches" />
+    <button class="primaire" @click="((erreurModale = ''), (edition = {}))">+ Nouvelle tâche</button>
   </div>
+  <p v-if="erreur" class="erreur">{{ erreur }}</p>
+  <p v-if="!kanban.config_execution" class="alerte">Sans config d'exécution, aucune tâche Prête ne démarre.</p>
   <PanneauPropositions
     v-if="kanban.propositions.length || perimees"
     :propositions="kanban.propositions"
@@ -122,7 +122,7 @@ onBeforeUnmount(() => clearInterval(minuteur))
       @dragover.prevent
       @drop="surCarte(c.valeur, $event)"
     >
-      <h3>{{ c.libelle }} ({{ colonnes[c.valeur].length }})</h3>
+      <h3>{{ c.libelle }} <span class="badge">{{ colonnes[c.valeur].length }}</span></h3>
       <CarteTache
         v-for="t in colonnes[c.valeur]"
         :key="t.id"
@@ -148,7 +148,7 @@ onBeforeUnmount(() => clearInterval(minuteur))
 </template>
 
 <style scoped>
-.barre { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
-.colonnes { display: grid; grid-template-columns: repeat(6, minmax(10rem, 1fr)); gap: 0.5rem; overflow-x: auto; }
-.colonne { background: #f3f4f6; border-radius: 0.5rem; padding: 0.4rem; min-height: 8rem; }
+.colonnes { display: grid; grid-template-columns: repeat(6, minmax(13rem, 1fr)); gap: 0.75rem; overflow-x: auto; align-items: start; }
+.colonne { background: var(--creux); border-radius: var(--rayon); padding: 0.6rem; min-height: 8rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.colonne h3 { display: flex; justify-content: space-between; align-items: center; padding: 0.1rem 0.25rem; }
 </style>

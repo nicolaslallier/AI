@@ -26,9 +26,9 @@ function choisir(e: Event) {
     @dragstart="(e) => { e.dataTransfer?.setData('text/plain', String(tache.id)); emit('glisser', tache) }"
     @dragend="emit('glisser', null)"
   >
-    <strong>#{{ tache.id }} {{ tache.titre }}</strong>
+    <strong><span class="discret">#{{ tache.id }}</span> {{ tache.titre }}</strong>
     <div>
-      <span v-if="tache.verrou !== null" class="badge">🔒 verrouillée (pipeline {{ tache.verrou }})</span>
+      <span v-if="tache.verrou !== null" class="badge">🔒 pipeline {{ tache.verrou }}</span>
       <span v-if="tache.protegee" class="badge">✋ protégée</span>
     </div>
     <div v-if="lienPrSur(tache.pr_url)">
@@ -41,7 +41,7 @@ function choisir(e: Event) {
     <div v-for="d in tache.dependances_non_terminees" :key="d" class="dep">⚠ dépend de #{{ d }} non terminée</div>
     <div class="actions">
       <template v-if="tache.verrou !== null">
-        <button @click="emit('annuler', tache)">Annuler</button>
+        <button class="danger" @click="emit('annuler', tache)">Annuler</button>
       </template>
       <template v-else>
         <button @click="emit('ouvrir', tache)">Modifier</button>
@@ -57,10 +57,12 @@ function choisir(e: Event) {
 </template>
 
 <style scoped>
-.carte { background: #fff; border: 1px solid #d1d5db; border-radius: 0.4rem; padding: 0.4rem; margin-bottom: 0.4rem; }
+.carte { background: var(--surface); border: 1px solid var(--bord); border-radius: 0.55rem; padding: 0.6rem; box-shadow: var(--ombre); display: flex; flex-direction: column; gap: 0.35rem; }
 .carte[draggable='true'] { cursor: grab; }
-.badge { font-size: 0.8em; background: #f3f4f6; border-radius: 0.5rem; padding: 0 0.4rem; margin-right: 0.25rem; }
+.carte[draggable='true']:hover { border-color: var(--accent); }
+.badge { margin-right: 0.25rem; }
+.dep { color: var(--alerte); font-size: 0.85em; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.3rem; font-size: 0.85rem; }
+.actions select { flex: 1 1 8rem; }
 pre { white-space: pre-wrap; font-size: 0.8em; margin: 0.2rem 0; }
-.dep { color: #b45309; font-size: 0.85em; }
-.actions { margin-top: 0.3rem; display: flex; gap: 0.3rem; }
 </style>

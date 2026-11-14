@@ -61,27 +61,37 @@ onMounted(charger)
 <template>
   <p v-if="erreur" class="erreur">{{ erreur }}</p>
   <template v-if="projet">
-    <h1>{{ projet.nom }}</h1>
-    <p>{{ projet.description }}</p>
-    <p><RouterLink :to="`/projets/${projet.id}/kanban`">Kanban</RouterLink></p>
-    <form @submit.prevent="enregistrer">
-      <input v-model="depot" placeholder="Dépôt GitHub (URL)" />
-      <input v-model="branche" placeholder="Branche de référence (vide = branche par défaut)" />
-      <button>Enregistrer le dépôt</button>
-    </form>
-    <button :disabled="!projet.spec_courante || enCours" @click="planifier">Lancer la planification</button>
-    <h2>Exécution</h2>
-    <ConfigExecution :projet-id="projet.id" :config="projet.config_execution" @enregistre="charger" />
+    <div class="titre">
+      <h1>{{ projet.nom }}</h1>
+      <RouterLink :to="`/projets/${projet.id}/kanban`" class="bouton pousse">Kanban</RouterLink>
+      <button class="primaire" :disabled="!projet.spec_courante || enCours" @click="planifier">
+        Lancer la planification
+      </button>
+    </div>
+    <p v-if="projet.description" class="discret">{{ projet.description }}</p>
+    <p v-if="!projet.spec_courante" class="discret">La planification se débloque dès qu'une spec est validée.</p>
+    <section class="carte pile">
+      <h2>Dépôt</h2>
+      <form class="champs" @submit.prevent="enregistrer">
+        <label>Dépôt GitHub (URL) <input v-model="depot" placeholder="https://github.com/…" /></label>
+        <label>Branche de référence <input v-model="branche" placeholder="branche par défaut" /></label>
+        <button>Enregistrer le dépôt</button>
+      </form>
+    </section>
+    <section class="carte pile">
+      <h2>Exécution</h2>
+      <ConfigExecution :projet-id="projet.id" :config="projet.config_execution" @enregistre="charger" />
+    </section>
     <h2>Pipelines</h2>
-    <p v-if="!projet.pipelines.length">Aucun pipeline.</p>
-    <ul>
-      <li v-for="p in projet.pipelines" :key="p.id">
-        <RouterLink :to="`/pipelines/${p.id}`">{{ p.type }} n°{{ p.id }}</RouterLink>
-        <EtatBadge :etat="p.etat" />
-      </li>
-    </ul>
+    <div class="pile">
+      <RouterLink v-for="p in projet.pipelines" :key="p.id" :to="`/pipelines/${p.id}`" class="carte ligne">
+        <strong>{{ p.type }} n°{{ p.id }}</strong>
+        <EtatBadge :etat="p.etat" class="pousse" />
+      </RouterLink>
+      <p v-if="!projet.pipelines.length" class="vide">Aucun pipeline pour ce projet.</p>
+    </div>
     <h2>Spec courante</h2>
-    <div v-if="spec" v-html="spec"></div>
-    <p v-else>Pas encore de spec validée.</p>
+    <div v-if="spec" class="carte markdown" v-html="spec"></div>
+    <p v-else class="vide">Pas encore de spec validée.</p>
   </template>
 </template>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Jauge } from '../api'
 defineProps<{ jauge: Jauge }>()
-const couleurs = { ok: '#86efac', alerte: '#fcd34d', plein: '#fca5a5' }
+const couleurs = { ok: 'var(--succes)', alerte: 'var(--alerte)', plein: 'var(--danger)' }
 </script>
 
 <template>
@@ -9,7 +9,7 @@ const couleurs = { ok: '#86efac', alerte: '#fcd34d', plein: '#fca5a5' }
     <div class="barre">
       <div :style="{ width: Math.min(100, jauge.ratio * 100) + '%', background: couleurs[jauge.niveau] }"></div>
     </div>
-    <small>{{ jauge.utilises }} / {{ jauge.max }}</small>
+    <small>Contexte : {{ jauge.utilises.toLocaleString('fr-FR') }} / {{ jauge.max.toLocaleString('fr-FR') }}</small>
     <p v-if="jauge.niveau === 'alerte'" class="alerte">
       Le contexte se remplit : clique « Rédiger la spec » pour que l'agent reparte du brouillon.
     </p>
@@ -18,7 +18,7 @@ const couleurs = { ok: '#86efac', alerte: '#fcd34d', plein: '#fca5a5' }
 </template>
 
 <style scoped>
-.barre { height: 0.5rem; background: #e5e7eb; border-radius: 0.25rem; overflow: hidden; }
+.barre { height: 0.4rem; background: var(--gris-doux); border-radius: 999px; overflow: hidden; }
 .barre div { height: 100%; }
-.alerte { margin: 0.25rem 0; }
+.alerte { margin: 0.25rem 0; color: var(--alerte); }
 </style>
