@@ -6,8 +6,8 @@ export interface RappelsFlux {
   outil(libelle: string): void
 }
 
-export function ecouterFlux(etapeId: number, rappels: RappelsFlux): () => void {
-  const source = new EventSource(`/api/etapes/${etapeId}/flux`)
+export function ecouterFlux(url: string, rappels: RappelsFlux): () => void {
+  const source = new EventSource(url)
   let termine = false
   const donnee = (e: Event) => JSON.parse((e as MessageEvent).data)
   source.addEventListener('partiel', (e) => rappels.partiel(donnee(e).texte))

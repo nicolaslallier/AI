@@ -34,7 +34,7 @@ function abonner(etapeId: number) {
   }
   abonnements.set(
     etapeId,
-    ecouterFlux(etapeId, {
+    ecouterFlux(`/api/etapes/${etapeId}/flux`, {
       partiel: (t) => (partiels[etapeId] = t),
       delta: (t) => (partiels[etapeId] = (partiels[etapeId] ?? '') + t),
       outil: (l) => (outils[etapeId] = [...(outils[etapeId] ?? []), l]),

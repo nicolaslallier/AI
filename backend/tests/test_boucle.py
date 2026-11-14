@@ -233,3 +233,41 @@ async def test_message_assistant_normalise_rejouable(outils):
         assert t["type"] == "function" and isinstance(t["function"]["arguments"], str)
         assert isinstance(t["function"]["name"], str)
     assert [m["tool_call_id"] for m in messages if m["role"] == "tool"] == ids
+
+
+class _OutilsArret:
+    """Pose `arret` au premier appel, comme OutilsPortail après une proposition."""
+
+    arret = False
+
+    def __init__(self, outils):
+        self._outils = outils
+        self.vus: list[str] = []
+
+    def schemas(self):
+        return self._outils.schemas()
+
+    async def executer(self, nom, arguments):
+        self.vus.append(nom)
+        self.arret = True
+        return "proposé", False
+
+
+async def test_arret_apres_proposition(outils):
+    llm = FauxLLM()
+    trois = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": f"c{i}", "type": "function", "function": {"name": "lire", "arguments": "{}"}}
+            for i in range(3)
+        ],
+    }
+    llm.reponses = [trois, _texte("<think>x</think>Fini")]
+    arret = _OutilsArret(outils)
+    res, _, messages = await _go(llm, arret)
+    assert res.texte == "Fini" and res.limite_atteinte is False
+    assert arret.vus == ["lire"]
+    ignore = "ignoré : une action attend la confirmation de Nicolas"
+    assert [m["content"] for m in messages if m["role"] == "tool"] == ["proposé", ignore, ignore]
+    assert len(llm.appels) == 2 and llm.appels[-1]["outils"] is None

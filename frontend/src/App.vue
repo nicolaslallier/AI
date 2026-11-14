@@ -4,6 +4,7 @@
     <nav>
       <RouterLink to="/">Pipelines</RouterLink>
       <RouterLink to="/projets">Projets</RouterLink>
+      <RouterLink to="/chat">Chat</RouterLink>
     </nav>
   </header>
   <main :class="{ large: $route.name === 'kanban' }"><RouterView /></main>

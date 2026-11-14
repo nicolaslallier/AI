@@ -11,7 +11,7 @@ from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine, text
 
-from portail.agents import Agent, Catalogue
+from portail.agents import OUTILS_PORTAIL, Agent, Catalogue
 from portail.api import create_app
 from portail.config import Reglages
 from portail.db import Base, creer_moteur, fabrique_sessions
@@ -99,6 +99,7 @@ OUTILS = ["lister", "lire", "chercher"]
 CATALOGUE_TEST = Catalogue(
     agents={
         "spec": _agent("spec", consigne_redaction="Rédige la spec.", outils=OUTILS),
+        "orchestrateur": _agent("orchestrateur", outils=list(OUTILS_PORTAIL)),
         "a": _agent("a"),
         "b": _agent("b"),
         "petit": _agent("petit", contexte_max=50),

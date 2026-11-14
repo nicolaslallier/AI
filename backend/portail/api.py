@@ -17,6 +17,7 @@ from portail.agents import Catalogue, charger_catalogue
 from portail.chat import Diffuseur, ServiceChat, annexes
 from portail.config import Reglages
 from portail.contexte import construire, jauge
+from portail.conversations import ServiceConversation
 from portail.db import (
     CommandeLancee,
     Etape,
@@ -43,9 +44,11 @@ from portail.notifications import Notifieur
 from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.schemas import (
-    DEPOT_RE,
     Acceptation,
     CommandeVue,
+    ConversationDetail,
+    ConversationPatch,
+    ConversationResume,
     Deplacement,
     DocumentOut,
     DonneesTache,
@@ -66,6 +69,7 @@ from portail.schemas import (
     PropositionVue,
     SpecCourante,
     TacheVue,
+    verifier_depot,
 )
 from portail.suivi_pr import SuiviPR
 from portail.taches import (
@@ -222,23 +226,18 @@ async def _tache(session: AsyncSession, tache_id: int) -> Tache:
     return t
 
 
-def _verifier_depot(url: str | None) -> None:
-    if url is not None and not DEPOT_RE.fullmatch(url):
-        raise Refus(422, "URL de dépôt GitHub invalide")
-
-
 def _resume(p: Pipeline, nom: str) -> PipelineResume:
     return PipelineResume(
         id=p.id, projet_id=p.projet_id, projet_nom=nom, type=p.type, etat=p.etat, maj_le=p.maj_le
     )
 
 
-def _reveiller(request: Request) -> None:
-    if ordonnanceur := request.app.state.ordonnanceur:
+def _reveiller(state) -> None:
+    if ordonnanceur := state.ordonnanceur:
         ordonnanceur.reveiller()
 
 
-async def _annuler(request: Request, s: AsyncSession, pipeline_id: int, clos: bool) -> None:
+async def _annuler(state, s: AsyncSession, pipeline_id: int, clos: bool) -> None:
     """Un pipeline `dev` passe par l'orchestrateur (même terminé : nettoyage), les autres par le
     chat, qui refuse un pipeline clos (`clos` : le lui demander quand même). Libère la
     transaction de `s` avant que le service ouvre la sienne, puis la tâche que le pipeline
@@ -251,11 +250,11 @@ async def _annuler(request: Request, s: AsyncSession, pipeline_id: int, clos: bo
     mode = await s.scalar(select(ExecutionDev.mode).where(ExecutionDev.pipeline_id == pipeline_id))
     reprise = mode == "reprise" and etat == Etat.EN_COURS
     await s.rollback()
-    orchestrateur = request.app.state.orchestrateur
+    orchestrateur = state.orchestrateur
     if type_ == "dev" and orchestrateur:
         await orchestrateur.annuler(pipeline_id)
     elif clos or etat not in (Etat.TERMINEE, Etat.ECHOUEE):
-        await request.app.state.chat.annuler(pipeline_id)
+        await state.chat.annuler(pipeline_id)
     projet_id = await s.scalar(select(Tache.projet_id).where(Tache.verrou == pipeline_id))
     if projet_id is None:
         return
@@ -273,7 +272,15 @@ async def _annuler(request: Request, s: AsyncSession, pipeline_id: int, clos: bo
         if reprise:
             t.verrou = pipeline_id
     await s.commit()
-    _reveiller(request)
+    _reveiller(state)
+
+
+async def _annuler_tache(state, s: AsyncSession, tache_id: int) -> None:
+    t = await _tache(s, tache_id)
+    verrou = t.verrou
+    if verrou is None:
+        raise Refus(409, "rien à annuler")
+    await _annuler(state, s, verrou, clos=False)  # même chemin que /pipelines/{id}/annuler
 
 
 def _orchestrateur(r: Reglages, sessions, catalogue, llm) -> Orchestrateur | None:
@@ -321,6 +328,23 @@ def create_app(
         app.state.chat = ServiceChat(
             app.state.sessions, app.state.catalogue, app.state.llm, app.state.diffuseur, depots
         )
+
+        async def annuler_tache(tache_id: int) -> None:
+            async with app.state.sessions() as s:
+                await _annuler_tache(app.state, s, tache_id)
+
+        app.state.conversations = ServiceConversation(
+            app.state.sessions,
+            app.state.catalogue,
+            app.state.llm,
+            Diffuseur(),
+            app.state.chat,
+            annuler_tache,
+            lambda: _reveiller(app.state),
+        )
+        async with app.state.sessions() as s:
+            await app.state.conversations.recuperer_interrompues(s)
+            await s.commit()
         orch = orchestrateur or _orchestrateur(
             r, app.state.sessions, app.state.catalogue, app.state.llm
         )
@@ -334,7 +358,7 @@ def create_app(
                 asyncio.create_task(suivi.tourner()),
             ]
         yield
-        taches = list(app.state.chat.taches.values())
+        taches = [*app.state.chat.taches.values(), *app.state.conversations.taches.values()]
         if orch:
             taches += [*boucles, *orch.taches.values()]
         for t in taches:
@@ -379,7 +403,7 @@ def create_app(
 
     @app.post("/api/projets", status_code=201, response_model=ProjetOut)
     async def creer_projet(corps: ProjetIn, s: Session):
-        _verifier_depot(corps.depot_url)
+        verifier_depot(corps.depot_url)
         projet = Projet(**corps.model_dump())
         s.add(projet)
         await s.commit()
@@ -391,7 +415,7 @@ def create_app(
         projet = await s.get(Projet, projet_id)
         if projet is None:
             raise Refus(404, "projet introuvable")
-        _verifier_depot(corps.depot_url)
+        verifier_depot(corps.depot_url)
         for champ in corps.model_fields_set:
             setattr(projet, champ, getattr(corps, champ))
         await s.commit()
@@ -460,7 +484,7 @@ def create_app(
 
     @app.post("/api/pipelines/{pipeline_id}/annuler", response_model=PipelineDetail)
     async def annuler(pipeline_id: int, request: Request, s: Session):
-        await _annuler(request, s, pipeline_id, clos=True)
+        await _annuler(request.app.state, s, pipeline_id, clos=True)
         return await _detail(s, request.app.state.catalogue, pipeline_id)
 
     @app.get("/api/projets/{projet_id}/kanban", response_model=Kanban)
@@ -494,7 +518,7 @@ def create_app(
                 await _fermer(request, s, p.etape_id)
             raise
         await _fermer(request, s, p.etape_id)
-        _reveiller(request)
+        _reveiller(request.app.state)
         return await _kanban(s, p.projet_id)
 
     @app.post("/api/propositions/{proposition_id}/rejeter", response_model=Kanban)
@@ -529,7 +553,7 @@ def create_app(
                     raise
                 perimees += 1
         await _fermer(request, s, etape_id)
-        _reveiller(request)
+        _reveiller(request.app.state)
         k = await _kanban(s, projet_id)
         return KanbanToutAccepte(**k.model_dump(), perimees=perimees)
 
@@ -537,7 +561,7 @@ def create_app(
     async def ajouter_tache(projet_id: int, corps: DonneesTache, request: Request, s: Session):
         t = await creer_tache(s, projet_id, corps, "nicolas")
         await s.commit()
-        _reveiller(request)
+        _reveiller(request.app.state)
         return await _vue(s, t.id)
 
     @app.patch("/api/taches/{tache_id}", response_model=TacheVue)
@@ -545,7 +569,7 @@ def create_app(
         t = await _tache(s, tache_id)
         await modifier_tache(s, t, corps, "nicolas")
         await s.commit()
-        _reveiller(request)
+        _reveiller(request.app.state)
         return await _vue(s, tache_id)
 
     @app.post("/api/taches/{tache_id}/deplacer", response_model=TacheVue)
@@ -553,7 +577,7 @@ def create_app(
         t = await _tache(s, tache_id)
         await deplacer_tache(s, t, corps.colonne, corps.avant_id, "nicolas")
         await s.commit()
-        _reveiller(request)
+        _reveiller(request.app.state)
         return await _vue(s, tache_id)
 
     @app.delete("/api/taches/{tache_id}", status_code=204)
@@ -564,11 +588,7 @@ def create_app(
 
     @app.post("/api/taches/{tache_id}/annuler", response_model=TacheVue)
     async def annuler_tache(tache_id: int, request: Request, s: Session):
-        t = await _tache(s, tache_id)
-        verrou = t.verrou
-        if verrou is None:
-            raise Refus(409, "rien à annuler")
-        await _annuler(request, s, verrou, clos=False)  # même chemin que /pipelines/{id}/annuler
+        await _annuler_tache(request.app.state, s, tache_id)
         return await _vue(s, tache_id)
 
     class MessageIn(BaseModel):
@@ -606,6 +626,57 @@ def create_app(
         chat = request.app.state.chat
         await chat.etat(etape_id)  # 404 avant de commencer le flux
         return StreamingResponse(chat.flux(etape_id), media_type="text/event-stream")
+
+    @app.get("/api/conversations", response_model=list[ConversationResume])
+    async def lister_conversations(request: Request):
+        return await request.app.state.conversations.lister()
+
+    @app.post("/api/conversations", status_code=201, response_model=ConversationDetail)
+    async def creer_conversation(request: Request):
+        service = request.app.state.conversations
+        return await service.detail((await service.creer()).id)
+
+    @app.get("/api/conversations/{conversation_id}", response_model=ConversationDetail)
+    async def lire_conversation(conversation_id: int, request: Request):
+        return await request.app.state.conversations.detail(conversation_id)
+
+    @app.patch("/api/conversations/{conversation_id}", response_model=ConversationDetail)
+    async def renommer_conversation(
+        conversation_id: int, corps: ConversationPatch, request: Request
+    ):
+        service = request.app.state.conversations
+        await service.renommer(conversation_id, corps.titre)
+        return await service.detail(conversation_id)
+
+    @app.delete("/api/conversations/{conversation_id}", status_code=204)
+    async def supprimer_conversation(conversation_id: int, request: Request):
+        await request.app.state.conversations.supprimer(conversation_id)
+
+    @app.post("/api/conversations/{conversation_id}/messages", status_code=202)
+    async def envoyer_conversation(conversation_id: int, corps: MessageIn, request: Request):
+        await request.app.state.conversations.envoyer(conversation_id, corps.contenu)
+        return {}
+
+    @app.post("/api/conversations/{conversation_id}/reessayer", status_code=202)
+    async def reessayer_conversation(conversation_id: int, request: Request):
+        await request.app.state.conversations.reessayer(conversation_id)
+        return {}
+
+    @app.post("/api/actions/{action_id}/confirmer", status_code=202)
+    async def confirmer_action(action_id: int, request: Request):
+        await request.app.state.conversations.confirmer(action_id)
+        return {}
+
+    @app.post("/api/actions/{action_id}/refuser", status_code=202)
+    async def refuser_action(action_id: int, request: Request):
+        await request.app.state.conversations.refuser(action_id)
+        return {}
+
+    @app.get("/api/conversations/{conversation_id}/flux")
+    async def flux_conversation(conversation_id: int, request: Request):
+        service = request.app.state.conversations
+        await service.etat(conversation_id)  # 404 avant de commencer le flux
+        return StreamingResponse(service.flux(conversation_id), media_type="text/event-stream")
 
     @app.get("/api/evenements")
     async def evenements():

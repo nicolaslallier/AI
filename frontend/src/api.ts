@@ -205,3 +205,40 @@ export const enregistrerDocument = (etapeId: number, contenu: string) =>
   appel<Document>('PUT', `/etapes/${etapeId}/document`, { contenu })
 export const valider = (etapeId: number) =>
   appel<PipelineDetail>('POST', `/etapes/${etapeId}/valider`)
+
+export interface ConversationResume {
+  id: number
+  titre: string
+  etat: string
+  maj_le: string
+}
+export interface ConversationDetail {
+  id: number
+  titre: string
+  etat: 'pret' | 'en_cours' | 'erreur'
+  erreur: string | null
+  messages: Message[]
+  jauge: Jauge | null
+  actions: ActionConversation[]
+}
+export const listerConversations = () => appel<ConversationResume[]>('GET', '/conversations')
+export const creerConversation = () => appel<ConversationDetail>('POST', '/conversations')
+export const lireConversation = (id: number) => appel<ConversationDetail>('GET', `/conversations/${id}`)
+export const renommerConversation = (id: number, titre: string) =>
+  appel<ConversationDetail>('PATCH', `/conversations/${id}`, { titre })
+export const supprimerConversation = (id: number) => appel<void>('DELETE', `/conversations/${id}`)
+export const envoyerMessageConversation = (id: number, contenu: string) =>
+  appel<object>('POST', `/conversations/${id}/messages`, { contenu })
+export const reessayerConversation = (id: number) => appel<object>('POST', `/conversations/${id}/reessayer`)
+
+export interface ActionConversation {
+  id: number
+  nom: string
+  parametres: Record<string, unknown>
+  etat: 'proposee' | 'confirmee' | 'refusee' | 'echouee' | 'perimee'
+  resultat: string | null
+  lien: string | null
+  cree_le: string
+}
+export const confirmerAction = (id: number) => appel<object>('POST', `/actions/${id}/confirmer`)
+export const refuserAction = (id: number) => appel<object>('POST', `/actions/${id}/refuser`)

@@ -15,6 +15,39 @@ agents:
       Rédige maintenant la spec complète du projet, en markdown, à partir de la discussion.
       Sections : Intention, Objectifs, Non-objectifs, Contraintes, Décisions, Questions ouvertes.
       Réponds uniquement avec le document, sans préambule ni commentaire.
+  orchestrateur:
+    description: Répond aux questions de Nicolas, en dehors de tout projet.
+    modele: qwen3.8:27b-mlx
+    contexte_max: 32768
+    temperature: 0.3
+    outils:
+      - lister_projets
+      - lire_projet
+      - lister_pipelines
+      - lire_pipeline
+      - lire_kanban
+      - creer_projet
+      - deposer_spec
+      - lancer_pipeline
+      - creer_tache
+      - modifier_tache
+      - deplacer_tache
+      - annuler_tache
+    tours_max: 10
+    prompt_systeme: |
+      Tu es l'orchestrateur du portail : tu réponds aux questions de Nicolas, en français.
+      Pour une spec, pose une seule question à la fois, courte et précise, et ne rédige que
+      s'il te le demande.
+      Tu ne parles des projets, des pipelines et des tâches qu'à partir de tes outils de
+      lecture : si tu ne l'as pas lu, tu ne l'affirmes pas.
+      Tes outils d'action (creer_projet, deposer_spec, lancer_pipeline, creer_tache,
+      modifier_tache, deplacer_tache, annuler_tache) ne font que proposer : rien n'est fait
+      avant que Nicolas confirme. Une seule proposition par réponse ; ensuite, termine ta
+      réponse sans appeler d'outil. Ne prétends jamais qu'une action est faite tant que la
+      conversation ne dit pas qu'elle a été confirmée.
+      Une spec déposée avec deposer_spec est validée dès sa confirmation : propose-la
+      seulement quand Nicolas l'a approuvée, et en entier.
+      Pour démarrer une tâche de développement, propose de la déplacer vers « prete ».
   plan:
     description: Lit le dépôt et rédige le plan d'implémentation à partir de la spec.
     modele: qwen3.8:27b-mlx

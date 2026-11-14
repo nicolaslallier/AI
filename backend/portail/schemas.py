@@ -1,11 +1,21 @@
 import re
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from portail.contexte import Jauge
+from portail.moteur import Refus
 
 DEPOT_RE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?(\.git)?$")
+
+# identifiant venu d'un agent : borné à un INTEGER Postgres, sans coercition (ni bool, ni str)
+Id = Annotated[int, Field(strict=True, ge=1, le=2**31 - 1)]
+
+
+def verifier_depot(url: str | None) -> None:
+    if url is not None and not DEPOT_RE.fullmatch(url):
+        raise Refus(422, "URL de dépôt GitHub invalide")
 
 
 def _nom_valide(v: str | None) -> str:
@@ -89,6 +99,37 @@ class MessageOut(BaseModel):
     contenu: str
     outil: str | None
     cree_le: datetime
+
+
+class ConversationResume(BaseModel):
+    id: int
+    titre: str
+    etat: str
+    maj_le: datetime
+
+
+class ActionOut(BaseModel):
+    id: int
+    nom: str
+    parametres: dict
+    etat: str
+    resultat: str | None
+    lien: str | None
+    cree_le: datetime
+
+
+class ConversationDetail(BaseModel):
+    id: int
+    titre: str
+    etat: str
+    erreur: str | None
+    messages: list[MessageOut]
+    actions: list[ActionOut]
+    jauge: Jauge | None  # None si l'agent manque au catalogue
+
+
+class ConversationPatch(BaseModel):
+    titre: str = Field(max_length=200)
 
 
 class DocumentOut(BaseModel):

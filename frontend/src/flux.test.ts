@@ -28,7 +28,7 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 it('partiel puis delta appellent les rappels', () => {
-  ecouterFlux(7, rappels)
+  ecouterFlux('/api/etapes/7/flux', rappels)
   const s = FauxEventSource.derniere
   expect(s.url).toBe('/api/etapes/7/flux')
   s.emettre('partiel', { texte: 'Bon' })
@@ -38,13 +38,13 @@ it('partiel puis delta appellent les rappels', () => {
 })
 
 it('outil appelle outil(libelle)', () => {
-  ecouterFlux(1, rappels)
+  ecouterFlux('/api/etapes/1/flux', rappels)
   FauxEventSource.derniere.emettre('outil', { libelle: 'lire(README.md)' })
   expect(rappels.outil).toHaveBeenCalledWith('lire(README.md)')
 })
 
 it('fin appelle fin() puis ferme', () => {
-  ecouterFlux(1, rappels)
+  ecouterFlux('/api/etapes/1/flux', rappels)
   const s = FauxEventSource.derniere
   s.emettre('fin')
   expect(rappels.fin).toHaveBeenCalledOnce()
@@ -52,7 +52,7 @@ it('fin appelle fin() puis ferme', () => {
 })
 
 it('erreur appelle erreur(message) puis ferme', () => {
-  ecouterFlux(1, rappels)
+  ecouterFlux('/api/etapes/1/flux', rappels)
   const s = FauxEventSource.derniere
   s.emettre('erreur', { message: 'boum' })
   expect(rappels.erreur).toHaveBeenCalledWith('boum')
@@ -60,13 +60,13 @@ it('erreur appelle erreur(message) puis ferme', () => {
 })
 
 it('le désabonnement ferme la source', () => {
-  const stop = ecouterFlux(1, rappels)
+  const stop = ecouterFlux('/api/etapes/1/flux', rappels)
   stop()
   expect(FauxEventSource.derniere.close).toHaveBeenCalled()
 })
 
 it('onerror avec connexion fermée : erreur("connexion perdue") une fois', () => {
-  ecouterFlux(1, rappels)
+  ecouterFlux('/api/etapes/1/flux', rappels)
   const s = FauxEventSource.derniere
   s.readyState = 2
   s.onerror!()

@@ -11,6 +11,7 @@ from portail.llm import retirer_reflexion
 from portail.outils import OutilsDepot
 
 _LIMITE = "Limite d'outils atteinte : conclus maintenant avec ce que tu as, sans appeler d'outil."
+_IGNORE = "ignoré : une action attend la confirmation de Nicolas"
 _MAL_FORMES_MAX = 3
 _MAX_APPELS_PAR_TOUR = 8
 
@@ -92,6 +93,9 @@ async def boucle_outils(
             }
         )
         for i, (id_, nom, arguments, valide) in enumerate(normalises):
+            if getattr(outils, "arret", False):
+                messages.append({"role": "tool", "tool_call_id": id_, "content": _IGNORE})
+                continue
             if i >= _MAX_APPELS_PAR_TOUR:
                 messages.append(
                     {
@@ -114,6 +118,11 @@ async def boucle_outils(
             await sur_appel(libelle, resultat)
             if mal_formes >= _MAL_FORMES_MAX:
                 raise ErreurOutils(f"le modèle {agent.modele} ne gère pas correctement les outils")
+        if getattr(outils, "arret", False):
+            # une action est proposée : le modèle conclut sans outils, Nicolas décide
+            elaguer_resultats_outils(messages, agent.contexte_max)
+            reponse = await llm.completer(agent.modele, messages, agent.temperature)
+            return ResultatBoucle(texte=_texte(reponse), limite_atteinte=False)
     messages.append({"role": "user", "content": _LIMITE})
     elaguer_resultats_outils(messages, agent.contexte_max)
     reponse = await llm.completer(agent.modele, messages, agent.temperature)
