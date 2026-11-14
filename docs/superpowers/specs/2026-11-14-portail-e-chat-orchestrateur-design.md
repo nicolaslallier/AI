@@ -57,9 +57,9 @@ Construit en **deux temps**, livrables séparément :
 
 ### Données
 
-- `conversation` : `id`, `titre` (le début du premier message, modifiable), `cree_le`, `maj_le`.
-- `message_conversation` : `id`, `conversation_id` (cascade), `role` (`user | assistant | tool`), `contenu`, `outil` (libellé de l'appel, comme `Message.outil`), `cree_le`.
-- *(Temps 2)* `action_conversation` : `id`, `conversation_id`, `message_id` (l'appel d'outil qui la propose), `nom`, `parametres` (JSON), `etat` (`proposee | confirmee | refusee | echouee | perimee`), `resultat` (texte renvoyé au modèle), `cree_le`, `maj_le`.
+- `conversation` : `id`, `titre` (le début du premier message, modifiable), `etat` (`pret | en_cours | erreur`), `erreur`, `cree_le`, `maj_le`.
+- `message_conversation` : `id`, `conversation_id` (cascade), `role` (`user | assistant | system | tool`), `contenu`, `outil` (libellé de l'appel, comme `Message.outil`), `cree_le`.
+- *(Temps 2)* `action_conversation` : `id`, `conversation_id`, `nom`, `parametres` (JSON), `etat` (`proposee | confirmee | refusee | echouee | perimee`), `resultat` (texte renvoyé au modèle), `lien` (vers ce qui a été créé), `cree_le`, `maj_le`. La carte se place dans le fil selon `cree_le`.
 - Une migration Alembic par temps.
 
 ### Agent
@@ -101,7 +101,7 @@ c'est donc `deplacer_tache(tache_id, "prete")`. Comme E se construit après C, l
 1. Le modèle appelle un outil d'action → l'action est enregistrée `proposee`, le **tour s'arrête** : le modèle reçoit comme résultat
    « action proposée, en attente de la confirmation de Nicolas » et doit finir sa réponse sans appeler d'autre outil.
 2. Le chat affiche une **carte** : l'action en clair, ses paramètres exacts, et deux boutons *Confirmer* / *Refuser*. Pour `deposer_spec`, la carte montre **la spec en entier** (rendue en markdown) : confirmer, c'est la valider (décision de Nicolas).
-3. *Confirmer* → `POST /api/actions/{id}/confirmer` exécute l'action dans une transaction, avec l'auteur `agent:orchestrateur` dans le
+3. *Confirmer* → `POST /api/actions/{id}/confirmer` exécute l'action dans une transaction, avec l'auteur `"nicolas"` dans le
    journal des tâches. Le résultat (ou le refus du portail, ex. « une planification est déjà en cours ») est enregistré dans l'action et
    ajouté à la conversation comme message `tool`, puis le modèle est relancé pour commenter le résultat.
 4. *Refuser* → l'action passe `refusee`, un message `tool` « Nicolas a refusé » est ajouté, et le modèle est relancé.
@@ -138,12 +138,12 @@ c'est donc `deplacer_tache(tache_id, "prete")`. Comme E se construit après C, l
 - **Streaming** : même comportement que le chat d'étape. Les tours avec outils passent par `completer` (non streamé), chaque appel
   d'outil s'affiche au fil de l'eau, et le texte final arrive d'un bloc. `llm.py` ne change pas : streamer les appels d'outils serait
   fragile avec qwen, qui les forme mal assez souvent.
-- **Rejeu des appels d'outils** : `message_conversation` gagne `appels` (JSON des `tool_calls` d'un message `assistant`) et
-  `appel_id` (le `tool_call_id` d'un message `tool`). L'historique est donc rejoué au format OpenAI valide, y compris après une
-  confirmation ou un redémarrage. Les résultats des outils de lecture des tours précédents sont élagués par `elaguer_resultats_outils`,
-  comme dans le chat d'étape.
+- **Rejeu de l'historique** : comme dans le chat d'étape, on ne rejoue d'un tour à l'autre que les messages `user`, `assistant`
+  et `system` ; les messages `tool` ne servent qu'à l'affichage. Le sort d'une action (confirmée, refusée, refusée par le portail)
+  est ajouté comme message `system` en clair (« Action n°12 (creer_projet) confirmée par Nicolas : projet 7 créé »). Pas d'ids
+  d'appels à stocker, et l'historique reste valide après une confirmation ou un redémarrage.
 - **Auteur d'une action confirmée** : `"nicolas"`, puisque c'est son clic. La tâche est donc protégée, comme si Nicolas avait fait
-  la modification lui-même, et l'agent de planification ne peut pas l'écraser. Le journal note `via: "orchestrateur"` dans `donnees`.
+  la modification lui-même, et l'agent de planification ne peut pas l'écraser. La trace « venu du chat » est la ligne `action_conversation`.
 - **`deposer_spec` sur un projet qui a déjà un pipeline `spec` ouvert** : refus à la proposition (« un pipeline de spec est déjà
   ouvert : finis-le ou annule-le »). Il n'y a jamais deux specs concurrentes.
 - **Outils de lecture partagés avec D** : ils vivent dans un module `outils_portail.py`, que le PM de D réutilisera tel quel au lieu
