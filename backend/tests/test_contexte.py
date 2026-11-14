@@ -29,9 +29,7 @@ def test_avec_brouillon_seulement_les_messages_apres():
     r = construire(_agent(), _msgs(4), doc)
     assert [m["content"] for m in r[2:]] == ["m3", "m4"]
     assert r[1]["role"] == "system"
-    assert (
-        r[1]["content"] == "Brouillon courant de la spec (corrections de Nicolas incluses) :\n\nTXT"
-    )
+    assert r[1]["content"] == "Brouillon courant :\n\nTXT"
     assert len(r) == 4
 
 

@@ -98,6 +98,12 @@ class ServiceChat:
             raise Refus(404, "étape introuvable")
         return etape
 
+    async def _etape_relancable(self, s: AsyncSession, etape_id: int) -> Etape:
+        etape = await self._etape(s, etape_id)
+        if etape.erreur == "annulé":  # l'annulation est définitive
+            raise Refus(409, "étape annulée")
+        return etape
+
     def _agent(self, etape: Etape):
         agent = self._catalogue.agents.get(etape.agent)
         if agent is None:
@@ -124,7 +130,7 @@ class ServiceChat:
 
     async def envoyer(self, etape_id: int, contenu: str) -> None:
         async with self._sessions() as s:
-            etape = await self._etape(s, etape_id)
+            etape = await self._etape_relancable(s, etape_id)
             if etape.etat == Etat.EN_COURS:
                 raise Refus(409, "une réponse est déjà en cours")
             if etape.etat != Etat.EN_ATTENTE:
@@ -146,7 +152,7 @@ class ServiceChat:
 
     async def rediger(self, etape_id: int) -> None:
         async with self._sessions() as s:
-            etape = await self._etape(s, etape_id)
+            etape = await self._etape_relancable(s, etape_id)
             if etape.etat != Etat.EN_ATTENTE:
                 raise Refus(
                     409,
@@ -163,7 +169,7 @@ class ServiceChat:
 
     async def reessayer(self, etape_id: int) -> None:
         async with self._sessions() as s:
-            etape = await self._etape(s, etape_id)
+            etape = await self._etape_relancable(s, etape_id)
             if etape.etat != Etat.ECHOUEE:
                 raise Refus(409, "seule une étape échouée peut être relancée")
             await changer_etat(s, etape, Etat.EN_COURS)
@@ -245,6 +251,8 @@ class ServiceChat:
                 visible, limite = await self._boucle(etape_id, agent, demande, arbre)
             async with self._sessions() as s:
                 etape = await self._etape(s, etape_id)
+                if etape.etat != Etat.EN_COURS:  # annulée entre-temps : on n'écrase rien
+                    return
                 if not visible:
                     await changer_etat(s, etape, Etat.ECHOUEE, "réponse vide du modèle")
                     await s.commit()
@@ -272,6 +280,8 @@ class ServiceChat:
             try:
                 async with self._sessions() as s:
                     etape = await self._etape(s, etape_id)
+                    if etape.etat != Etat.EN_COURS:  # annulée entre-temps : on n'écrase rien
+                        return
                     await changer_etat(s, etape, Etat.ECHOUEE, str(exc))
                     await s.commit()
             except Exception:
@@ -340,7 +350,14 @@ class ServiceChat:
         async with self._sessions() as s:
             if await s.get(Pipeline, pipeline_id) is None:
                 raise Refus(404, "pipeline introuvable")
-            ids = (await s.scalars(select(Etape.id).where(Etape.pipeline_id == pipeline_id))).all()
+            ids = (
+                await s.scalars(
+                    select(Etape.id).where(
+                        Etape.pipeline_id == pipeline_id,
+                        Etape.etat.in_([Etat.EN_COURS, Etat.EN_ATTENTE]),
+                    )
+                )
+            ).all()
         # la tâche de fond s'arrête avant l'annulation : elle ne peut plus rien écrire après
         taches = [t for i in ids if (t := self.taches.get(i))]
         for t in taches:

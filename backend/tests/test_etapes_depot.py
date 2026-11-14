@@ -1,11 +1,14 @@
 import asyncio
 
+import pytest
 from asgi_lifespan import LifespanManager
 from conftest import CATALOGUE_TEST, git
 from sqlalchemy import select
 
 from portail.api import create_app
 from portail.db import Document, Etape, Message, Pipeline, Projet
+from portail.etats import Etat
+from portail.moteur import changer_etat
 
 
 def _chat(client):
@@ -202,3 +205,97 @@ async def test_redemarrage_nettoie_les_arbres(moteur, sessions, reglages, faux_l
         pass
     assert (arbres / str(attente)).exists()
     assert not (arbres / str(terminee)).exists()
+
+
+async def _annuler_en_cours(client, sessions, faux_llm, depot_origine):
+    pid = await _projet(sessions, f"file://{depot_origine}")
+    faux_llm.reponses = [asyncio.Event()]
+    r = await client.post("/api/pipelines", json={"projet_id": pid, "type": "planification"})
+    pipeline_id, eid = r.json()["id"], r.json()["etapes"][0]["id"]
+    for _ in range(200):
+        if faux_llm.appels:
+            break
+        await asyncio.sleep(0.05)
+    assert (await client.post(f"/api/pipelines/{pipeline_id}/annuler")).status_code == 200
+    return eid
+
+
+async def test_etape_annulee_ne_se_relance_pas(client, sessions, faux_llm, depot_origine):
+    eid = await _annuler_en_cours(client, sessions, faux_llm, depot_origine)
+    for route in ("reessayer", "rediger"):
+        r = await client.post(f"/api/etapes/{eid}/{route}")
+        assert (r.status_code, r.json()["detail"]) == (409, "étape annulée")
+    r = await client.post(f"/api/etapes/{eid}/messages", json={"contenu": "x"})
+    assert (r.status_code, r.json()["detail"]) == (409, "étape annulée")
+    assert (await _etape(sessions, eid)).etat == "echouee"
+
+
+@pytest.mark.parametrize("echec", [False, True])
+async def test_tache_n_ecrase_pas_une_etape_annulee(client, sessions, faux_llm, echec):
+    """Course : l'étape est annulée en base pendant que la tâche de fond tourne encore."""
+    projet = (await client.post("/api/projets", json={"nom": "P"})).json()
+    corps = {"projet_id": projet["id"], "type": "spec"}
+    eid = (await client.post("/api/pipelines", json=corps)).json()["etapes"][0]["id"]
+    signal = asyncio.Event()
+    faux_llm.morceaux = ["Bonjour", signal]
+    faux_llm.exception = RuntimeError("boum") if echec else None
+    assert (
+        await client.post(f"/api/etapes/{eid}/messages", json={"contenu": "S"})
+    ).status_code == 202
+    for _ in range(200):
+        if faux_llm.appels:
+            break
+        await asyncio.sleep(0.05)
+    async with sessions() as s:
+        e = await s.get(Etape, eid)
+        await changer_etat(s, e, Etat.ECHOUEE, "annulé")
+        await s.commit()
+    signal.set()
+    await _attendre(client, eid)
+    etape = await _etape(sessions, eid)
+    assert (etape.etat, etape.erreur) == ("echouee", "annulé")
+    async with sessions() as s:
+        roles = (await s.scalars(select(Message.role).where(Message.etape_id == eid))).all()
+    assert roles == ["user"]
+
+
+async def test_annuler_ne_touche_que_les_etapes_actives(client, sessions, monkeypatch):
+    pid = await _projet(sessions)
+    async with sessions() as s:
+        p = Pipeline(projet_id=pid, type="double")
+        p.etapes = [
+            Etape(ordre=0, agent="a", etat="terminee"),
+            Etape(ordre=1, agent="b", etat="en_attente"),
+        ]
+        s.add(p)
+        await s.flush()
+        pipeline_id, faite, active = p.id, p.etapes[0].id, p.etapes[1].id
+        await s.commit()
+    liberees = []
+
+    async def liberer(etape_id):
+        liberees.append(etape_id)
+
+    monkeypatch.setattr(_chat(client)._depots, "liberer", liberer)
+    _, file_faite = _chat(client).diffuseur.abonner(faite)
+    _, file_active = _chat(client).diffuseur.abonner(active)
+    assert (await client.post(f"/api/pipelines/{pipeline_id}/annuler")).status_code == 200
+    assert liberees == [active]
+    assert file_faite.empty()
+    assert file_active.get_nowait() == {"type": "erreur", "message": "annulé"}
+
+
+async def test_limite_d_appels_signalee(client, sessions, faux_llm, depot_origine, monkeypatch):
+    plan = CATALOGUE_TEST.agents["plan"]
+    monkeypatch.setitem(CATALOGUE_TEST.agents, "plan", plan.model_copy(update={"tours_max": 1}))
+    pid = await _projet(sessions, f"file://{depot_origine}")
+    faux_llm.reponses = [_outil("1", "lire", '{"chemin": "README.md"}'), {"content": "# Plan"}]
+    _, eid = await _planifier(client, pid)
+    async with sessions() as s:
+        systemes = (
+            await s.scalars(
+                select(Message.contenu).where(Message.etape_id == eid, Message.role == "system")
+            )
+        ).all()
+    assert systemes == ["limite de 1 appels d'outils atteinte : la réponse peut être incomplète"]
+    assert (await _etape(sessions, eid)).etat == "en_attente"

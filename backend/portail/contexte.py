@@ -20,8 +20,7 @@ def construire(
         sortie.append(
             {
                 "role": "system",
-                "content": "Brouillon courant de la spec (corrections de Nicolas incluses) :\n\n"
-                + document.contenu,
+                "content": "Brouillon courant :\n\n" + document.contenu,
             }
         )
         if document.dernier_message_id is not None:
