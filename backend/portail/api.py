@@ -20,6 +20,7 @@ from portail.db import Document, Etape, Pipeline, Projet, creer_moteur, fabrique
 from portail.llm import ClientLLM
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues
 from portail.schemas import (
+    DEPOT_RE,
     DocumentOut,
     EtapeOut,
     PipelineDetail,
@@ -28,6 +29,7 @@ from portail.schemas import (
     ProjetDetail,
     ProjetIn,
     ProjetOut,
+    ProjetPatch,
     ProjetRef,
     SpecCourante,
 )
@@ -80,6 +82,11 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
         maj_le=pipeline.maj_le,
         etapes=etapes,
     )
+
+
+def _verifier_depot(url: str | None) -> None:
+    if url is not None and not DEPOT_RE.match(url):
+        raise Refus(422, "URL de dépôt GitHub invalide")
 
 
 def _resume(p: Pipeline, nom: str) -> PipelineResume:
@@ -153,8 +160,21 @@ def create_app(
 
     @app.post("/api/projets", status_code=201, response_model=ProjetOut)
     async def creer_projet(corps: ProjetIn, s: Session):
-        projet = Projet(nom=corps.nom, description=corps.description)
+        _verifier_depot(corps.depot_url)
+        projet = Projet(**corps.model_dump())
         s.add(projet)
+        await s.commit()
+        await s.refresh(projet)
+        return projet
+
+    @app.patch("/api/projets/{projet_id}", response_model=ProjetOut)
+    async def modifier_projet(projet_id: int, corps: ProjetPatch, s: Session):
+        projet = await s.get(Projet, projet_id)
+        if projet is None:
+            raise Refus(404, "projet introuvable")
+        _verifier_depot(corps.depot_url)
+        for champ in corps.model_fields_set:
+            setattr(projet, champ, getattr(corps, champ))
         await s.commit()
         await s.refresh(projet)
         return projet

@@ -12,3 +12,5 @@ class Reglages(BaseSettings):
     agents_fichier: Path = Path("agents.yaml")
     exiger_utilisateur: bool = False
     static_dir: Path | None = None
+    github_jeton: str = ""
+    donnees_dir: Path = Path("/donnees")
