@@ -219,6 +219,7 @@ export interface ConversationDetail {
   erreur: string | null
   messages: Message[]
   jauge: Jauge | null
+  actions: ActionConversation[]
 }
 export const listerConversations = () => appel<ConversationResume[]>('GET', '/conversations')
 export const creerConversation = () => appel<ConversationDetail>('POST', '/conversations')
@@ -229,3 +230,15 @@ export const supprimerConversation = (id: number) => appel<void>('DELETE', `/con
 export const envoyerMessageConversation = (id: number, contenu: string) =>
   appel<object>('POST', `/conversations/${id}/messages`, { contenu })
 export const reessayerConversation = (id: number) => appel<object>('POST', `/conversations/${id}/reessayer`)
+
+export interface ActionConversation {
+  id: number
+  nom: string
+  parametres: Record<string, unknown>
+  etat: 'proposee' | 'confirmee' | 'refusee' | 'echouee' | 'perimee'
+  resultat: string | null
+  lien: string | null
+  cree_le: string
+}
+export const confirmerAction = (id: number) => appel<object>('POST', `/actions/${id}/confirmer`)
+export const refuserAction = (id: number) => appel<object>('POST', `/actions/${id}/refuser`)

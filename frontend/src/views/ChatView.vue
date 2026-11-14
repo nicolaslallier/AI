@@ -2,12 +2,13 @@
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  creerConversation, envoyerMessageConversation, lireConversation, listerConversations, reessayerConversation,
+  confirmerAction, creerConversation, envoyerMessageConversation, lireConversation, listerConversations, refuserAction, reessayerConversation,
   supprimerConversation, type ConversationDetail, type ConversationResume,
 } from '../api'
-import { trier } from '../conversations'
+import { fil, trier } from '../conversations'
 import { ecouterFlux } from '../flux'
 import { rendreMarkdown } from '../markdown'
+import CarteAction from '../components/CarteAction.vue'
 import JaugeContexte from '../components/JaugeContexte.vue'
 
 const props = defineProps<{ id?: string }>()
@@ -37,10 +38,12 @@ async function rafraichirListe() {
   }
 }
 
-async function charger() {
+async function charger(ecouter = true) {
   desabonner()
-  conv.value = null
-  if (!props.id) return
+  if (!props.id) {
+    conv.value = null
+    return
+  }
   const id = Number(props.id)
   try {
     const c = await lireConversation(id)
@@ -50,7 +53,7 @@ async function charger() {
     if (!demonte) message.value = (e as Error).message
     return
   }
-  if (conv.value.etat === 'en_cours') abonner(id)
+  if (ecouter && conv.value.etat === 'en_cours') abonner(id)
 }
 
 function abonner(id: number) {
@@ -58,7 +61,7 @@ function abonner(id: number) {
   const fini = () => {
     desabonner()
     if (demonte || String(id) !== props.id) return
-    charger()
+    charger(false)
     rafraichirListe()
   }
   arret = ecouterFlux(`/api/conversations/${id}/flux`, {
@@ -122,7 +125,19 @@ async function supprimer() {
   }
 }
 
-watch(() => props.id, charger, { immediate: true })
+async function trancher(f: (id: number) => Promise<unknown>, id: number) {
+  if (await action(() => f(id))) await charger()
+}
+
+watch(
+  () => props.id,
+  () => {
+    message.value = ''
+    conv.value = null
+    charger()
+  },
+  { immediate: true },
+)
 rafraichirListe()
 onBeforeUnmount(() => {
   demonte = true
@@ -153,16 +168,24 @@ onBeforeUnmount(() => {
         </div>
         <JaugeContexte v-if="conv.jauge" :jauge="conv.jauge" />
         <div class="messages">
+          <template v-for="e in fil(conv.messages, conv.actions)" :key="`${e.type}${(e.type === 'message' ? e.message : e.action).id}`">
+          <CarteAction
+            v-if="e.type === 'action'"
+            :action="e.action"
+            :occupe="conv.etat === 'en_cours'"
+            @confirmer="trancher(confirmerAction, e.action.id)"
+            @refuser="trancher(refuserAction, e.action.id)"
+          />
           <div
-            v-for="m in conv.messages"
-            :key="m.id"
-            :class="['bulle', m.role === 'user' ? 'moi' : 'agent', { systeme: m.role === 'system' }]"
+            v-else
+            :class="['bulle', e.message.role === 'user' ? 'moi' : 'agent', { systeme: e.message.role === 'system' }]"
           >
-            <details v-if="m.role === 'tool'"><summary>🔎 {{ m.outil }}</summary><pre>{{ m.contenu }}</pre></details>
-            <em v-else-if="m.role === 'system'">{{ m.contenu }}</em>
-            <template v-else-if="m.role === 'user'">{{ m.contenu }}</template>
-            <div v-else class="markdown" v-html="rendreMarkdown(m.contenu)"></div>
+            <details v-if="e.message.role === 'tool'"><summary>🔎 {{ e.message.outil }}</summary><pre>{{ e.message.contenu }}</pre></details>
+            <em v-else-if="e.message.role === 'system'">{{ e.message.contenu }}</em>
+            <template v-else-if="e.message.role === 'user'">{{ e.message.contenu }}</template>
+            <div v-else class="markdown" v-html="rendreMarkdown(e.message.contenu)"></div>
           </div>
+          </template>
           <div v-if="conv.etat === 'en_cours'" class="bulle agent">
             <div v-if="partiel" class="markdown" v-html="rendreMarkdown(partiel)"></div>
             <em v-else class="discret">L'agent réfléchit…</em>
