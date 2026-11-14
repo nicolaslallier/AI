@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { creerPipeline, lireProjet, modifierProjet, type ProjetDetail } from '../api'
 import { rendreMarkdown } from '../markdown'
+import ConfigExecution from '../components/ConfigExecution.vue'
 import EtatBadge from '../components/EtatBadge.vue'
 
 const props = defineProps<{ id: string }>()
@@ -69,6 +70,8 @@ onMounted(charger)
       <button>Enregistrer le dépôt</button>
     </form>
     <button :disabled="!projet.spec_courante || enCours" @click="planifier">Lancer la planification</button>
+    <h2>Exécution</h2>
+    <ConfigExecution :projet-id="projet.id" :config="projet.config_execution" @enregistre="charger" />
     <h2>Pipelines</h2>
     <p v-if="!projet.pipelines.length">Aucun pipeline.</p>
     <ul>

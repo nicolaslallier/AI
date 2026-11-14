@@ -5,6 +5,7 @@ import {
   type PipelineDetail, type Proposition,
 } from '../api'
 import { ecouterFlux } from '../flux'
+import { duree, lienPrSur, numeroPr } from '../dev'
 import EtatBadge from '../components/EtatBadge.vue'
 import ChatEtape from '../components/ChatEtape.vue'
 import EditeurDocument from '../components/EditeurDocument.vue'
@@ -102,11 +103,28 @@ onBeforeUnmount(() => {
       Annuler le pipeline
     </button>
     <p>Projet : <RouterLink :to="`/projets/${pipeline.projet.id}`">{{ pipeline.projet.nom }}</RouterLink></p>
+    <p v-if="pipeline.type === 'dev' && pipeline.execution" class="bandeau">
+      Branche <code>{{ pipeline.execution.branche }}</code> · phase {{ pipeline.execution.phase }} ·
+      renvois {{ pipeline.execution.renvois }}
+      <template v-if="lienPrSur(pipeline.execution.pr_url)">
+        ·
+        <a :href="pipeline.execution.pr_url" target="_blank" rel="noopener noreferrer">{{
+          numeroPr(pipeline.execution.pr_url)
+        }}</a>
+      </template>
+    </p>
     <div v-for="e in pipeline.etapes" :key="e.id">
       <h2>
         {{ e.agent }} <EtatBadge :etat="e.etat" />
         <small v-if="e.sha">SHA {{ e.sha.slice(0, 7) }}</small>
       </h2>
+      <details v-for="(c, i) in pipeline.commandes.filter((x) => x.etape_id === e.id)" :key="i">
+        <summary>
+          {{ c.nom }} · code {{ c.code ?? '—' }}<template v-if="c.delai_depasse"> · délai dépassé</template> ·
+          {{ duree(c.debut, c.fin) }}
+        </summary>
+        <pre>{{ c.sortie }}</pre>
+      </details>
       <template v-if="e.etat !== 'a_faire'">
         <EditeurDocument
           v-if="e.document"

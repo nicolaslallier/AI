@@ -18,7 +18,9 @@ from portail.chat import Diffuseur, ServiceChat, annexes
 from portail.config import Reglages
 from portail.contexte import construire, jauge
 from portail.db import (
+    CommandeLancee,
     Etape,
+    ExecutionDev,
     Pipeline,
     Projet,
     Proposition,
@@ -40,12 +42,14 @@ from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.schemas import (
     DEPOT_RE,
     Acceptation,
+    CommandeVue,
     Deplacement,
     DocumentOut,
     DonneesTache,
     DonneesTachePartielles,
     EtapeOut,
     ExecutionIn,
+    ExecutionVue,
     Kanban,
     KanbanToutAccepte,
     PipelineDetail,
@@ -114,7 +118,17 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
                 from_attributes=True,
             )
         )
+    ex = await session.scalar(select(ExecutionDev).where(ExecutionDev.pipeline_id == pipeline_id))
+    commandes = (
+        await session.scalars(
+            select(CommandeLancee)
+            .where(CommandeLancee.pipeline_id == pipeline_id)
+            .order_by(CommandeLancee.id)
+        )
+    ).all()
     return PipelineDetail(
+        execution=ExecutionVue.model_validate(ex, from_attributes=True) if ex else None,
+        commandes=[CommandeVue.model_validate(c, from_attributes=True) for c in commandes],
         id=pipeline.id,
         projet=ProjetRef(id=projet.id, nom=projet.nom),
         type=pipeline.type,
@@ -144,9 +158,19 @@ async def _vues(session: AsyncSession, taches: list[Tache]) -> list[TacheVue]:
             )
         ).all()
     )
+    prs: dict[int, str | None] = {}  # la plus récente exécution de chaque tâche gagne
+    for tid, url in (
+        await session.execute(
+            select(ExecutionDev.tache_id, ExecutionDev.pr_url)
+            .where(ExecutionDev.tache_id.in_(ids))
+            .order_by(ExecutionDev.n, ExecutionDev.id)
+        )
+    ).all():
+        prs[tid] = url
     return [
         TacheVue.model_validate(t, from_attributes=True).model_copy(
             update={
+                "pr_url": prs.get(t.id),
                 "depend_de": deps.get(t.id, []),
                 "dependances_non_terminees": [
                     d for d in deps.get(t.id, []) if colonnes[d] != "terminee"
@@ -173,7 +197,9 @@ async def _kanban(session: AsyncSession, projet_id: int) -> Kanban:
             .order_by(Proposition.id)
         )
     ).all()
+    config = await session.scalar(select(Projet.config_execution).where(Projet.id == projet_id))
     return Kanban(
+        config_execution=bool(config),
         taches=await _vues(session, list(taches)),
         propositions=[PropositionVue.model_validate(p, from_attributes=True) for p in props],
     )

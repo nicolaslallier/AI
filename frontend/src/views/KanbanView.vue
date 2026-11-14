@@ -11,7 +11,7 @@ import PanneauPropositions from '../components/PanneauPropositions.vue'
 
 const props = defineProps<{ id: string }>()
 const projetId = Number(props.id)
-const kanban = ref<Kanban>({ taches: [], propositions: [] })
+const kanban = ref<Kanban>({ config_execution: true, taches: [], propositions: [] })
 const texte = ref('')
 const erreur = ref('')
 const perimees = ref<number | null>(null)
@@ -99,6 +99,7 @@ onBeforeUnmount(() => clearInterval(minuteur))
   <h1>Kanban</h1>
   <p><RouterLink :to="`/projets/${projetId}`">← Projet</RouterLink></p>
   <p v-if="erreur" class="erreur">{{ erreur }}</p>
+  <p v-if="!kanban.config_execution">Sans config d'exécution, aucune tâche Prête ne démarre.</p>
   <div class="barre">
     <input v-model="texte" placeholder="Filtrer…" aria-label="Filtrer les tâches" />
     <button @click="((erreurModale = ''), (edition = {}))">Nouvelle tâche</button>

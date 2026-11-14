@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Tache } from '../api'
 import { COLONNES } from '../kanban'
+import { lienPrSur, numeroPr } from '../dev'
 
 const props = defineProps<{ tache: Tache }>()
 const emit = defineEmits<{
@@ -30,6 +31,13 @@ function choisir(e: Event) {
       <span v-if="tache.verrou !== null" class="badge">🔒 verrouillée (pipeline {{ tache.verrou }})</span>
       <span v-if="tache.protegee" class="badge">✋ protégée</span>
     </div>
+    <div v-if="lienPrSur(tache.pr_url)">
+      <a :href="tache.pr_url" target="_blank" rel="noopener noreferrer">{{ numeroPr(tache.pr_url) }}</a>
+    </div>
+    <details v-if="tache.colonne === 'bloquee' && tache.resume_blocage">
+      <summary>Pourquoi bloquée ?</summary>
+      <pre>{{ tache.resume_blocage }}</pre>
+    </details>
     <div v-for="d in tache.dependances_non_terminees" :key="d" class="dep">⚠ dépend de #{{ d }} non terminée</div>
     <div class="actions">
       <template v-if="tache.verrou !== null">
@@ -52,6 +60,7 @@ function choisir(e: Event) {
 .carte { background: #fff; border: 1px solid #d1d5db; border-radius: 0.4rem; padding: 0.4rem; margin-bottom: 0.4rem; }
 .carte[draggable='true'] { cursor: grab; }
 .badge { font-size: 0.8em; background: #f3f4f6; border-radius: 0.5rem; padding: 0 0.4rem; margin-right: 0.25rem; }
+pre { white-space: pre-wrap; font-size: 0.8em; margin: 0.2rem 0; }
 .dep { color: #b45309; font-size: 0.85em; }
 .actions { margin-top: 0.3rem; display: flex; gap: 0.3rem; }
 </style>
