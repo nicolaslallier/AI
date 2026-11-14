@@ -13,6 +13,7 @@ from portail.etats import Etat
 from portail.moteur import Refus, terminer_etape
 from portail.schemas import DonneesTache, DonneesTachePartielles, _titre_valide
 from portail.taches import (
+    CHAMPS,
     _dependances,
     creer_tache,
     definir_dependances,
@@ -40,8 +41,12 @@ class Nouvelle(_Contenu):
 
 
 class Modification(_Contenu):
+    """Partielle : seuls les champs donnés par l'agent sont stockés et appliqués."""
+
     sorte: Literal["modification"]
     tache_id: int
+    titre: str = ""
+    raison: str = ""
 
 
 class Retrait(BaseModel):
@@ -147,7 +152,9 @@ async def enregistrer_propositions(
                 cle=getattr(p, "cle", None),
                 tache_id=getattr(p, "tache_id", None),
                 version_tache=version,
-                donnees=p.model_dump(exclude={"sorte", "cle", "tache_id"}),
+                donnees=p.model_dump(
+                    exclude={"sorte", "cle", "tache_id"}, exclude_unset=isinstance(p, Modification)
+                ),
                 etat="ouverte",
             )
         )
@@ -207,19 +214,18 @@ async def accepter(
         await session.flush()
         return
     deps = await _resoudre(session, proposition, acceptees)
-    base = donnees_modifiees or DonneesTache(
-        titre=d.get("titre", ""),
-        description=d.get("description", ""),
-        criteres=d.get("criteres", []),
-        fichiers=d.get("fichiers", []),
-    )
-    deps = sorted(set(deps) | set(base.depend_de))
     if proposition.sorte == "nouvelle":
+        base = donnees_modifiees or DonneesTache(
+            titre=d.get("titre", ""),
+            description=d.get("description", ""),
+            criteres=d.get("criteres", []),
+            fichiers=d.get("fichiers", []),
+        )
         plan = await plan_du_pipeline(session, proposition.pipeline_id)
         tache = await creer_tache(
             session,
             proposition.projet_id,
-            base.model_copy(update={"depend_de": deps}),
+            base.model_copy(update={"depend_de": sorted(set(deps) | set(base.depend_de))}),
             auteur,
             origine="agent",
             document_id=plan.id if plan else None,
@@ -236,11 +242,14 @@ async def accepter(
                     actuelles = await _dependances(session, cible.id)
                     await definir_dependances(session, cible, actuelles + [tache.id])
     else:
-        partielles = DonneesTachePartielles(
-            **base.model_dump(include={"titre", "description", "criteres", "fichiers"}),
-            depend_de=deps,
-        )
-        await modifier_tache(session, tache, partielles, auteur)
+        if donnees_modifiees:  # la modale envoie tous les champs
+            valeurs = donnees_modifiees.model_dump(include={*CHAMPS})
+            valeurs["depend_de"] = sorted(set(deps) | set(donnees_modifiees.depend_de))
+        else:  # seulement les champs donnés par l'agent
+            valeurs = {c: d[c] for c in CHAMPS if c in d}
+            if "depend_de" in d:
+                valeurs["depend_de"] = deps
+        await modifier_tache(session, tache, DonneesTachePartielles(**valeurs), auteur)
     proposition.etat = "acceptee"
     await session.flush()
 

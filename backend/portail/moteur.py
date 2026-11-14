@@ -103,13 +103,19 @@ async def terminer_etape(session: AsyncSession, catalogue: Catalogue, etape: Eta
 
 
 async def annuler_pipeline(session: AsyncSession, pipeline: Pipeline) -> None:
-    if pipeline.etat in (Etat.TERMINEE, Etat.ECHOUEE):
+    """Annule l'étape active, ou l'étape échouée d'un pipeline échoué : il est clos pour de bon."""
+    if pipeline.etat == Etat.TERMINEE:
         raise Refus(409, "pipeline déjà terminé")
+    etapes = [Etat.EN_COURS, Etat.EN_ATTENTE, Etat.ECHOUEE]
     etape = await session.scalar(
         select(Etape).where(
-            Etape.pipeline_id == pipeline.id, Etape.etat.in_([Etat.EN_COURS, Etat.EN_ATTENTE])
+            Etape.pipeline_id == pipeline.id,
+            Etape.etat.in_(etapes),
+            Etape.erreur.is_distinct_from("annulé"),
         )
     )
+    if etape is None and pipeline.etat == Etat.ECHOUEE:
+        raise Refus(409, "pipeline déjà annulé")
     if etape:
         await changer_etat(session, etape, Etat.ECHOUEE, "annulé")
     await session.execute(

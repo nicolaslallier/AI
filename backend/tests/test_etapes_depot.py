@@ -299,3 +299,45 @@ async def test_limite_d_appels_signalee(client, sessions, faux_llm, depot_origin
         ).all()
     assert systemes == ["limite de 1 appels d'outils atteinte : la réponse peut être incomplète"]
     assert (await _etape(sessions, eid)).etat == "en_attente"
+
+
+async def test_reessayer_refuse_si_une_autre_planification_est_active(client, sessions, faux_llm):
+    pid = await _projet(sessions)
+    faux_llm.exception = RuntimeError("boum")
+    p1, e1 = await _planifier(client, pid)
+    assert (await _etape(sessions, e1)).etat == "echouee"
+    faux_llm.exception, faux_llm.morceaux = None, ["# Plan"]
+    p2, _ = await _planifier(client, pid)
+    r = await client.post(f"/api/etapes/{e1}/reessayer")
+    assert (r.status_code, r.json()["detail"]) == (
+        409,
+        "une autre planification est active pour ce projet",
+    )
+    assert (await _etape(sessions, e1)).etat == "echouee"
+    assert (await client.post(f"/api/pipelines/{p2}/annuler")).status_code == 200
+    assert (await client.post(f"/api/etapes/{e1}/reessayer")).status_code == 202
+    await _attendre(client, e1)
+    assert (await _etape(sessions, e1)).etat == "en_attente"
+    assert p1 != p2
+
+
+async def test_annuler_clot_un_pipeline_echoue(client, sessions, faux_llm):
+    pid = await _projet(sessions)
+    faux_llm.exception = RuntimeError("boum")
+    pipeline_id, eid = await _planifier(client, pid)
+    r = await client.post(f"/api/pipelines/{pipeline_id}/annuler")
+    assert r.status_code == 200, r.text
+    assert (r.json()["etat"], r.json()["etapes"][0]["erreur"]) == ("echouee", "annulé")
+    r = await client.post(f"/api/etapes/{eid}/reessayer")
+    assert (r.status_code, r.json()["detail"]) == (409, "étape annulée")
+    r = await client.post(f"/api/pipelines/{pipeline_id}/annuler")
+    assert (r.status_code, r.json()["detail"]) == (409, "pipeline déjà annulé")
+
+
+async def test_corriger_refuse_une_etape_annulee(client, sessions, faux_llm):
+    pid = await _projet(sessions)
+    faux_llm.morceaux = ["# Plan"]
+    pipeline_id, eid = await _planifier(client, pid)
+    assert (await client.post(f"/api/pipelines/{pipeline_id}/annuler")).status_code == 200
+    r = await client.put(f"/api/etapes/{eid}/document", json={"contenu": "x"})
+    assert (r.status_code, r.json()["detail"]) == (409, "étape annulée")

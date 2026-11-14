@@ -134,7 +134,15 @@ class ServiceChat:
         self.taches: dict[int, asyncio.Task] = {}
 
     async def _etape(self, s: AsyncSession, etape_id: int) -> Etape:
-        # verrou de ligne : deux envois simultanés ne passent pas tous les deux
+        # ordre des verrous : projet d'abord, puis l'étape (deux envois simultanés se sérialisent)
+        projet_id = await s.scalar(
+            select(Pipeline.projet_id)
+            .join(Etape, Etape.pipeline_id == Pipeline.id)
+            .where(Etape.id == etape_id)
+        )
+        if projet_id is None:
+            raise Refus(404, "étape introuvable")
+        await s.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
         etape = await s.scalar(select(Etape).where(Etape.id == etape_id).with_for_update())
         if etape is None:
             raise Refus(404, "étape introuvable")
@@ -222,6 +230,20 @@ class ServiceChat:
             etape = await self._etape_relancable(s, etape_id)
             if etape.etat != Etat.ECHOUEE:
                 raise Refus(409, "seule une étape échouée peut être relancée")
+            pipeline = await s.get(Pipeline, etape.pipeline_id)
+            if pipeline.type == "planification":  # une seule planification active par projet
+                autre = await s.scalar(
+                    select(Pipeline.id)
+                    .where(
+                        Pipeline.projet_id == pipeline.projet_id,
+                        Pipeline.type == "planification",
+                        Pipeline.id != pipeline.id,
+                        Pipeline.etat.not_in([Etat.TERMINEE, Etat.ECHOUEE]),
+                    )
+                    .limit(1)
+                )
+                if autre is not None:
+                    raise Refus(409, "une autre planification est active pour ce projet")
             await changer_etat(s, etape, Etat.EN_COURS)
             await s.commit()
         self.lancer(etape_id)
@@ -354,9 +376,7 @@ class ServiceChat:
             else:
                 visible, limite = await self._boucle(etape_id, agent, demande, arbre)
             async with self._sessions() as s:
-                # ordre des verrous : projet d'abord, comme pour les tâches et les propositions
-                await s.scalar(select(Projet.id).where(Projet.id == projet.id).with_for_update())
-                etape = await self._etape(s, etape_id)
+                etape = await self._etape(s, etape_id)  # projet verrouillé d'abord
                 if etape.etat != Etat.EN_COURS:  # annulée entre-temps : on n'écrase rien
                     return
                 if action == "taches":
@@ -425,7 +445,7 @@ class ServiceChat:
         if not contenu.strip():
             raise Refus(422, "le document est vide")
         async with self._sessions() as s:
-            etape = await self._etape(s, etape_id)
+            etape = await self._etape_relancable(s, etape_id)
             doc = await s.scalar(select(Document).where(Document.etape_id == etape_id))
             if doc is None:
                 raise Refus(409, "aucun brouillon à corriger")

@@ -9,9 +9,14 @@ const emit = defineEmits<{
   toutAccepter: [number]
 }>()
 
-const CHAMPS = ['titre', 'description', 'criteres', 'fichiers'] as const
+const CHAMPS = ['titre', 'description', 'criteres', 'fichiers', 'depend_de'] as const
 const texte = (v: unknown) => (Array.isArray(v) ? v.join('\n') : String(v ?? ''))
 const cible = (p: Proposition) => props.taches.find((t) => t.id === p.tache_id)
+// une modification est partielle : seuls les champs présents changent
+const avant = (p: Proposition, c: (typeof CHAMPS)[number]) => {
+  const t = cible(p)
+  return c === 'depend_de' ? t?.depend_de.map((i) => `T${i}`) : t?.[c]
+}
 const etapes = () => [...new Set(props.propositions.map((p) => p.etape_id))]
 </script>
 
@@ -32,12 +37,13 @@ const etapes = () => [...new Set(props.propositions.map((p) => p.etape_id))]
       <template v-else-if="p.sorte === 'modification'">
         <strong>Modification de #{{ p.tache_id }}</strong>
         <template v-for="c in CHAMPS" :key="c">
-          <div v-if="cible(p) && texte(cible(p)![c]) !== texte(p.donnees[c])" class="avant-apres">
+          <div v-if="cible(p) && c in p.donnees && texte(avant(p, c)) !== texte(p.donnees[c])" class="avant-apres">
             <em>{{ c }}</em>
-            <del>{{ texte(cible(p)![c]) }}</del>
+            <del>{{ texte(avant(p, c)) }}</del>
             <ins>{{ texte(p.donnees[c]) }}</ins>
           </div>
         </template>
+        <p v-if="p.donnees.raison">Raison : {{ p.donnees.raison }}</p>
       </template>
       <template v-else>
         <strong>Retrait de #{{ p.tache_id }}{{ cible(p) ? ` (${cible(p)!.titre})` : '' }}</strong>

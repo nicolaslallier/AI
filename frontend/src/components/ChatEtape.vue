@@ -34,6 +34,10 @@ function surEntree(e: KeyboardEvent) {
       {{ propositions ?? 0 }} propositions à traiter
       <RouterLink :to="`/projets/${projetId}/kanban`">Ouvrir le kanban</RouterLink>
     </p>
+    <p v-if="etape.etat === 'echouee'" class="erreur">
+      {{ etape.erreur }} <button v-if="etape.erreur !== 'annulé'" @click="emit('reessayer')">Réessayer</button>
+    </p>
+    <p v-if="message" class="erreur">{{ message }}</p>
   </section>
   <section v-else>
     <JaugeContexte v-if="etape.jauge" :jauge="etape.jauge" />
@@ -51,7 +55,7 @@ function surEntree(e: KeyboardEvent) {
       </div>
     </div>
     <p v-if="etape.etat === 'echouee'" class="erreur">
-      {{ etape.erreur }} <button @click="emit('reessayer')">Réessayer</button>
+      {{ etape.erreur }} <button v-if="etape.erreur !== 'annulé'" @click="emit('reessayer')">Réessayer</button>
     </p>
     <p v-if="message" class="erreur">{{ message }}</p>
     <textarea
@@ -61,7 +65,9 @@ function surEntree(e: KeyboardEvent) {
       :disabled="etape.etat !== 'en_attente' || etape.jauge?.niveau === 'plein'"
       @keydown.enter.exact="surEntree"
     ></textarea>
-    <button :disabled="etape.etat !== 'en_attente'" @click="emit('rediger')">Rédiger la spec</button>
+    <button :disabled="etape.etat !== 'en_attente'" @click="emit('rediger')">
+      Rédiger {{ etape.produit === 'plan' ? 'le plan' : 'la spec' }}
+    </button>
   </section>
 </template>
 

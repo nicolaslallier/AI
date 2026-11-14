@@ -78,11 +78,12 @@ async function supprimer() {
     erreurModale.value = (e as Error).message
   }
 }
+// une modification est partielle : les champs absents gardent la valeur de la tâche
 const initiale = (p: Proposition) => ({
-  titre: String(p.donnees.titre ?? ''),
-  description: String(p.donnees.description ?? ''),
-  criteres: (p.donnees.criteres as string[]) ?? [],
-  fichiers: (p.donnees.fichiers as string[]) ?? [],
+  titre: String(p.donnees.titre ?? cibleDe(p)?.titre ?? ''),
+  description: String(p.donnees.description ?? cibleDe(p)?.description ?? ''),
+  criteres: (p.donnees.criteres as string[]) ?? cibleDe(p)?.criteres ?? [],
+  fichiers: (p.donnees.fichiers as string[]) ?? cibleDe(p)?.fichiers ?? [],
   depend_de: p.tache_id ? (cibleDe(p)?.depend_de ?? []) : [],
 })
 const cibleDe = (p: Proposition) => kanban.value.taches.find((t) => t.id === p.tache_id)

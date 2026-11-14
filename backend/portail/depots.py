@@ -86,7 +86,12 @@ class Depots:
         if sha is not None and not _SHA.fullmatch(sha):
             raise ErreurDepot("SHA invalide")
         clone = self.racine / "depots" / f"{projet_id}.git"
+        marque = clone / "portail-url"  # URL du clone : une autre URL du projet → nouveau clone
         async with self._verrous.setdefault(projet_id, asyncio.Lock()):
+            if clone.exists() and (not marque.exists() or marque.read_text() != depot_url):
+                # ponytail: les arbres encore ouverts sur l'ancien clone deviennent inutilisables
+                # (l'étape échoue et se relance) ; garder un clone par URL si ça gêne
+                shutil.rmtree(clone, ignore_errors=True)
             if not clone.exists():
                 clone.parent.mkdir(parents=True, exist_ok=True)
                 try:
@@ -96,6 +101,7 @@ class Depots:
                 except BaseException:
                     shutil.rmtree(clone, ignore_errors=True)
                     raise
+                marque.write_text(depot_url)
             await self._git(
                 "fetch", "origin", "+refs/heads/*:refs/heads/*", "--prune",
                 cwd=clone, delai=120, distant=True,

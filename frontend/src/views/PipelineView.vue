@@ -95,7 +95,10 @@ onBeforeUnmount(() => {
 <template>
   <template v-if="pipeline">
     <h1>{{ pipeline.type }} n°{{ pipeline.id }} <EtatBadge :etat="pipeline.etat" /></h1>
-    <button v-if="pipeline.etat !== 'terminee' && pipeline.etat !== 'echouee'" @click="annuler">
+    <button
+      v-if="pipeline.etat !== 'terminee' && !pipeline.etapes.some((e) => e.erreur === 'annulé')"
+      @click="annuler"
+    >
       Annuler le pipeline
     </button>
     <p>Projet : <RouterLink :to="`/projets/${pipeline.projet.id}`">{{ pipeline.projet.nom }}</RouterLink></p>

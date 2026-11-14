@@ -212,3 +212,17 @@ async def test_patch_null_refuse(client):
     t = await _tache(client, pid)
     r = await client.patch(f"/api/taches/{t['id']}", json={"criteres": None})
     assert r.status_code == 422
+
+
+async def test_patch_sans_changement_ne_protege_pas(client, sessions):
+    pid = await _projet(client)
+    tid = await _agent(sessions, pid)
+    r = await client.patch(
+        f"/api/taches/{tid}",
+        json={"titre": "A", "description": "", "criteres": [], "depend_de": []},
+    )
+    assert r.status_code == 200
+    assert (r.json()["protegee"], r.json()["version"]) == (False, 1)
+    async with sessions() as s:
+        types = (await s.scalars(select(TacheEvenement.type))).all()
+    assert types == ["creation"]

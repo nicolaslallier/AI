@@ -90,12 +90,20 @@ async def modifier_tache(
 ) -> Tache:
     await _verrouiller_tache(session, tache)
     verifier_modifiable(tache)
-    change = {c: getattr(donnees, c) for c in donnees.model_fields_set if c in CHAMPS}
+    change = {
+        c: v
+        for c in donnees.model_fields_set
+        if c in CHAMPS and (v := getattr(donnees, c)) != getattr(tache, c)
+    }
     for c, v in change.items():
         setattr(tache, c, v)
-    if donnees.depend_de is not None:
+    if donnees.depend_de is not None and sorted(set(donnees.depend_de)) != await _dependances(
+        session, tache.id
+    ):
         await definir_dependances(session, tache, donnees.depend_de)
         change["depend_de"] = donnees.depend_de
+    if not change:  # rien ne change : ni version, ni protection, ni journal
+        return tache
     tache.version += 1
     if auteur == "nicolas":
         tache.protegee = True

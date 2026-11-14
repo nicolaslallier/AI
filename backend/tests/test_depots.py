@@ -164,3 +164,14 @@ async def test_clone_interrompu_est_nettoye(depots, tmp_path, monkeypatch):
     with pytest.raises(ErreurDepot):
         await depots.preparer(1, "file:///x", "main", 10, None)
     assert not (tmp_path / "donnees" / "depots" / "1.git").exists()
+
+
+async def test_nouvelle_url_lit_le_nouveau_depot(origine, depots, tmp_path):
+    await depots.preparer(1, url(origine), None, 10, None)
+    autre = tmp_path / "autre"
+    autre.mkdir()
+    git(autre, "init", "-b", "trunk")
+    nouveau = commit(autre, "z.txt", "autre dépôt")
+    arbre, sha = await depots.preparer(1, url(autre), None, 11, None)
+    assert sha == nouveau
+    assert (arbre / "z.txt").exists() and not (arbre / "a.txt").exists()

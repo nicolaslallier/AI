@@ -314,3 +314,36 @@ async def test_etape_de_propositions_refuse_le_chat(client, sessions, faux_llm):
     ):
         assert r.status_code == 409
         assert r.json()["detail"] == "étape de propositions : utiliser le kanban"
+
+
+async def test_modification_partielle_garde_le_reste(client, sessions, faux_llm):
+    pid = await _projet(sessions)
+    t1 = await _tache_agent(sessions, pid, "Base")
+    async with sessions() as s:
+        donnees = DonneesTache(titre="Suite", criteres=["c"], depend_de=[t1])
+        t2 = (
+            await creer_tache(s, pid, donnees, "agent:taches", origine="agent", protegee=False)
+        ).id
+        await s.commit()
+    modif = {"sorte": "modification", "tache_id": t2, "description": "Plus clair", "raison": "r"}
+    _, _, eid = await _lancer(client, sessions, faux_llm, _json(modif), pid=pid)
+    (p,) = await _propositions(sessions, eid)
+    assert p.donnees == {"description": "Plus clair", "raison": "r"}
+    assert (await client.post(f"/api/propositions/{p.id}/accepter")).status_code == 200
+    kanban = (await client.get(f"/api/projets/{pid}/kanban")).json()
+    t = next(x for x in kanban["taches"] if x["id"] == t2)
+    assert (t["titre"], t["description"], t["criteres"], t["depend_de"]) == (
+        "Suite",
+        "Plus clair",
+        ["c"],
+        [t1],
+    )
+
+
+def test_modification_sans_titre_valide():
+    (m,) = lire_propositions(_json({"sorte": "modification", "tache_id": 1, "criteres": []}), {1})
+    assert m.model_dump(exclude_unset=True) == {
+        "sorte": "modification",
+        "tache_id": 1,
+        "criteres": [],
+    }

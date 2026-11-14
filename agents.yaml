@@ -50,8 +50,8 @@ agents:
       - nouvelle : "cle" (identifiant court unique dans la réponse), "titre", "description",
         "criteres" (liste de critères d'acceptation), "fichiers" (liste de chemins),
         "depend_de" (liste de clés de cette réponse ou d'identifiants "T<id>" de tâches existantes).
-      - modification : "tache_id" (tâche existante), les champs à changer parmi les précédents,
-        et "raison".
+      - modification : "tache_id" (tâche existante), seulement les champs à changer parmi les
+        précédents (les autres restent tels quels ; "depend_de" remplace toute la liste), et "raison".
       - retrait : "tache_id" et "raison".
       Une tâche = un comportement testable. Une clé inconnue ou une dépendance à soi-même
       rend la réponse invalide.
