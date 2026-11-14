@@ -39,7 +39,7 @@ uv run python -m server.app [--vault CHEMIN]   # MCP sur http://127.0.0.1:8765/m
 ```
 
 Le coffre doit exister (le serveur refuse de démarrer sinon, sans le créer). Au démarrage, `<coffre>/.staging/`
-est vidé : les jetons d'envoi sont en mémoire, aucun fichier qui y reste n'est valide après un redémarrage.
+est vidé (fichiers et liens, sans jamais suivre un lien) : les jetons d'envoi sont en mémoire, aucun fichier qui y reste n'est valide après un redémarrage ; si `.staging` est un lien symbolique, le serveur refuse de démarrer.
 
 Client `mcpf` (il parle au serveur ci-dessus) ; `--url` avant la sous-commande, pour une autre adresse :
 

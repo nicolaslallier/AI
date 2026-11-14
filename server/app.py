@@ -12,10 +12,14 @@ from server.vault import Vault
 
 def create_server(vault_root: Path, *, state_ttl: float = 1800, transfer_ttl: float = 900) -> MCPServer:
     vault = Vault(vault_root)
-    for f in (vault.root / ".staging").glob("*"):  # les jetons sont en mémoire : rien n'y survit à un redémarrage
-        if f.is_file() or f.is_symlink():
+    staging = vault.root / ".staging"
+    if staging.is_symlink() or (staging.exists() and staging.resolve().parent != vault.root):
+        raise RuntimeError(f"{staging} est un lien symbolique ou sort du coffre : démarrage refusé")
+    staging.mkdir(exist_ok=True)
+    for f in staging.iterdir():  # les jetons sont en mémoire : rien n'y survit à un redémarrage
+        if f.is_symlink() or f.is_file():  # un lien est supprimé en tant que lien, jamais suivi
             f.unlink()
-    store = TransferStore(vault.root / ".staging", transfer_ttl)
+    store = TransferStore(staging, transfer_ttl)
     server = MCPServer(
         "mcp-fichiers",
         extensions=[FilesExtension(vault, store)],

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from client.rpc import call
 from server.app import create_app
 from server.digest import Sha256Stream, sha256_b64url
@@ -24,6 +26,31 @@ def test_staging_vide_au_demarrage(vault):
     (vault / ".staging" / "reste.bin").write_bytes(b"x")
     create_app(vault)
     assert not any((vault / ".staging").iterdir())
+
+
+def test_staging_lien_symbolique_refuse(vault, tmp_path):
+    dehors = tmp_path / "dehors"
+    dehors.mkdir()
+    (dehors / "precieux.txt").write_text("x")
+    (vault / ".staging").symlink_to(dehors, target_is_directory=True)
+    with pytest.raises(RuntimeError, match=".staging"):
+        create_app(vault)
+    assert (dehors / "precieux.txt").exists()
+
+
+def test_staging_entree_lien_non_suivie(vault, tmp_path):
+    cible = tmp_path / "cible.txt"
+    cible.write_text("x")
+    (vault / ".staging").mkdir()
+    (vault / ".staging" / "lien").symlink_to(cible)
+    create_app(vault)
+    assert not (vault / ".staging" / "lien").is_symlink()
+    assert cible.exists()
+
+
+def test_staging_cree_si_absent(vault):
+    create_app(vault)
+    assert (vault / ".staging").is_dir() and not (vault / ".staging").is_symlink()
 
 
 def test_main_refuse_coffre_inexistant(tmp_path):
