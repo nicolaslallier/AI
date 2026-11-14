@@ -1,14 +1,17 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from portail.agents import Catalogue, charger_catalogue
+from portail.chat import Diffuseur, ServiceChat
 from portail.config import Reglages
 from portail.contexte import construire, jauge
 from portail.db import Document, Etape, Pipeline, Projet, creer_moteur, fabrique_sessions
@@ -97,7 +100,15 @@ def create_app(
         async with app.state.sessions() as s:
             await recuperer_interrompues(s)
             await s.commit()
+        app.state.diffuseur = Diffuseur()
+        app.state.chat = ServiceChat(
+            app.state.sessions, app.state.catalogue, app.state.llm, app.state.diffuseur
+        )
         yield
+        taches = list(app.state.chat.taches.values())
+        for t in taches:
+            t.cancel()
+        await asyncio.gather(*taches, return_exceptions=True)
         await moteur.dispose()
 
     app = FastAPI(lifespan=lifespan)
@@ -185,5 +196,29 @@ def create_app(
     @app.get("/api/pipelines/{pipeline_id}", response_model=PipelineDetail)
     async def lire_pipeline(pipeline_id: int, request: Request, s: Session):
         return await _detail(s, request.app.state.catalogue, pipeline_id)
+
+    class MessageIn(BaseModel):
+        contenu: str
+
+    @app.post("/api/etapes/{etape_id}/messages", status_code=202)
+    async def envoyer_message(etape_id: int, corps: MessageIn, request: Request):
+        await request.app.state.chat.envoyer(etape_id, corps.contenu)
+        return {}
+
+    @app.post("/api/etapes/{etape_id}/rediger", status_code=202)
+    async def rediger(etape_id: int, request: Request):
+        await request.app.state.chat.rediger(etape_id)
+        return {}
+
+    @app.post("/api/etapes/{etape_id}/reessayer", status_code=202)
+    async def reessayer(etape_id: int, request: Request):
+        await request.app.state.chat.reessayer(etape_id)
+        return {}
+
+    @app.get("/api/etapes/{etape_id}/flux")
+    async def flux(etape_id: int, request: Request):
+        chat = request.app.state.chat
+        await chat.etat(etape_id)  # 404 avant de commencer le flux
+        return StreamingResponse(chat.flux(etape_id), media_type="text/event-stream")
 
     return app

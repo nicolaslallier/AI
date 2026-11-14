@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 import pytest
@@ -46,14 +47,17 @@ class FauxLLM:
     """Même signature que ClientLLM.flux. `morceaux` est renvoyé, puis `exception` est levée."""
 
     def __init__(self):
-        self.morceaux: list[str] = []
+        self.morceaux: list[str | asyncio.Event] = []  # un Event met le flux en pause
         self.exception: Exception | None = None
         self.appels: list[dict] = []  # {"modele", "messages", "temperature"}
 
     async def flux(self, modele, messages, temperature):
         self.appels.append({"modele": modele, "messages": messages, "temperature": temperature})
         for m in self.morceaux:
-            yield m
+            if isinstance(m, asyncio.Event):
+                await m.wait()
+            else:
+                yield m
         if self.exception:
             raise self.exception
 
