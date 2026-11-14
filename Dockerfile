@@ -6,6 +6,8 @@ COPY frontend/ ./
 RUN npm run build
 
 FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:0.9.8 /uv /usr/local/bin/uv
 WORKDIR /app/backend
 COPY backend/pyproject.toml backend/uv.lock ./
@@ -14,7 +16,8 @@ COPY backend/ ./
 RUN uv sync --frozen --no-dev
 COPY agents.yaml /app/agents.yaml
 COPY --from=front /front/dist /app/static
-RUN useradd --system --no-create-home portail
+RUN useradd --system --no-create-home portail \
+    && mkdir /donnees && chown portail /donnees
 USER portail
 ENV PATH="/app/backend/.venv/bin:$PATH" \
     PORTAIL_STATIC_DIR=/app/static \
