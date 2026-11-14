@@ -17,6 +17,57 @@ _SHA = re.compile(r"[0-9a-f]{40}")
 _BRANCHE = re.compile(r"[A-Za-z0-9._/@+-]+")
 
 
+def _secrets(jeton: str) -> list[str]:
+    if not jeton:
+        return []
+    b64 = base64.b64encode(f"x-access-token:{jeton}".encode()).decode()
+    return [b64, jeton]  # base64 d'abord : il contient le jeton encodé, pas en clair
+
+
+def _scrub(texte: str, jeton: str) -> str:
+    for secret in _secrets(jeton):
+        texte = texte.replace(secret, "***")
+    return texte
+
+
+async def git(
+    *args: str, cwd: Path | None, jeton: str = "", delai: int = 30, distant: bool = False
+) -> str:
+    """git durci : ni hook, ni fsmonitor, ni config système ou globale ; sortie brute."""
+    opts = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
+    opts += ["-c", "protocol.file.allow=user"]
+    if distant and jeton:
+        opts += ["-c", f"http.extraHeader=Authorization: Basic {_secrets(jeton)[0]}"]
+    env = {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_LITERAL_PATHSPECS": "1",  # un fichier nommé « * » ne désigne que lui-même
+    }
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        *opts,
+        *args,
+        cwd=cwd,
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), delai)
+    except BaseException as e:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        await proc.wait()
+        if isinstance(e, TimeoutError):
+            raise ErreurDepot(f"git {args[0]} : délai dépassé ({delai} s)") from None
+        raise
+    if proc.returncode != 0:
+        raise ErreurDepot(_scrub(err.decode(errors="replace").strip(), jeton) or "git a échoué")
+    return out.decode(errors="replace")
+
+
 class Depots:
     def __init__(self, donnees_dir: Path, jeton: str):
         self.racine = Path(donnees_dir)
@@ -24,50 +75,13 @@ class Depots:
         self._verrous: dict[int, asyncio.Lock] = {}
 
     def _scrub(self, texte: str) -> str:
-        for secret in self._secrets():
-            texte = texte.replace(secret, "***")
-        return texte
-
-    def _secrets(self) -> list[str]:
-        if not self.jeton:
-            return []
-        b64 = base64.b64encode(f"x-access-token:{self.jeton}".encode()).decode()
-        return [b64, self.jeton]  # base64 d'abord : il contient le jeton encodé, pas en clair
+        return _scrub(texte, self.jeton)
 
     async def _git(
         self, *args: str, cwd: Path | None = None, delai: int = 30, distant: bool = False
     ) -> str:
-        opts = []
-        if distant and self.jeton:
-            b64 = self._secrets()[0]
-            opts = ["-c", f"http.extraHeader=Authorization: Basic {b64}"]
-        env = {
-            **os.environ,
-            "GIT_TERMINAL_PROMPT": "0",
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": "/dev/null",
-        }
-        proc = await asyncio.create_subprocess_exec(
-            "git",
-            *opts,
-            *args,
-            cwd=cwd,
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            out, err = await asyncio.wait_for(proc.communicate(), delai)
-        except BaseException as e:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            await proc.wait()
-            if isinstance(e, TimeoutError):
-                raise ErreurDepot(f"git {args[0]} : délai dépassé ({delai} s)") from None
-            raise
-        if proc.returncode != 0:
-            raise ErreurDepot(self._scrub(err.decode(errors="replace").strip()) or "git a échoué")
-        return out.decode(errors="replace").strip()
+        sortie = await git(*args, cwd=cwd, jeton=self.jeton, delai=delai, distant=distant)
+        return sortie.strip()
 
     def _dossier(self, etape_id: int) -> Path:
         return self.racine / "arbres" / str(etape_id)
@@ -114,11 +128,7 @@ class Depots:
             else:
                 sha = await self._resoudre(clone, sha, sha, "commit")
             arbre.parent.mkdir(parents=True, exist_ok=True)
-            await self._git(
-                "-c", "core.hooksPath=/dev/null",
-                "worktree", "add", "--detach", "--", str(arbre), sha,
-                cwd=clone,
-            )  # fmt: skip
+            await self._git("worktree", "add", "--detach", "--", str(arbre), sha, cwd=clone)
         return arbre, sha
 
     async def _resoudre(self, clone: Path, ref: str, nom: str, genre: str = "branche") -> str:
