@@ -3,6 +3,7 @@
 
 import asyncio
 import logging
+from collections.abc import Callable
 
 from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -11,6 +12,7 @@ from sqlalchemy.orm import aliased
 from portail.db import Etape, ExecutionDev, Pipeline, Projet, Tache, TacheDependance
 from portail.dev import Orchestrateur
 from portail.etats import Etat
+from portail.taches import deplacer_tache
 
 logger = logging.getLogger(__name__)
 
@@ -57,26 +59,59 @@ class Ordonnanceur:
     def reveiller(self) -> None:
         self._reveil.set()
 
+    def lancer(self, pipeline_id: int) -> None:
+        """Lance en tâche de fond ; sa fin libère une place et réveille l'ordonnanceur."""
+        self._orch.lancer(pipeline_id)
+        self._orch.taches[pipeline_id].add_done_callback(lambda _: self.reveiller())
+
     async def tour(self) -> None:
         """Démarre des tâches tant qu'il reste de la place."""
         while len(self._orch.taches) < self._max:
-            async with self._sessions() as s:
+            async with self._sessions() as s:  # repérage : verrou relâché avant GitHub
                 tache = await choisir(s)
                 if tache is None:
                     return
-                # ordre des verrous : le projet passe avant les tâches partout ailleurs ;
-                # tenir la tâche en attendant le projet pourrait s'interbloquer avec une route
-                libre = await s.scalar(
-                    select(Projet.id)
-                    .where(Projet.id == tache.projet_id)
-                    .with_for_update(skip_locked=True)
-                )
-                if libre is None:
-                    return  # la route occupée réveillera l'ordonnanceur après son commit
-                pipeline = await self._orch.demarrer(s, tache)
-                await s.commit()
-            self._orch.lancer(pipeline.id)
-            self._orch.taches[pipeline.id].add_done_callback(lambda _: self.reveiller())
+                tache_id, projet = tache.id, await s.get(Projet, tache.projet_id)
+            try:
+                base = await self._orch.base(projet)
+                async with self._sessions() as s:
+                    tache = await choisir(s)
+                    if tache is None:
+                        return
+                    if tache.id != tache_id:
+                        continue  # la file a changé entre-temps : on recommence
+                    # ordre des verrous : le projet passe avant les tâches partout ailleurs ;
+                    # tenir la tâche en attendant le projet pourrait s'interbloquer avec une route
+                    libre = await s.scalar(
+                        select(Projet.id)
+                        .where(Projet.id == tache.projet_id)
+                        .with_for_update(skip_locked=True)
+                    )
+                    if libre is None:
+                        return  # la route occupée réveillera l'ordonnanceur après son commit
+                    pipeline = await self._orch.demarrer(s, tache, base)
+                    await s.commit()
+            except Exception as e:  # sinon elle reviendrait à chaque tour, devant les autres
+                logger.exception("ordonnanceur : démarrage de la tâche %s impossible", tache_id)
+                await self._bloquer(tache_id, f"démarrage impossible : {e}")
+                continue
+            self.lancer(pipeline.id)
+
+    async def _bloquer(self, tache_id: int, raison: str) -> None:
+        async with self._sessions() as s:
+            projet_id = await s.scalar(select(Tache.projet_id).where(Tache.id == tache_id))
+            await s.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
+            tache = await s.scalar(
+                select(Tache)
+                .where(Tache.id == tache_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if tache is None or tache.colonne != "prete" or tache.verrou is not None:
+                return  # déplacée entre-temps : on n'y touche pas
+            await deplacer_tache(s, tache, "bloquee", None, "portail")
+            tache.resume_blocage = raison
+            await s.commit()
 
     async def tourner(self) -> None:
         while True:
@@ -93,9 +128,12 @@ class Ordonnanceur:
 
 
 async def reprendre_interrompues(
-    sessions: async_sessionmaker[AsyncSession], orchestrateur: Orchestrateur
+    sessions: async_sessionmaker[AsyncSession],
+    orchestrateur: Orchestrateur,
+    lancer: Callable[[int], None] | None = None,
 ) -> None:
-    """Au démarrage : chaque pipeline `dev` en cours repart de sa phase, une seule fois."""
+    """Au démarrage : chaque pipeline `dev` en cours repart de sa phase, une seule fois.
+    `lancer` : `Ordonnanceur.lancer`, pour que la fin d'une reprise libère sa place."""
     async with sessions() as s:
         executions = (
             await s.scalars(
@@ -116,6 +154,6 @@ async def reprendre_interrompues(
         await s.commit()
     for pipeline_id, interruptions in reprises:
         if interruptions <= 1:
-            orchestrateur.lancer(pipeline_id)
+            (lancer or orchestrateur.lancer)(pipeline_id)
         else:
             await orchestrateur.bloquer(pipeline_id, "interrompue deux fois")

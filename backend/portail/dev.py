@@ -134,12 +134,19 @@ class Orchestrateur:
 
     # --- cycle de vie ---------------------------------------------------
 
-    async def demarrer(self, session: AsyncSession, tache: Tache) -> Pipeline:
-        """Dans la transaction de l'appelant : pipeline, exécution, tâche en cours verrouillée."""
-        projet = await session.get(Projet, tache.projet_id)
-        base = projet.branche_ref or await self._github.branche_defaut(
+    async def base(self, projet: Projet) -> str:
+        """Branche de référence ; appel GitHub : à faire hors des verrous de ligne."""
+        return projet.branche_ref or await self._github.branche_defaut(
             self._depot_de(projet.depot_url or "")
         )
+
+    async def demarrer(
+        self, session: AsyncSession, tache: Tache, base: str | None = None
+    ) -> Pipeline:
+        """Dans la transaction de l'appelant : pipeline, exécution, tâche en cours verrouillée.
+        `base` déjà résolue (par `base`) évite un appel GitHub sous les verrous."""
+        projet = await session.get(Projet, tache.projet_id)
+        base = base or await self.base(projet)
         n = 1 + await session.scalar(select(func.count()).where(ExecutionDev.tache_id == tache.id))
         branche = f"portail/tache-{tache.id}-{slug(tache.titre)}" + (f"-{n}" if n > 1 else "")
         pipeline = Pipeline(projet_id=projet.id, type="dev", etat=Etat.EN_COURS)

@@ -6,7 +6,16 @@ from sqlalchemy import select
 from test_dev import BRANCHE, CATALOGUE, CIBLES, CODE_OK, CONFIG, TESTS_OK, Monde, texte, verdict
 
 from portail.api import create_app
-from portail.db import Etape, ExecutionDev, Pipeline, Projet, Tache, TacheDependance
+from portail.db import (
+    Etape,
+    ExecutionDev,
+    Pipeline,
+    Projet,
+    Tache,
+    TacheDependance,
+    TacheEvenement,
+)
+from portail.github import ErreurGitHub
 from portail.moteur import recuperer_interrompues
 from portail.ordonnanceur import Ordonnanceur, choisir, reprendre_interrompues
 
@@ -128,6 +137,54 @@ async def test_paralleles_max_respecte(tmp_path, sessions):
         assert colonnes == ["en_cours", "prete"]
     finally:
         await _arreter(m)
+
+
+async def test_demarrage_impossible_bloque_et_passe_a_la_suivante(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    async with sessions() as s:
+        p2 = await _projet(s, depot=f"file://{m.origine}")
+        t2 = await _tache(s, p2, 2000)
+        await s.commit()
+    appels = []
+
+    async def branche_defaut(depot):
+        appels.append(depot)
+        if len(appels) == 1:  # T1, de plus petit rang : l'App n'est pas installée
+            raise ErreurGitHub("App non installée")
+        return "main"
+
+    m.github.branche_defaut = branche_defaut
+    m.llm.reponses = [asyncio.Event()]
+    ordo = Ordonnanceur(sessions, m.orch, 1)
+    try:
+        await ordo.tour()
+        assert len(m.orch.taches) == 1
+        async with sessions() as s:
+            t1, t2 = await s.get(Tache, 1), await s.get(Tache, t2)
+        assert (t1.colonne, t1.verrou) == ("bloquee", None)
+        assert t1.resume_blocage == "démarrage impossible : App non installée"
+        assert t2.colonne == "en_cours" and t2.verrou is not None
+        async with sessions() as s:
+            types = (
+                await s.scalars(select(TacheEvenement.type).where(TacheEvenement.tache_id == 1))
+            ).all()
+        assert types == ["deplacement"]
+    finally:
+        await _arreter(m)
+
+
+async def test_reprise_liberee_reveille_l_ordonnanceur(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    m.llm.reponses = [texte("rien")]  # aucun test écrit : la reprise finit vite
+    async with sessions() as s:
+        await m.orch.demarrer(s, await s.get(Tache, 1))
+        await s.commit()
+    ordo = Ordonnanceur(sessions, m.orch, 1)
+    await reprendre_interrompues(sessions, m.orch, ordo.lancer)
+    assert not ordo._reveil.is_set()
+    await _fin(m)
+    await asyncio.sleep(0)  # les rappels de fin passent à l'itération suivante
+    assert ordo._reveil.is_set()
 
 
 async def test_relance_branche_n(tmp_path, sessions):

@@ -273,8 +273,8 @@ def create_app(
         )
         app.state.orchestrateur, app.state.ordonnanceur, boucle = orch, None, None
         if orch:
-            await reprendre_interrompues(app.state.sessions, orch)
             app.state.ordonnanceur = Ordonnanceur(app.state.sessions, orch, r.paralleles_max)
+            await reprendre_interrompues(app.state.sessions, orch, app.state.ordonnanceur.lancer)
             boucle = asyncio.create_task(app.state.ordonnanceur.tourner())
         yield
         taches = list(app.state.chat.taches.values())
