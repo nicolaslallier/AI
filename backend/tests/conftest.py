@@ -1,6 +1,8 @@
 import asyncio
 import os
 import subprocess
+from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -12,6 +14,7 @@ from portail.agents import Agent, Catalogue
 from portail.api import create_app
 from portail.config import Reglages
 from portail.db import Base, creer_moteur, fabrique_sessions
+from portail.lanceur import Resultat
 
 URL = os.environ.get(
     "PORTAIL_TEST_DATABASE_URL", "postgresql+psycopg://portail:portail@localhost:5433/portail_test"
@@ -154,3 +157,43 @@ def depot_origine(tmp_path):
     git(o, "add", "README.md")
     git(o, "commit", "-m", "init")
     return o
+
+
+# --- lanceur -----------------------------------------------------------
+
+
+class FauxLanceur:
+    """Même interface que ClientLanceur. L'espace `e` est le dossier `dossier / e`."""
+
+    def __init__(self, dossier: Path):
+        self.dossier = Path(dossier)
+        self.codes: dict[str, list[int]] = {}  # rendus tour à tour par commande exacte, 0 sinon
+        self.effets: dict[str, Callable[[Path], None]] = {}  # appliqués au dossier de l'espace
+        self.appels: list[dict] = []
+
+    async def lancer(self, espace, image, commande, delai_s, lecture_seule) -> Resultat:
+        self.appels.append(
+            {
+                "route": "lancer", "espace": espace, "image": image, "commande": commande,
+                "delai_s": delai_s, "lecture_seule": list(lecture_seule),
+            }
+        )  # fmt: skip
+        if commande in self.effets:
+            self.effets[commande](self.dossier / espace)
+        codes = self.codes.get(commande)
+        code = codes.pop(0) if codes else 0
+        return Resultat(code=code, sortie=f"sortie de {commande}", delai_depasse=False)
+
+    async def services(self, espace, services) -> None:
+        self.appels.append({"route": "services", "espace": espace, "services": list(services)})
+
+    async def arreter(self, espace) -> None:
+        self.appels.append({"route": "arreter", "espace": espace})
+
+    async def nettoyer(self, espace) -> None:
+        self.appels.append({"route": "nettoyer", "espace": espace})
+
+
+@pytest.fixture
+def faux_lanceur(tmp_path):
+    return FauxLanceur(tmp_path / "espaces")

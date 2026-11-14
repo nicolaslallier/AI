@@ -56,6 +56,16 @@ def test_agents_yaml_du_depot_est_valide():
     cat = charger_catalogue(racine / "agents.yaml")
     assert "spec" in cat.pipelines
     assert cat.pipelines["planification"] == ["plan", "taches"]
+    assert cat.pipelines["dev"] == ["tests", "code", "revue"]
+    a = cat.agents
+    assert (a["tests"].produit, a["tests"].role, a["tests"].tours_max) == ("travail", "tests", 40)
+    assert (a["code"].produit, a["code"].role, a["code"].tours_max) == ("travail", "code", 40)
+    assert set(a["tests"].outils) == set(a["code"].outils) == {
+        "lister", "lire", "chercher", "ecrire", "supprimer", "lancer",
+    }  # fmt: skip
+    assert (a["revue"].produit, a["revue"].role) == ("verdict", "revue")
+    assert a["revue"].outils == ["lister", "lire", "chercher"]
+    assert a["tests"].modele == a["code"].modele == a["revue"].modele == a["plan"].modele
 
 
 def test_pipelines_mauvaise_forme(tmp_path):
@@ -90,11 +100,53 @@ def test_agent_taches_avec_outils_refuse(tmp_path):
 
 
 def test_outil_inconnu_refuse(tmp_path):
-    texte = VALIDE.replace("    prompt_systeme: p", "    prompt_systeme: p\n    outils: [ecrire]")
-    with pytest.raises(CatalogueInvalide, match="ecrire"):
+    texte = VALIDE.replace("    prompt_systeme: p", "    prompt_systeme: p\n    outils: [shell]")
+    with pytest.raises(CatalogueInvalide, match="shell"):
         charger_catalogue(ecrire(tmp_path, texte))
 
 
 def test_valeurs_par_defaut(tmp_path):
     a = charger_catalogue(ecrire(tmp_path, VALIDE)).agents["spec"]
     assert (a.produit, a.auto, a.outils, a.tours_max) == ("spec", False, [], 20)
+
+
+def _avec(tmp_path, lignes: str):
+    return charger_catalogue(
+        ecrire(
+            tmp_path, VALIDE.replace("    prompt_systeme: p", "    prompt_systeme: p\n" + lignes)
+        )
+    )
+
+
+def test_agent_travail_valide(tmp_path):
+    a = _avec(
+        tmp_path,
+        "    produit: travail\n    role: code\n"
+        "    outils: [lister, lire, chercher, ecrire, supprimer, lancer]",
+    ).agents["spec"]
+    assert (a.produit, a.role) == ("travail", "code")
+
+
+def test_role_par_defaut_aucun(tmp_path):
+    assert _avec(tmp_path, "    outils: [lire]").agents["spec"].role is None
+
+
+def test_travail_exige_role_et_lancer(tmp_path):
+    with pytest.raises(CatalogueInvalide, match="spec"):
+        _avec(tmp_path, "    produit: travail\n    outils: [lire, lancer]")
+    with pytest.raises(CatalogueInvalide, match="spec"):
+        _avec(tmp_path, "    produit: travail\n    role: tests\n    outils: [lire, ecrire]")
+
+
+def test_verdict_exige_revue_sans_ecriture(tmp_path):
+    assert _avec(tmp_path, "    produit: verdict\n    role: revue\n    outils: [lire]")
+    with pytest.raises(CatalogueInvalide, match="spec"):
+        _avec(tmp_path, "    produit: verdict\n    role: code\n    outils: [lire]")
+    for outil in ("ecrire", "supprimer", "lancer"):
+        with pytest.raises(CatalogueInvalide, match="spec"):
+            _avec(tmp_path, f"    produit: verdict\n    role: revue\n    outils: [lire, {outil}]")
+
+
+def test_role_inconnu_refuse(tmp_path):
+    with pytest.raises(CatalogueInvalide, match="systeme"):
+        _avec(tmp_path, "    role: systeme")
