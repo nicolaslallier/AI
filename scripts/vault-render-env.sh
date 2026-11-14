@@ -18,6 +18,13 @@ case "$VAULT_URL" in https://*) ;; *) die "VAULT_URL doit être en https://" ;; 
 [ -r "${VAULT_CA_CERT:-}" ] || die "VAULT_CA_CERT illisible : ${VAULT_CA_CERT:-}"
 command -v jq >/dev/null || die "jq est requis"
 
+# Jeton périodique : le renouveler à chaque déploiement. En cas d'échec on continue,
+# la lecture ci-dessous échouera bruyamment si le jeton est mort.
+printf 'header = "X-Vault-Token: %s"\n' "$BAO_TOKEN" \
+  | curl -fsS -o /dev/null --connect-timeout 10 --max-time 120 --cacert "$VAULT_CA_CERT" -K - \
+    -X POST "$VAULT_URL/v1/auth/token/renew-self" \
+  || echo "::warning::renouvellement du jeton OpenBao impossible" >&2
+
 # Le jeton passe par un fichier de config curl lu sur stdin, jamais par argv.
 secret="$(printf 'header = "X-Vault-Token: %s"\n' "$BAO_TOKEN" \
   | curl -fsS --connect-timeout 10 --max-time 120 --cacert "$VAULT_CA_CERT" -K - "$VAULT_URL/v1/$VAULT_SECRET_PATH" \
