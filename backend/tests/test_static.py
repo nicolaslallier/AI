@@ -41,3 +41,15 @@ async def test_api_inconnue_reste_404_json(client):
 
 async def test_api_sante_intacte(client):
     assert (await client.get("/api/sante")).json() == {"ok": True}
+
+
+async def test_octet_nul_replie_sur_index(client):
+    r = await client.get("/a%00b")
+    assert r.status_code == 200
+    assert "portail" in r.text
+
+
+async def test_api_sans_slash_est_404_json(client):
+    r = await client.get("/api")
+    assert r.status_code == 404
+    assert r.headers["content-type"].startswith("application/json")

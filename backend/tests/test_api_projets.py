@@ -102,6 +102,10 @@ async def test_utilisateur_exige(moteur, schema):
         h = {"X-Auth-Request-Email": "n@x.fr"}
         assert (await c.get("/api/projets", headers=h)).status_code == 200
         assert (await c.get("/api/sante")).status_code == 200
+        assert (
+            await c.get("/api/projets", headers={"X-Auth-Request-Email": ""})
+        ).status_code == 401
+        assert (await c.get("/api/santeX")).status_code == 401
 
 
 async def test_redemarrage_marque_les_etapes_interrompues(client, sessions, reglages):
@@ -118,3 +122,19 @@ async def test_redemarrage_marque_les_etapes_interrompues(client, sessions, regl
     ):
         d = (await c.get(f"/api/pipelines/{det['id']}")).json()
     assert d["etapes"][0]["etat"] == "echouee"
+
+
+async def test_agent_absent_du_catalogue(client, sessions):
+    p = await _projet(client)
+    det = (await client.post("/api/pipelines", json={"projet_id": p["id"], "type": "spec"})).json()
+    async with sessions() as s:
+        etape = await s.scalar(select(Etape).where(Etape.pipeline_id == det["id"]))
+        etape.agent = "disparu"
+        await s.commit()
+        eid = etape.id
+    r = await client.get(f"/api/pipelines/{det['id']}")
+    assert r.status_code == 200
+    assert r.json()["etapes"][0]["jauge"] is None
+    r = await client.post(f"/api/etapes/{eid}/messages", json={"contenu": "x"})
+    assert r.status_code == 409
+    assert "disparu" in r.json()["detail"]

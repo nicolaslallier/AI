@@ -73,7 +73,7 @@ class EtapeOut(BaseModel):
     action: str | None
     messages: list[MessageOut]
     document: DocumentOut | None
-    jauge: Jauge
+    jauge: Jauge | None
 
 
 class ProjetRef(BaseModel):

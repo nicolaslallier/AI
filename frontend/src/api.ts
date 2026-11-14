@@ -48,7 +48,7 @@ export interface Etape {
   action: string | null
   messages: Message[]
   document: Document | null
-  jauge: Jauge
+  jauge: Jauge | null
 }
 export interface PipelineDetail {
   id: number

@@ -55,7 +55,8 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
     projet = await session.get(Projet, pipeline.projet_id)
     etapes = []
     for e in pipeline.etapes:
-        llm = construire(catalogue.agents[e.agent], e.messages, e.document)
+        agent = catalogue.agents.get(e.agent)
+        j = jauge(agent, construire(agent, e.messages, e.document)) if agent else None
         etapes.append(
             EtapeOut.model_validate(
                 {
@@ -65,7 +66,7 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
                     },
                     "messages": e.messages,
                     "document": e.document,
-                    "jauge": jauge(catalogue.agents[e.agent], llm),
+                    "jauge": j,
                 },
                 from_attributes=True,
             )
@@ -126,8 +127,8 @@ def create_app(
         if (
             request.app.state.reglages.exiger_utilisateur
             and chemin.startswith("/api/")
-            and not chemin.startswith("/api/sante")
-            and "X-Auth-Request-Email" not in request.headers
+            and chemin != "/api/sante"
+            and not request.headers.get("X-Auth-Request-Email")
         ):
             return JSONResponse(status_code=401, content={"detail": "non authentifié"})
         return await call_next(request)
@@ -243,11 +244,14 @@ def create_app(
         # Enregistrée en dernier : repli SPA, hors /api/. Les /api/ inconnus gardent leur 404 JSON.
         @app.get("/{chemin:path}", include_in_schema=False)
         async def spa(chemin: str):
-            if chemin.startswith("api/"):
+            if chemin == "api" or chemin.startswith("api/"):
                 raise Refus(404, "introuvable")
-            fichier = (racine / chemin).resolve()
-            if fichier.is_file() and fichier.is_relative_to(racine):
-                return FileResponse(fichier)
+            try:
+                fichier = (racine / chemin).resolve()
+                if fichier.is_relative_to(racine) and fichier.is_file():
+                    return FileResponse(fichier)
+            except (OSError, ValueError):
+                pass
             return FileResponse(racine / "index.html")
 
     return app

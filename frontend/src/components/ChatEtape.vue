@@ -10,7 +10,7 @@ const saisie = ref('')
 
 function envoyer() {
   const t = saisie.value.trim()
-  if (!t || props.etape.etat !== 'en_attente' || props.etape.jauge.niveau === 'plein') return
+  if (!t || props.etape.etat !== 'en_attente' || props.etape.jauge?.niveau === 'plein') return
   emit('envoyer', t, () => (saisie.value = ''))
 }
 
@@ -23,7 +23,7 @@ function surEntree(e: KeyboardEvent) {
 
 <template>
   <section>
-    <JaugeContexte :jauge="etape.jauge" />
+    <JaugeContexte v-if="etape.jauge" :jauge="etape.jauge" />
     <div class="messages">
       <div v-for="m in etape.messages" :key="m.id" :class="['bulle', m.role === 'user' ? 'moi' : 'agent']">
         <template v-if="m.role === 'user'">{{ m.contenu }}</template>
@@ -42,7 +42,7 @@ function surEntree(e: KeyboardEvent) {
       v-model="saisie"
       rows="3"
       placeholder="Écris ton message…"
-      :disabled="etape.etat !== 'en_attente' || etape.jauge.niveau === 'plein'"
+      :disabled="etape.etat !== 'en_attente' || etape.jauge?.niveau === 'plein'"
       @keydown.enter.exact="surEntree"
     ></textarea>
     <button :disabled="etape.etat !== 'en_attente'" @click="emit('rediger')">Rédiger la spec</button>
@@ -51,9 +51,9 @@ function surEntree(e: KeyboardEvent) {
 
 <style scoped>
 .messages { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.5rem 0; }
-.bulle { max-width: 80%; padding: 0.4rem 0.75rem; border-radius: 0.75rem; white-space: pre-wrap; }
+.bulle { max-width: 80%; padding: 0.4rem 0.75rem; border-radius: 0.75rem; }
 .bulle :deep(p) { margin: 0.25rem 0; }
-.moi { align-self: flex-end; background: #dbeafe; }
+.moi { align-self: flex-end; background: #dbeafe; white-space: pre-wrap; }
 .agent { align-self: flex-start; background: #f3f4f6; }
 textarea { width: 100%; box-sizing: border-box; }
 .erreur { color: #b91c1c; }
