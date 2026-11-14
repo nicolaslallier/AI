@@ -242,11 +242,14 @@ async def _annuler(request: Request, s: AsyncSession, pipeline_id: int, clos: bo
     """Un pipeline `dev` passe par l'orchestrateur (même terminé : nettoyage), les autres par le
     chat, qui refuse un pipeline clos (`clos` : le lui demander quand même). Libère la
     transaction de `s` avant que le service ouvre la sienne, puis la tâche que le pipeline
-    verrouillait revient « à faire », sans verrou."""
+    verrouillait revient « à faire », sans verrou ; une reprise en cours la ramène *En revue*
+    (la PR existe), verrou gardé."""
     p = await s.get(Pipeline, pipeline_id)
     if p is None:
         raise Refus(404, "pipeline introuvable")
     type_, etat = p.type, p.etat
+    mode = await s.scalar(select(ExecutionDev.mode).where(ExecutionDev.pipeline_id == pipeline_id))
+    reprise = mode == "reprise" and etat == Etat.EN_COURS
     await s.rollback()
     orchestrateur = request.app.state.orchestrateur
     if type_ == "dev" and orchestrateur:
@@ -266,7 +269,9 @@ async def _annuler(request: Request, s: AsyncSession, pipeline_id: int, clos: bo
     )
     if t is not None:
         t.verrou = None
-        await deplacer_tache(s, t, "a_faire", None, "nicolas")
+        await deplacer_tache(s, t, "en_revue" if reprise else "a_faire", None, "nicolas")
+        if reprise:
+            t.verrou = pipeline_id
     await s.commit()
     _reveiller(request)
 

@@ -3,7 +3,7 @@ import pytest
 
 from portail.depots import ErreurDepot
 from portail.execution import ConfigExecution
-from portail.protections import verifier_commits_code
+from portail.protections import section_de_test, verifier_commits_code
 from tests.test_espace import espace, git, origine  # noqa: F401  (fixtures réutilisées)
 
 
@@ -252,3 +252,42 @@ async def test_erreur_git_propagee(espace, cfg):
     with pytest.raises(ErreurDepot):
         await espace.fichier_a("0" * 40, "Cargo.toml")
     assert await espace.fichier_a(base, "absent.toml") is None
+
+
+PYPROJECT = """[project]
+name = "x"
+dependencies = ["httpx"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+"""
+PACKAGE = """{
+  "name": "x",
+  "scripts": {
+    "test": "jest"
+  },
+  "dependencies": {
+    "a": "1"
+  }
+}
+"""
+CARGO = """[package]
+name = "x"
+
+[dev-dependencies]
+proptest = "1"
+"""
+
+
+@pytest.mark.parametrize(
+    ("nom", "texte", "ligne", "attendu"),
+    [
+        ("pyproject.toml", PYPROJECT, 6, True),
+        ("pyproject.toml", PYPROJECT, 3, False),
+        ("package.json", PACKAGE, 4, True),
+        ("package.json", PACKAGE, 7, False),
+        ("Cargo.toml", CARGO, 5, True),
+    ],
+)
+def test_section_de_test(nom, texte, ligne, attendu):
+    assert section_de_test(nom, texte, ligne) is attendu

@@ -66,6 +66,10 @@ def test_agents_yaml_du_depot_est_valide():
     assert (a["revue"].produit, a["revue"].role) == ("verdict", "revue")
     assert a["revue"].outils == ["lister", "lire", "chercher"]
     assert a["tests"].modele == a["code"].modele == a["revue"].modele == a["plan"].modele
+    assert (a["tri"].produit, a["tri"].role) == ("verdict", "revue")
+    assert a["tri"].outils == ["lister", "lire", "chercher"]
+    assert a["tri"].modele == a["revue"].modele
+    assert all("tri" not in etapes for etapes in cat.pipelines.values())
 
 
 def test_pipelines_mauvaise_forme(tmp_path):

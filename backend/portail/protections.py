@@ -2,6 +2,7 @@
 
 import configparser
 import json
+import re
 import tomllib
 from posixpath import basename
 
@@ -75,6 +76,55 @@ def _sections(nom: str, texte: str | None) -> dict[str, object]:
 
 
 MANIFESTES = ("pyproject.toml", "package.json", "Cargo.toml", "setup.cfg")
+
+# sections protégées de `_sections`, vues comme en-têtes TOML ou INI
+_EN_TETES_DE_TEST = (
+    "tool.pytest*", "tool.coverage*", "tool.setuptools*", "build-system", "project.entry-points*",
+    "dev-dependencies", "dev_dependencies", "test", "profile.test", "target.*.dev-dependencies",
+    "target.*.dev_dependencies", "tool:pytest", "options*",
+)  # fmt: skip
+_CLES_JSON_DE_TEST = {"scripts", "jest", "vitest", "mocha", "ava", "c8", "nyc"}
+_EN_TETE = re.compile(r"\s*\[\[?\s*([^\]]+?)\s*\]")
+_DEUX_POINTS = re.compile(r"\s*:")
+
+
+def _cle_json(texte: str, ligne: int) -> str | None:
+    """Clé de premier niveau dont la valeur contient `ligne` (1 = première ligne)."""
+    cle, profondeur, n, i, debut = None, 0, 1, 0, None
+    while i < len(texte):
+        c = texte[i]
+        if debut is not None:  # dans une chaîne (jamais de saut de ligne brut en JSON)
+            if c == "\\":
+                i += 1
+            elif c == '"':
+                if profondeur == 1 and _DEUX_POINTS.match(texte, i + 1):
+                    if n > ligne:
+                        break
+                    cle = texte[debut + 1 : i]  # brute : les clés cherchées sont sans échappement
+                debut = None
+        elif c == '"':
+            debut = i
+        elif c in "{[":
+            profondeur += 1
+        elif c in "}]":
+            profondeur -= 1
+        elif c == "\n":
+            n += 1
+        i += 1
+    return cle
+
+
+def section_de_test(nom: str, texte: str, ligne: int) -> bool:
+    """La ligne `ligne` d'un manifeste est-elle dans une section de tests protégée ?"""
+    # ponytail: repérage par en-têtes ; une section manquée est quand même refusée par la
+    # troisième protection (échec de la reprise)
+    if nom == "package.json":
+        return _cle_json(texte, ligne) in _CLES_JSON_DE_TEST
+    section = None
+    for brute in texte.splitlines()[:ligne]:
+        if m := _EN_TETE.match(brute):
+            section = m.group(1)
+    return section is not None and correspond(section, _EN_TETES_DE_TEST)
 
 
 async def verifier_commits_code(espace: Espace, depuis: str, cfg: ConfigExecution) -> list[str]:
