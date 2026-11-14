@@ -12,7 +12,8 @@
 
 ## Global Constraints
 
-- **Point de départ : `main` après la fusion de C** (`claude/portail-c1`). Ce plan suppose les interfaces de C : `boucle_outils(llm, agent, messages, outils, sur_appel)` avec `outils.schemas() -> list[dict]` et `async outils.executer(nom, arguments) -> tuple[str, bool]` ; `Diffuseur.publier_global(evenement)` ; `pipelines.dev` dans `agents.yaml`. Si une interface réelle diffère, suivre le code fusionné et le noter dans le rapport de tâche.
+- **Point de départ : `main` après la fusion de C** (PR #22, `e81030b`), vérifié : `boucle_outils(llm, agent, messages, outils, sur_appel)` lit `outils.schemas() -> list[dict]` et appelle `async outils.executer(nom, arguments) -> tuple[str, bool]` ; `pipelines.dev` existe ; `app.state.orchestrateur` est **déjà pris** par l'orchestrateur `dev` de C (le service de E s'appelle `app.state.conversations`) ; il n'y a **pas** de canal d'événements global (`publier_global` n'existe pas) : E n'en publie pas ; `api._annuler(request, s, pipeline_id, clos)` et `api._reveiller(request)` (réveil de l'`Ordonnanceur`) existent. Si une autre interface diffère, suivre le code fusionné et le noter dans le rapport de tâche.
+- Migrations : E commence à `0004`, après `0003_boucle_dev`.
 - Livré en deux temps : tâches 1 à 4 (temps 1, l'orchestrateur répond), tâches 5 à 7 (temps 2, il agit). Le temps 1 est utilisable seul.
 - Le chat d'étape (`ServiceChat`, `ChatEtape.vue`, routes `/api/etapes/…`) garde exactement son comportement : ses tests existants passent sans modification.
 - Tous les textes vus par Nicolas ou par le modèle sont en français.
@@ -153,15 +154,15 @@ Page : colonne de gauche (*+ Nouvelle*, puis la liste) ; à droite, la conversat
 
 **Files :**
 - Create : `backend/portail/actions.py`, `backend/migrations/versions/0005_actions_conversation.py`, `backend/tests/test_actions.py`
-- Modify : `backend/portail/db.py`, `backend/portail/schemas.py` (`verifier_depot` déplacé depuis `api.py`), `backend/portail/taches.py` (corps de la route d'annulation extrait), `backend/portail/api.py`
+- Modify : `backend/portail/db.py`, `backend/portail/schemas.py` (`verifier_depot` déplacé depuis `api.py`), `backend/portail/api.py`
 
 **Interfaces :**
 - Produces :
   - `class ActionConversation(Base)`, table `action_conversation` : `id`, `conversation_id` (FK cascade), `nom: str`, `parametres: dict` (JSON), `etat: str` (`proposee | confirmee | refusee | echouee | perimee`, défaut `proposee`), `resultat: str | None`, `lien: str | None` (ex. `/projets/12`, `/pipelines/34`, `/projets/12/kanban`), `cree_le`, `maj_le`.
   - `ACTIONS: dict[str, type[BaseModel]]`, les paramètres de chaque action : `creer_projet(nom, description="", depot_url=None, branche_ref=None)`, `deposer_spec(projet_id, contenu)`, `lancer_pipeline(projet_id, type)`, `creer_tache(projet_id, titre, description="", criteres=[], depend_de=[])`, `modifier_tache(tache_id, titre?, description?, criteres?)`, `deplacer_tache(tache_id, colonne)`, `annuler_tache(tache_id)`. Réutiliser `ProjetIn`, `DonneesTache` et `DonneesTachePartielles` là où c'est possible.
   - `async def valider_action(s, catalogue, nom: str, parametres: dict) -> dict` : renvoie les paramètres normalisés ou lève `Refus(422, …)`. Elle vérifie ce qu'on peut vérifier à la proposition : projet ou tâche existant, type de pipeline connu et différent de `dev`, colonne dans `COLONNES`, URL de dépôt (`verifier_depot`), contenu de spec non vide, aucun pipeline `spec` ouvert pour `deposer_spec` (« un pipeline de spec est déjà ouvert : finis-le ou annule-le »).
-  - `@dataclass class Execution` : `resultat: str`, `lien: str | None`, `evenements: list[dict]` (publiés avec `publier_global` après le commit), `etapes_a_lancer: list[int]` (passées à `ServiceChat.lancer` après le commit), `pipelines_a_annuler: list[int]`.
-  - `async def executer_action(s, catalogue, action: ActionConversation) -> Execution` : appelle les fonctions existantes avec l'auteur `"nicolas"`. `creer_projet` → `Projet` ; `deposer_spec` → `creer_pipeline(..., "spec")`, puis un `Document(type="spec", contenu, etat="validee")` sur l'étape, puis `terminer_etape` ; `lancer_pipeline` → `creer_pipeline` (l'étape auto va dans `etapes_a_lancer`) ; `creer_tache`, `modifier_tache`, `deplacer_tache` (en fin de colonne, `avant_id=None`) ; `annuler_tache` → `taches.annuler(s, tache_id, auteur)`, extraite de la route `POST /api/taches/{id}/annuler` telle qu'elle est après C (la route l'appelle désormais). Toute vérification refaite au moment de l'exécution lève `Refus`.
+  - `@dataclass class Execution` : `resultat: str`, `lien: str | None`, `etapes_a_lancer: list[int]` (passées à `ServiceChat.lancer` après le commit).
+  - `async def executer_action(s, catalogue, action: ActionConversation) -> Execution` : appelle les fonctions existantes avec l'auteur `"nicolas"`. `creer_projet` → `Projet` ; `deposer_spec` → `creer_pipeline(..., "spec")`, puis un `Document(type="spec", contenu, etat="validee")` sur l'étape, puis `terminer_etape` ; `lancer_pipeline` → `creer_pipeline` (l'étape auto va dans `etapes_a_lancer`) ; `creer_tache`, `modifier_tache`, `deplacer_tache` (en fin de colonne, `avant_id=None`). **`annuler_tache` n'est pas exécutée ici** : elle ouvre et ferme ses propres transactions (`_annuler` fait `rollback` puis `commit`), voir tâche 6. Toute vérification refaite au moment de l'exécution lève `Refus`.
 
 - [ ] **Step 1 : tests qui échouent**, appels directs avec une session :
   - `test_valider_lancer_pipeline_dev_refuse` → `Refus` 422 dont le message contient « Prête ».
@@ -172,7 +173,6 @@ Page : colonne de gauche (*+ Nouvelle*, puis la liste) ; à droite, la conversat
   - `test_executer_deplacer_vers_prete` → la tâche est en `prete`, et le journal a `auteur == "nicolas"`.
   - `test_executer_modifier_tache_la_protege` → `protegee is True`.
   - `test_confirmer_refus_du_portail` : une tâche verrouillée (`verrou` posé) puis `deplacer_tache` → `Refus` ; dans un `begin_nested()`, rien n'est écrit.
-  - Les tests existants de l'annulation de tâche passent sans changement après l'extraction.
 - [ ] **Step 2 :** `uv run pytest tests/test_actions.py` → FAIL.
 - [ ] **Step 3 : implémenter.** Migration `0005` comme à la tâche 1.
 - [ ] **Step 4 :** `uv run alembic upgrade head && uv run alembic check` → OK ; `uv run pytest` → PASS.
@@ -191,14 +191,14 @@ Page : colonne de gauche (*+ Nouvelle*, puis la liste) ; à droite, la conversat
   - `OutilsPortail(sessions, noms, catalogue=None, conversation_id=None)` : pour un nom de `ACTIONS`, `executer` appelle `valider_action`. Un `Refus` donne `("erreur : <message>", False)`. Sinon, l'action est insérée `proposee` (et commitée), `self.arret = True`, et le résultat vaut `"action n°<id> proposée, en attente de la confirmation de Nicolas. Termine ta réponse sans appeler d'outil."`. Une 2ᵉ proposition dans le même tour donne `"ignoré : …"`.
   - `agents.py` : `OUTILS_ACTIONS_PORTAIL` = les 7 noms d'actions, comptés comme outils du portail dans les règles de la tâche 1. `agents.yaml` : l'orchestrateur reçoit les 7 actions, et son prompt explique qu'une action n'est faite qu'après confirmation, et qu'une spec déposée est validée.
   - `ServiceConversation.confirmer(action_id)` et `refuser(action_id)` ; routes `POST /api/actions/{id}/confirmer` et `POST /api/actions/{id}/refuser` → 202. `ConversationDetail` gagne `actions: list[ActionOut]` (`id, nom, parametres, etat, resultat, lien, cree_le`).
-  - `ServiceConversation` reçoit le `ServiceChat` (pour `lancer` et `annuler`) et le `Diffuseur` global de l'app (pour `publier_global`).
+  - `ServiceConversation` reçoit le `ServiceChat` (pour `lancer`) et deux rappels construits dans `api.py` : `annuler_tache(tache_id) -> None`, qui reprend exactement le corps de la route `POST /api/taches/{id}/annuler` (`_tache`, refus 409 « rien à annuler » sans verrou, `_annuler(..., clos=False)`), et `reveiller() -> None` (`_reveiller`). Pour cela, `_annuler` et `_reveiller` prennent l'état de l'app (`request.app.state`) au lieu de la `Request` ; les routes existantes passent `request.app.state`.
 
 Comportement :
 - `confirmer` : verrou sur la conversation, puis sur l'action (`FOR UPDATE`). Conversation `en_cours` → 409 « attends la fin de la réponse ». Action autre que `proposee` → 409 « action déjà traitée » (ou « action périmée »). Ensuite `executer_action` dans `begin_nested()` :
   - si ça réussit : `confirmee`, `resultat`, `lien`, et un message `system` « Action n°<id> (<nom>) confirmée par Nicolas : <resultat> » ;
   - si un `Refus` est levé : `echouee`, `resultat` = le message, et un message `system` « Action n°<id> (<nom>) refusée par le portail : <message> ».
   
-  Dans les deux cas, la conversation passe `en_cours`, puis commit. Après le commit : `publier_global` des événements, `ServiceChat.lancer` pour chaque étape à lancer, `ServiceChat.annuler` pour chaque pipeline à annuler, et enfin `lancer(conversation_id)`, qui relance le modèle pour qu'il commente le résultat.
+  Dans les deux cas, la conversation passe `en_cours`, puis commit. Après le commit : `ServiceChat.lancer` pour chaque étape à lancer, `reveiller()` (une tâche a pu entrer dans *Prête*), et enfin `lancer(conversation_id)`, qui relance le modèle pour qu'il commente le résultat. **Cas `annuler_tache`** : l'action est d'abord verrouillée et passée `confirmee` (commit, ce qui empêche une double exécution), puis le rappel `annuler_tache` s'exécute ; s'il lève `Refus`, l'action passe `echouee` avec le message. Le message `system` et la relance suivent comme pour les autres actions.
 - `refuser` : mêmes vérifications. L'action passe `refusee`, un message `system` « Nicolas a refusé l'action n°<id> (<nom>) » est ajouté, et le modèle est relancé.
 - `envoyer` : les actions `proposee` de la conversation passent `perimee`, dans la même transaction que le nouveau message.
 
@@ -215,6 +215,7 @@ Comportement :
   - `test_nouveau_message_perime_l_action` : envoyer un message → l'action passe `perimee`, et la confirmer ensuite renvoie 409.
   - `test_action_proposee_survit_au_redemarrage` : nouveau `LifespanManager` → la confirmation fonctionne.
   - `test_lancer_planification_lance_l_etape_auto` : après confirmation, `app.state.chat.taches` contient l'étape `plan`.
+  - `test_confirmer_annuler_tache` : une tâche verrouillée par un pipeline `spec` en cours → après confirmation, la tâche est en `a_faire` sans verrou et l'action est `confirmee` ; sans verrou → l'action est `echouee` avec « rien à annuler ».
 - [ ] **Step 2 :** `uv run pytest tests/test_boucle.py tests/test_conversations.py` → FAIL.
 - [ ] **Step 3 : implémenter.**
 - [ ] **Step 4 :** `uv run pytest` → PASS (tous les tests, ceux de C compris).
