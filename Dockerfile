@@ -16,8 +16,8 @@ COPY backend/ ./
 RUN uv sync --frozen --no-dev
 COPY agents.yaml /app/agents.yaml
 COPY --from=front /front/dist /app/static
-RUN useradd --system --no-create-home portail \
-    && mkdir /donnees && chown portail /donnees
+RUN useradd -u 1000 --system --no-create-home portail \
+    && mkdir /donnees /espaces && chown 1000:1000 /donnees /espaces
 USER portail
 ENV PATH="/app/backend/.venv/bin:$PATH" \
     PORTAIL_STATIC_DIR=/app/static \

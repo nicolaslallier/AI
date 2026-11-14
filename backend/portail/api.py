@@ -18,7 +18,9 @@ from portail.chat import Diffuseur, ServiceChat, annexes
 from portail.config import Reglages
 from portail.contexte import construire, jauge
 from portail.db import (
+    CommandeLancee,
     Etape,
+    ExecutionDev,
     Pipeline,
     Projet,
     Proposition,
@@ -28,18 +30,26 @@ from portail.db import (
     fabrique_sessions,
 )
 from portail.depots import Depots, ErreurDepot
+from portail.dev import Orchestrateur
 from portail.etats import Etat
+from portail.execution import lire_config
+from portail.github import ErreurGitHub, GitHubApp
+from portail.lanceur import ClientLanceur
 from portail.llm import ClientLLM
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
+from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.schemas import (
     DEPOT_RE,
     Acceptation,
+    CommandeVue,
     Deplacement,
     DocumentOut,
     DonneesTache,
     DonneesTachePartielles,
     EtapeOut,
+    ExecutionIn,
+    ExecutionVue,
     Kanban,
     KanbanToutAccepte,
     PipelineDetail,
@@ -54,6 +64,7 @@ from portail.schemas import (
     SpecCourante,
     TacheVue,
 )
+from portail.suivi_pr import SuiviPR
 from portail.taches import (
     creer_tache,
     deplacer_tache,
@@ -107,7 +118,17 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
                 from_attributes=True,
             )
         )
+    ex = await session.scalar(select(ExecutionDev).where(ExecutionDev.pipeline_id == pipeline_id))
+    commandes = (
+        await session.scalars(
+            select(CommandeLancee)
+            .where(CommandeLancee.pipeline_id == pipeline_id)
+            .order_by(CommandeLancee.id)
+        )
+    ).all()
     return PipelineDetail(
+        execution=ExecutionVue.model_validate(ex, from_attributes=True) if ex else None,
+        commandes=[CommandeVue.model_validate(c, from_attributes=True) for c in commandes],
         id=pipeline.id,
         projet=ProjetRef(id=projet.id, nom=projet.nom),
         type=pipeline.type,
@@ -137,9 +158,19 @@ async def _vues(session: AsyncSession, taches: list[Tache]) -> list[TacheVue]:
             )
         ).all()
     )
+    prs: dict[int, str | None] = {}  # la plus récente exécution de chaque tâche gagne
+    for tid, url in (
+        await session.execute(
+            select(ExecutionDev.tache_id, ExecutionDev.pr_url)
+            .where(ExecutionDev.tache_id.in_(ids))
+            .order_by(ExecutionDev.n, ExecutionDev.id)
+        )
+    ).all():
+        prs[tid] = url
     return [
         TacheVue.model_validate(t, from_attributes=True).model_copy(
             update={
+                "pr_url": prs.get(t.id),
                 "depend_de": deps.get(t.id, []),
                 "dependances_non_terminees": [
                     d for d in deps.get(t.id, []) if colonnes[d] != "terminee"
@@ -166,7 +197,9 @@ async def _kanban(session: AsyncSession, projet_id: int) -> Kanban:
             .order_by(Proposition.id)
         )
     ).all()
+    config = await session.scalar(select(Projet.config_execution).where(Projet.id == projet_id))
     return Kanban(
+        config_execution=bool(config),
         taches=await _vues(session, list(taches)),
         propositions=[PropositionVue.model_validate(p, from_attributes=True) for p in props],
     )
@@ -197,10 +230,62 @@ def _resume(p: Pipeline, nom: str) -> PipelineResume:
     )
 
 
+def _reveiller(request: Request) -> None:
+    if ordonnanceur := request.app.state.ordonnanceur:
+        ordonnanceur.reveiller()
+
+
+async def _annuler(request: Request, s: AsyncSession, pipeline_id: int, clos: bool) -> None:
+    """Un pipeline `dev` passe par l'orchestrateur (même terminé : nettoyage), les autres par le
+    chat, qui refuse un pipeline clos (`clos` : le lui demander quand même). Libère la
+    transaction de `s` avant que le service ouvre la sienne, puis la tâche que le pipeline
+    verrouillait revient « à faire », sans verrou."""
+    p = await s.get(Pipeline, pipeline_id)
+    if p is None:
+        raise Refus(404, "pipeline introuvable")
+    type_, etat = p.type, p.etat
+    await s.rollback()
+    orchestrateur = request.app.state.orchestrateur
+    if type_ == "dev" and orchestrateur:
+        await orchestrateur.annuler(pipeline_id)
+    elif clos or etat not in (Etat.TERMINEE, Etat.ECHOUEE):
+        await request.app.state.chat.annuler(pipeline_id)
+    projet_id = await s.scalar(select(Tache.projet_id).where(Tache.verrou == pipeline_id))
+    if projet_id is None:
+        return
+    # ordre des verrous : projet d'abord, comme partout ailleurs
+    await s.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
+    t = await s.scalar(
+        select(Tache)
+        .where(Tache.verrou == pipeline_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if t is not None:
+        t.verrou = None
+        await deplacer_tache(s, t, "a_faire", None, "nicolas")
+    await s.commit()
+    _reveiller(request)
+
+
+def _orchestrateur(r: Reglages, sessions, catalogue, llm) -> Orchestrateur | None:
+    """Seulement si l'App GitHub et le lanceur sont configurés ; sinon rien, sans erreur."""
+    if not (r.github_app_id and r.github_app_cle and r.lanceur_secret):
+        return None
+    try:
+        github = GitHubApp(r.github_app_id, r.github_app_cle)
+    except ErreurGitHub:
+        logger.exception("App GitHub mal configurée : pas d'ordonnanceur")
+        return None
+    lanceur = ClientLanceur(r.lanceur_url, r.lanceur_secret)
+    return Orchestrateur(sessions, catalogue, llm, lanceur, github, r)
+
+
 def create_app(
     reglages: Reglages | None = None,
     llm: ClientLLM | None = None,
     catalogue: Catalogue | None = None,
+    orchestrateur: Orchestrateur | None = None,
 ) -> FastAPI:
     r = reglages or Reglages()
 
@@ -227,8 +312,22 @@ def create_app(
         app.state.chat = ServiceChat(
             app.state.sessions, app.state.catalogue, app.state.llm, app.state.diffuseur, depots
         )
+        orch = orchestrateur or _orchestrateur(
+            r, app.state.sessions, app.state.catalogue, app.state.llm
+        )
+        app.state.orchestrateur, app.state.ordonnanceur, boucles = orch, None, []
+        if orch:
+            app.state.ordonnanceur = Ordonnanceur(app.state.sessions, orch, r.paralleles_max)
+            await reprendre_interrompues(app.state.sessions, orch, app.state.ordonnanceur.lancer)
+            suivi = SuiviPR(app.state.sessions, orch._github, orch, app.state.ordonnanceur)
+            boucles = [
+                asyncio.create_task(app.state.ordonnanceur.tourner()),
+                asyncio.create_task(suivi.tourner()),
+            ]
         yield
         taches = list(app.state.chat.taches.values())
+        if orch:
+            taches += [*boucles, *orch.taches.values()]
         for t in taches:
             t.cancel()
         await asyncio.gather(*taches, return_exceptions=True)
@@ -290,6 +389,20 @@ def create_app(
         await s.refresh(projet)
         return projet
 
+    @app.put("/api/projets/{projet_id}/execution", response_model=ProjetOut)
+    async def definir_execution(projet_id: int, corps: ExecutionIn, s: Session):
+        projet = await s.get(Projet, projet_id)
+        if projet is None:
+            raise Refus(404, "projet introuvable")
+        if corps.yaml.strip():
+            lire_config(corps.yaml)
+            projet.config_execution = corps.yaml
+        else:
+            projet.config_execution = None
+        await s.commit()
+        await s.refresh(projet)
+        return projet
+
     @app.get("/api/projets/{projet_id}", response_model=ProjetDetail)
     async def lire_projet(projet_id: int, s: Session):
         projet = await s.get(Projet, projet_id)
@@ -305,6 +418,7 @@ def create_app(
         spec = await spec_courante(s, projet_id)
         return ProjetDetail(
             **ProjetOut.model_validate(projet, from_attributes=True).model_dump(),
+            config_execution=projet.config_execution,
             pipelines=[_resume(p, projet.nom) for p in pipelines],
             spec_courante=SpecCourante.model_validate(spec, from_attributes=True) if spec else None,
         )
@@ -337,7 +451,7 @@ def create_app(
 
     @app.post("/api/pipelines/{pipeline_id}/annuler", response_model=PipelineDetail)
     async def annuler(pipeline_id: int, request: Request, s: Session):
-        await request.app.state.chat.annuler(pipeline_id)
+        await _annuler(request, s, pipeline_id, clos=True)
         return await _detail(s, request.app.state.catalogue, pipeline_id)
 
     @app.get("/api/projets/{projet_id}/kanban", response_model=Kanban)
@@ -371,6 +485,7 @@ def create_app(
                 await _fermer(request, s, p.etape_id)
             raise
         await _fermer(request, s, p.etape_id)
+        _reveiller(request)
         return await _kanban(s, p.projet_id)
 
     @app.post("/api/propositions/{proposition_id}/rejeter", response_model=Kanban)
@@ -405,27 +520,31 @@ def create_app(
                     raise
                 perimees += 1
         await _fermer(request, s, etape_id)
+        _reveiller(request)
         k = await _kanban(s, projet_id)
         return KanbanToutAccepte(**k.model_dump(), perimees=perimees)
 
     @app.post("/api/projets/{projet_id}/taches", status_code=201, response_model=TacheVue)
-    async def ajouter_tache(projet_id: int, corps: DonneesTache, s: Session):
+    async def ajouter_tache(projet_id: int, corps: DonneesTache, request: Request, s: Session):
         t = await creer_tache(s, projet_id, corps, "nicolas")
         await s.commit()
+        _reveiller(request)
         return await _vue(s, t.id)
 
     @app.patch("/api/taches/{tache_id}", response_model=TacheVue)
-    async def modifier(tache_id: int, corps: DonneesTachePartielles, s: Session):
+    async def modifier(tache_id: int, corps: DonneesTachePartielles, request: Request, s: Session):
         t = await _tache(s, tache_id)
         await modifier_tache(s, t, corps, "nicolas")
         await s.commit()
+        _reveiller(request)
         return await _vue(s, tache_id)
 
     @app.post("/api/taches/{tache_id}/deplacer", response_model=TacheVue)
-    async def deplacer(tache_id: int, corps: Deplacement, s: Session):
+    async def deplacer(tache_id: int, corps: Deplacement, request: Request, s: Session):
         t = await _tache(s, tache_id)
         await deplacer_tache(s, t, corps.colonne, corps.avant_id, "nicolas")
         await s.commit()
+        _reveiller(request)
         return await _vue(s, tache_id)
 
     @app.delete("/api/taches/{tache_id}", status_code=204)
@@ -437,24 +556,10 @@ def create_app(
     @app.post("/api/taches/{tache_id}/annuler", response_model=TacheVue)
     async def annuler_tache(tache_id: int, request: Request, s: Session):
         t = await _tache(s, tache_id)
-        verrou, projet_id = t.verrou, t.projet_id
+        verrou = t.verrou
         if verrou is None:
             raise Refus(409, "rien à annuler")
-        etat = await s.scalar(select(Pipeline.etat).where(Pipeline.id == verrou))
-        await s.rollback()  # libère la transaction avant que le service ouvre la sienne
-        if etat is not None and etat not in (Etat.TERMINEE, Etat.ECHOUEE):
-            await request.app.state.chat.annuler(verrou)  # même chemin que /pipelines/{id}/annuler
-        # ordre des verrous : projet d'abord, comme partout ailleurs
-        await s.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
-        t = await s.scalar(
-            select(Tache)
-            .where(Tache.id == tache_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
-        t.verrou = None
-        await deplacer_tache(s, t, "a_faire", None, "nicolas")
-        await s.commit()
+        await _annuler(request, s, verrou, clos=False)  # même chemin que /pipelines/{id}/annuler
         return await _vue(s, tache_id)
 
     class MessageIn(BaseModel):

@@ -68,7 +68,12 @@ class SpecCourante(BaseModel):
     maj_le: datetime
 
 
+class ExecutionIn(BaseModel):
+    yaml: str
+
+
 class ProjetDetail(ProjetOut):
+    config_execution: str | None = None
     pipelines: list[PipelineResume]
     spec_courante: SpecCourante | None
 
@@ -112,6 +117,23 @@ class ProjetRef(BaseModel):
     nom: str
 
 
+class ExecutionVue(BaseModel):
+    branche: str
+    phase: str
+    renvois: int
+    pr_url: str | None
+
+
+class CommandeVue(BaseModel):
+    etape_id: int
+    nom: str
+    code: int | None
+    delai_depasse: bool
+    sortie: str
+    debut: datetime
+    fin: datetime
+
+
 class PipelineDetail(BaseModel):
     id: int
     projet: ProjetRef
@@ -119,6 +141,8 @@ class PipelineDetail(BaseModel):
     etat: str
     maj_le: datetime
     etapes: list[EtapeOut]
+    execution: ExecutionVue | None = None
+    commandes: list[CommandeVue] = []
 
 
 COLONNES = ("a_faire", "prete", "en_cours", "en_revue", "terminee", "bloquee")
@@ -178,6 +202,8 @@ class TacheVue(BaseModel):
     maj_le: datetime
     depend_de: list[int] = []
     dependances_non_terminees: list[int] = []
+    pr_url: str | None = None
+    resume_blocage: str | None = None
 
 
 class PropositionVue(BaseModel):
@@ -196,6 +222,7 @@ class PropositionVue(BaseModel):
 
 
 class Kanban(BaseModel):
+    config_execution: bool = False
     taches: list[TacheVue]
     propositions: list[PropositionVue]
 

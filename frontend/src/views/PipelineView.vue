@@ -5,6 +5,7 @@ import {
   type PipelineDetail, type Proposition,
 } from '../api'
 import { ecouterFlux } from '../flux'
+import { duree, lienPrSur, numeroPr } from '../dev'
 import EtatBadge from '../components/EtatBadge.vue'
 import ChatEtape from '../components/ChatEtape.vue'
 import EditeurDocument from '../components/EditeurDocument.vue'
@@ -108,12 +109,27 @@ onBeforeUnmount(() => {
     <p class="discret">
       Projet : <RouterLink :to="`/projets/${pipeline.projet.id}`">{{ pipeline.projet.nom }}</RouterLink>
     </p>
+    <p v-if="pipeline.type === 'dev' && pipeline.execution" class="carte rangee">
+      <span>Branche <code>{{ pipeline.execution.branche }}</code></span>
+      <span>phase {{ pipeline.execution.phase }}</span>
+      <span>renvois {{ pipeline.execution.renvois }}</span>
+      <a v-if="lienPrSur(pipeline.execution.pr_url)" :href="pipeline.execution.pr_url" target="_blank" rel="noopener noreferrer">{{
+        numeroPr(pipeline.execution.pr_url)
+      }}</a>
+    </p>
     <section v-for="(e, i) in pipeline.etapes" :key="e.id" class="carte pile">
       <div class="titre">
         <h2>{{ i + 1 }}. {{ e.agent }}</h2>
         <EtatBadge :etat="e.etat" />
         <small v-if="e.sha">SHA <code>{{ e.sha.slice(0, 7) }}</code></small>
       </div>
+      <details v-for="(c, j) in pipeline.commandes.filter((x) => x.etape_id === e.id)" :key="j">
+        <summary>
+          {{ c.nom }} · code {{ c.code ?? '—' }}<template v-if="c.delai_depasse"> · délai dépassé</template> ·
+          {{ duree(c.debut, c.fin) }}
+        </summary>
+        <pre>{{ c.sortie }}</pre>
+      </details>
       <template v-if="e.etat !== 'a_faire'">
         <EditeurDocument
           v-if="e.document"

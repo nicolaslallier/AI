@@ -1,14 +1,20 @@
-"""Outils en lecture seule confinés à l'arbre d'une étape, et aperçu du dépôt pour l'agent."""
+"""Outils confinés à l'arbre d'une étape ou à l'espace d'une tâche, et aperçu du dépôt."""
 
 import asyncio
 import contextlib
 import fnmatch
+import hashlib
 import inspect
 import json
 import os
+import stat
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Literal
 
 from portail.contexte import estimer_jetons
+from portail.depots import ErreurDepot, git
+from portail.execution import ConfigExecution, correspond
 
 _SECRETS = [".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*", "id_ed25519*"]
 _MAX_ENTREES = 300
@@ -20,6 +26,17 @@ _DELAI_GREP = 30
 _MAX_SORTIE_GREP = 1_000_000
 _MARGE_COMPTE = 900  # lignes lues au-delà de 100 pour estimer le total
 _LECTURE_MAX = 2_000_000  # ponytail: au-delà, lire/apercu ne voient que ce début de fichier
+_ECRITURE_MAX = 200_000
+# dossiers d'artefacts, ignorés par l'empreinte (et par l'espace, tâche 4)
+EXCLUSIONS = [
+    ".venv/",
+    "node_modules/",
+    "__pycache__/",
+    ".pytest_cache/",
+    "target/",
+    "dist/",
+    ".ruff_cache/",
+]
 
 
 def _secret(nom: str) -> bool:
@@ -93,9 +110,32 @@ SCHEMAS_OUTILS: dict[str, dict] = {
 }
 
 
+SCHEMAS_ECRITURE: dict[str, dict] = {
+    "ecrire": _fonction(
+        "ecrire",
+        "Écrit un fichier texte de l'espace (le crée ou le remplace entièrement, "
+        f"{_ECRITURE_MAX} caractères au plus). Les dossiers parents sont créés.",
+        {
+            "chemin": {"type": "string", "description": "Fichier relatif à la racine."},
+            "contenu": {"type": "string", "description": "Contenu complet du fichier."},
+        },
+        ["chemin", "contenu"],
+    ),
+    "supprimer": _fonction(
+        "supprimer",
+        "Supprime un fichier de l'espace (pas un dossier).",
+        {"chemin": {"type": "string", "description": "Fichier relatif à la racine."}},
+        ["chemin"],
+    ),
+}
+
+
 class OutilsDepot:
     def __init__(self, racine: Path):
         self.racine = Path(racine).resolve()
+
+    def schemas(self) -> list[dict]:
+        return list(SCHEMAS_OUTILS.values())
 
     def _resoudre(self, chemin: str) -> Path:
         if not isinstance(chemin, str):
@@ -105,7 +145,7 @@ class OutilsDepot:
             raise _Interdit
         try:
             resolu = (self.racine / brut).resolve()
-        except (ValueError, OSError):
+        except (ValueError, OSError, RuntimeError):  # 3.12 : RuntimeError sur une boucle de liens
             raise _Interdit from None
         try:
             rel = resolu.relative_to(self.racine)
@@ -253,7 +293,8 @@ class OutilsDepot:
             args = json.loads(arguments or "{}")
         except (ValueError, RecursionError):
             return "erreur : arguments JSON invalides", True
-        if nom not in SCHEMAS_OUTILS or not isinstance(args, dict):
+        noms = {s["function"]["name"] for s in self.schemas()}
+        if nom not in noms or not isinstance(args, dict):
             return f"erreur : outil inconnu ou arguments invalides : {nom}", True
         fn = getattr(self, nom)
         try:
@@ -261,11 +302,136 @@ class OutilsDepot:
         except TypeError:
             return f"erreur : arguments manquants ou inattendus pour {nom}", True
         try:
-            if nom == "chercher":
-                return await self.chercher(**args), False
-            return getattr(self, nom)(**args), False
-        except (ValueError, OSError) as e:
+            resultat = fn(**args)
+            if inspect.isawaitable(resultat):
+                resultat = await resultat
+            return resultat, False
+        except OSError as e:  # sans le message complet : il contient des chemins de l'hôte
+            return f"erreur : {e.strerror or type(e).__name__}", False
+        except ValueError as e:
             return f"erreur : {e}", False
+
+
+class OutilsEspace(OutilsDepot):
+    """Outils d'un agent de dev : lecture, plus écriture et commandes nommées selon le rôle."""
+
+    def __init__(
+        self,
+        racine: Path,
+        role: Literal["tests", "code", "revue"],
+        cfg: ConfigExecution,
+        lancer: Callable[[str], Awaitable[str]],
+    ):
+        super().__init__(racine)
+        self.role = role
+        self.cfg = cfg
+        self._lancer = lancer
+        self._commandes = [n for n in cfg.commandes if n != "installer"]
+
+    def schemas(self) -> list[dict]:
+        schemas = super().schemas()
+        if self.role == "revue":
+            return schemas
+        lancer = _fonction(
+            "lancer",
+            "Lance une commande nommée de la configuration du projet dans un conteneur jetable "
+            "et rend son code de sortie puis sa sortie.",
+            {"nom": {"type": "string", "enum": self._commandes, "description": "Commande."}},
+            ["nom"],
+        )
+        return [*schemas, *SCHEMAS_ECRITURE.values(), lancer]
+
+    async def _cible(self, chemin: str, lien: bool = False) -> tuple[Path, str] | str:
+        """Chemin résolu et relatif, ou le message d'erreur si l'écriture est refusée.
+
+        Avec `lien`, un lien symbolique en dernière composante est gardé tel quel (pas suivi).
+        """
+        try:
+            cible = None
+            if lien and isinstance(chemin, str):
+                brut = Path(chemin)
+                parent = self._resoudre(str(brut.parent))
+                if brut.name not in ("", ".", "..") and (parent / brut.name).is_symlink():
+                    cible = parent / brut.name
+            cible = cible or self._resoudre(chemin)
+        except _Interdit:
+            return "erreur : chemin interdit"
+        rel = cible.relative_to(self.racine)
+        if _est_git(rel.parts):
+            return "erreur : chemin interdit"
+        if _secret_chemin(rel.parts) or _secret_chemin(Path(chemin).parts):
+            return "erreur : fichier secret refusé"
+        # dossiers d'artefacts : jamais commités ni relus, mais chargés par les commandes
+        artefacts = {e.rstrip("/").casefold() for e in EXCLUSIONS}
+        for partie in (*rel.parts, *Path(chemin).parts):
+            if partie.casefold() in artefacts:
+                return f"erreur : écriture interdite dans {partie}"
+        # ignoré par git (venv/, build/…) : chargé par les commandes, jamais vu au diff
+        try:  # « ./ » devant : aucune magie de pathspec (« :(top)… ») n'est reconnue
+            ignore = await git(
+                "check-ignore", "--", f"./{rel.as_posix()}",
+                cwd=self.racine, codes=(0, 1), litteral=False,
+            )  # fmt: skip
+        except ErreurDepot:  # échoue fermé ; le message de git contient des chemins de l'hôte
+            return "erreur : chemin refusé (vérification git impossible)"
+        if ignore:
+            return "erreur : écriture interdite dans un chemin ignoré par git"
+        # la règle de rôle porte sur le chemin résolu : un lien ne la contourne pas
+        protege = correspond(rel.as_posix(), self.cfg.protege)
+        permis = protege if self.role == "tests" else self.role == "code" and not protege
+        if not permis:
+            return f"erreur : écriture interdite pour le rôle {self.role}"
+        return cible, rel.as_posix()
+
+    async def ecrire(self, chemin: str, contenu: str) -> str:
+        if not isinstance(contenu, str):
+            return "erreur : contenu invalide : du texte est attendu"
+        if len(contenu) > _ECRITURE_MAX:
+            return f"erreur : contenu trop long ({_ECRITURE_MAX} caractères au plus)"
+        cible = await self._cible(chemin)
+        if isinstance(cible, str):
+            return cible
+        fichier, rel = cible
+        if fichier.is_dir():
+            return "erreur : c'est un dossier"
+        if fichier.exists() and fichier.stat().st_nlink > 1:  # écrire modifierait l'autre nom
+            return "erreur : fichier à plusieurs liens physiques refusé"
+        fichier.parent.mkdir(parents=True, exist_ok=True)
+        fichier.write_text(contenu, encoding="utf-8")
+        return f"écrit : {rel}"
+
+    async def supprimer(self, chemin: str) -> str:
+        cible = await self._cible(chemin, lien=True)
+        if isinstance(cible, str):
+            return cible
+        fichier, rel = cible
+        if not fichier.is_symlink() and not fichier.is_file():
+            return "erreur : fichier introuvable"
+        fichier.unlink()
+        return f"supprimé : {rel}"
+
+    async def lancer(self, nom: str) -> str:
+        if nom not in self._commandes:
+            return f"erreur : commande inconnue : {nom}"
+        return await self._lancer(nom)
+
+
+def empreinte(racine: Path, motifs: list[str]) -> dict[str, str]:
+    """SHA-256 des fichiers réguliers qui correspondent aux motifs, sans suivre aucun lien."""
+    racine = Path(racine)
+    sortie: dict[str, str] = {}
+    for dossier, dossiers, fichiers in os.walk(racine, followlinks=False):
+        dossiers[:] = sorted(
+            d for d in dossiers if d.casefold() != ".git" and d + "/" not in EXCLUSIONS
+        )
+        for nom in sorted(fichiers):
+            chemin = Path(dossier) / nom
+            rel = chemin.relative_to(racine).as_posix()
+            if not correspond(rel, motifs) or not stat.S_ISREG(chemin.lstat().st_mode):
+                continue
+            with chemin.open("rb") as f:
+                sortie[rel] = hashlib.file_digest(f, "sha256").hexdigest()
+    return sortie
 
 
 def apercu(racine: Path, budget_jetons: int) -> str:

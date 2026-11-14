@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { creerPipeline, lireProjet, modifierProjet, type ProjetDetail } from '../api'
 import { rendreMarkdown } from '../markdown'
+import ConfigExecution from '../components/ConfigExecution.vue'
 import EtatBadge from '../components/EtatBadge.vue'
 
 const props = defineProps<{ id: string }>()
@@ -76,6 +77,10 @@ onMounted(charger)
         <label>Branche de référence <input v-model="branche" placeholder="branche par défaut" /></label>
         <button>Enregistrer le dépôt</button>
       </form>
+    </section>
+    <section class="carte pile">
+      <h2>Exécution</h2>
+      <ConfigExecution :projet-id="projet.id" :config="projet.config_execution" @enregistre="charger" />
     </section>
     <h2>Pipelines</h2>
     <div class="pile">

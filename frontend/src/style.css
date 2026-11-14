@@ -84,6 +84,7 @@ fieldset { border: 1px solid var(--bord); border-radius: 0.55rem; }
 
 /* Messages et états */
 .erreur { color: var(--danger); background: var(--rouge-doux); padding: 0.5rem 0.9rem; border-radius: 0.55rem; margin: 0; }
+.alerte { color: var(--alerte); background: var(--jaune-doux); padding: 0.5rem 0.9rem; border-radius: 0.55rem; margin: 0; }
 .badge { display: inline-block; padding: 0.1rem 0.6rem; border-radius: 999px; font-size: 0.8rem; font-weight: 500; background: var(--gris-doux); white-space: nowrap; }
 .badge.en_cours { background: var(--bleu-doux); }
 .badge.en_attente { background: var(--jaune-doux); }

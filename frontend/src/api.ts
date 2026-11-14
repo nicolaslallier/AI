@@ -20,6 +20,7 @@ export interface SpecCourante {
   maj_le: string
 }
 export interface ProjetDetail extends Projet {
+  config_execution: string | null
   pipelines: PipelineResume[]
   spec_courante: SpecCourante | null
 }
@@ -54,6 +55,8 @@ export interface Tache {
   maj_le: string
   depend_de: number[]
   dependances_non_terminees: number[]
+  pr_url: string | null
+  resume_blocage: string | null
 }
 export interface DonneesTache {
   titre: string
@@ -77,6 +80,7 @@ export interface Proposition {
   cree_le: string
 }
 export interface Kanban {
+  config_execution: boolean
   taches: Tache[]
   propositions: Proposition[]
 }
@@ -109,6 +113,17 @@ export interface PipelineDetail {
   etat: string
   maj_le: string
   etapes: Etape[]
+  execution: { branche: string; phase: string; renvois: number; pr_url: string | null } | null
+  commandes: Commande[]
+}
+export interface Commande {
+  etape_id: number
+  nom: string
+  code: number | null
+  delai_depasse: boolean
+  sortie: string
+  debut: string
+  fin: string
 }
 
 export class ErreurApi extends Error {
@@ -154,6 +169,9 @@ export const modifierProjet = (
   champs: Partial<Pick<Projet, 'nom' | 'description' | 'depot_url' | 'branche_ref'>>,
 ) => appel<Projet>('PATCH', `/projets/${id}`, champs)
 export const lireProjet = (id: number) => appel<ProjetDetail>('GET', `/projets/${id}`)
+
+export const definirExecution = (id: number, yaml: string) =>
+  appel<Projet>('PUT', `/projets/${id}/execution`, { yaml })
 
 export const lireKanban = (projetId: number) => appel<Kanban>('GET', `/projets/${projetId}/kanban`)
 

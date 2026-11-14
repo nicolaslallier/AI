@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from portail.agents import Agent
 from portail.contexte import elaguer_resultats_outils
 from portail.llm import retirer_reflexion
-from portail.outils import SCHEMAS_OUTILS, OutilsDepot
+from portail.outils import OutilsDepot
 
 _LIMITE = "Limite d'outils atteinte : conclus maintenant avec ce que tu as, sans appeler d'outil."
 _MAL_FORMES_MAX = 3
@@ -47,7 +47,8 @@ async def boucle_outils(
 ) -> ResultatBoucle:
     if not agent.outils:
         raise ErreurOutils(f"l'agent « {agent.nom} » n'a aucun outil")
-    schemas = [SCHEMAS_OUTILS[n] for n in agent.outils]
+    offerts = {s["function"]["name"]: s for s in outils.schemas()}
+    schemas = [offerts[n] for n in agent.outils if n in offerts]
     mal_formes = 0
     ids: set[str] = set()
     for _ in range(agent.tours_max):

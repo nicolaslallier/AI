@@ -17,10 +17,11 @@ class Agent(BaseModel):
     contexte_max: int = Field(gt=0)
     temperature: float | None = None
     consigne_redaction: str | None = None
-    produit: Literal["spec", "plan", "taches"] = "spec"
+    produit: Literal["spec", "plan", "taches", "travail", "verdict"] = "spec"
     auto: bool = False
-    outils: list[Literal["lister", "lire", "chercher"]] = []
+    outils: list[Literal["lister", "lire", "chercher", "ecrire", "supprimer", "lancer"]] = []
     tours_max: int = Field(default=20, gt=0)
+    role: Literal["tests", "code", "revue"] | None = None
 
     @model_validator(mode="after")
     def _coherent(self):
@@ -28,6 +29,15 @@ class Agent(BaseModel):
             raise ValueError(f"l'agent « {self.nom} » est auto : consigne_redaction requise")
         if self.produit == "taches" and self.outils:
             raise ValueError(f"l'agent « {self.nom} » produit des tâches : pas d'outils")
+        if self.produit == "travail" and (self.role is None or "lancer" not in self.outils):
+            raise ValueError(f"l'agent « {self.nom} » produit du travail : role et lancer requis")
+        if self.produit == "verdict" and (
+            self.role != "revue" or {"ecrire", "supprimer", "lancer"} & set(self.outils)
+        ):
+            raise ValueError(
+                f"l'agent « {self.nom} » produit un verdict : role revue, sans ecrire, "
+                "supprimer ni lancer"
+            )
         return self
 
 

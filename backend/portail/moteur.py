@@ -36,6 +36,8 @@ async def creer_pipeline(
     session: AsyncSession, catalogue: Catalogue, projet_id: int, type_: str
 ) -> tuple[Pipeline, Etape | None]:
     """Renvoie le pipeline et l'étape à lancer (agent auto), à lancer après le commit."""
+    if type_ == "dev":  # créé par l'orchestrateur seul, depuis une tâche Prête
+        raise Refus(422, "un pipeline dev se lance depuis une tâche Prête du kanban")
     if type_ not in catalogue.pipelines:
         raise Refus(404, f"type de pipeline inconnu : {type_}")
     if type_ == "planification":
@@ -127,7 +129,13 @@ async def annuler_pipeline(session: AsyncSession, pipeline: Pipeline) -> None:
 
 
 async def recuperer_interrompues(session: AsyncSession) -> int:
-    etapes = (await session.scalars(select(Etape).where(Etape.etat == Etat.EN_COURS))).all()
+    etapes = (
+        await session.scalars(
+            select(Etape)
+            .join(Pipeline, Pipeline.id == Etape.pipeline_id)
+            .where(Etape.etat == Etat.EN_COURS, Pipeline.type != "dev")  # dev : son orchestrateur
+        )
+    ).all()
     for e in etapes:
         await changer_etat(session, e, Etat.ECHOUEE, "interrompue par un redémarrage du serveur")
     return len(etapes)

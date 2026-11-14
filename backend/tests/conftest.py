@@ -1,6 +1,8 @@
 import asyncio
 import os
 import subprocess
+from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -12,6 +14,7 @@ from portail.agents import Agent, Catalogue
 from portail.api import create_app
 from portail.config import Reglages
 from portail.db import Base, creer_moteur, fabrique_sessions
+from portail.lanceur import Resultat
 
 URL = os.environ.get(
     "PORTAIL_TEST_DATABASE_URL", "postgresql+psycopg://portail:portail@localhost:5433/portail_test"
@@ -154,3 +157,111 @@ def depot_origine(tmp_path):
     git(o, "add", "README.md")
     git(o, "commit", "-m", "init")
     return o
+
+
+# --- lanceur -----------------------------------------------------------
+
+
+class FauxLanceur:
+    """Même interface que ClientLanceur. L'espace `e` est le dossier `dossier / e`."""
+
+    def __init__(self, dossier: Path):
+        self.dossier = Path(dossier)
+        self.codes: dict[str, list[int]] = {}  # rendus tour à tour par commande exacte, 0 sinon
+        self.effets: dict[str, Callable[[Path], None]] = {}  # appliqués au dossier de l'espace
+        self.delais: set[str] = set()  # commandes exactes qui dépassent leur délai
+        self.appels: list[dict] = []
+
+    async def lancer(self, espace, image, commande, delai_s, lecture_seule) -> Resultat:
+        self.appels.append(
+            {
+                "route": "lancer", "espace": espace, "image": image, "commande": commande,
+                "delai_s": delai_s, "lecture_seule": list(lecture_seule),
+            }
+        )  # fmt: skip
+        if commande in self.effets:
+            self.effets[commande](self.dossier / espace)
+        if commande in self.delais:
+            sortie = f"sortie de {commande}\n[délai dépassé : {delai_s} s]"
+            return Resultat(code=None, sortie=sortie, delai_depasse=True)
+        codes = self.codes.get(commande)
+        code = codes.pop(0) if codes else 0
+        return Resultat(code=code, sortie=f"sortie de {commande}", delai_depasse=False)
+
+    async def services(self, espace, services) -> None:
+        self.appels.append({"route": "services", "espace": espace, "services": list(services)})
+
+    async def arreter(self, espace) -> None:
+        self.appels.append({"route": "arreter", "espace": espace})
+
+    async def nettoyer(self, espace) -> None:
+        self.appels.append({"route": "nettoyer", "espace": espace})
+
+
+@pytest.fixture
+def faux_lanceur(tmp_path):
+    return FauxLanceur(tmp_path / "espaces")
+
+
+# --- GitHub ------------------------------------------------------------
+
+
+class FauxGitHub:
+    """Même interface async que GitHubApp, état en mémoire.
+
+    - `branche_defaut_nom` : branche par défaut rendue (« main ») ;
+    - `protegee` : ensemble des branches protégées (par défaut `{"main"}`) ;
+    - `prs` : numéro -> {"branche", "base", "titre", "corps", "url"} (créées en brouillon) ;
+    - `etats` : numéro -> "ouverte" | "fusionnee" | "fermee" (les tests le modifient) ;
+    - `commentaires` : liste de (numéro, texte) ;
+    - `erreur` : si renseignée, toute méthode lève cette ErreurGitHub.
+    """
+
+    def __init__(self):
+        self.branche_defaut_nom = "main"
+        self.protegee: set[str] = {"main"}
+        self.prs: dict[int, dict] = {}
+        self.etats: dict[int, str] = {}
+        self.commentaires: list[tuple[int, str]] = []
+        self.erreur: Exception | None = None
+
+    def _verifier(self):
+        if self.erreur:
+            raise self.erreur
+
+    async def jeton(self, depot) -> str:
+        self._verifier()
+        return ""
+
+    async def branche_defaut(self, depot) -> str:
+        self._verifier()
+        return self.branche_defaut_nom
+
+    async def branche_protegee(self, depot, branche) -> bool:
+        self._verifier()
+        return branche in self.protegee
+
+    async def creer_pr(self, depot, branche, base, titre, corps) -> tuple[int, str]:
+        self._verifier()
+        n = len(self.prs) + 1
+        url = f"https://github.com/{depot}/pull/{n}"
+        self.prs[n] = {"branche": branche, "base": base, "titre": titre, "corps": corps, "url": url}
+        self.etats[n] = "ouverte"
+        return n, url
+
+    async def etat_pr(self, depot, numero) -> str:
+        self._verifier()
+        return self.etats[numero]
+
+    async def commenter(self, depot, numero, texte) -> None:
+        self._verifier()
+        self.commentaires.append((numero, texte))
+
+    async def fermer_pr(self, depot, numero) -> None:
+        self._verifier()
+        self.etats[numero] = "fermee"
+
+
+@pytest.fixture
+def faux_github():
+    return FauxGitHub()

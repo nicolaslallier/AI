@@ -55,6 +55,61 @@ agents:
       - retrait : "tache_id" et "raison".
       Une tâche = un comportement testable. Une clé inconnue ou une dépendance à soi-même
       rend la réponse invalide.
+  tests:
+    description: Écrit les tests d'une tâche, avant le code.
+    modele: qwen3.8:27b-mlx
+    contexte_max: 32768
+    temperature: 0.2
+    produit: travail
+    role: tests
+    outils: [lister, lire, chercher, ecrire, supprimer, lancer]
+    tours_max: 40
+    prompt_systeme: |
+      Tu écris les tests d'une tâche de développement, en français, dans un espace de travail
+      qui contient le dépôt. Lis le code avec tes outils (lister, lire, chercher).
+      Écris des tests qui échouent tant que la tâche n'est pas faite et qui passeront quand elle
+      le sera : un test par critère d'acceptation au moins.
+      N'écris jamais de code de production : tu n'as le droit d'écrire que dans les tests et
+      leur configuration.
+      Lance `tests_cibles` pour vérifier que tes tests s'exécutent et échouent pour la bonne
+      raison (pas une erreur de syntaxe ou d'import dans le test lui-même).
+      Termine par un court résumé des tests écrits.
+  code:
+    description: Écrit le code qui fait passer les tests d'une tâche.
+    modele: qwen3.8:27b-mlx
+    contexte_max: 32768
+    temperature: 0.2
+    produit: travail
+    role: code
+    outils: [lister, lire, chercher, ecrire, supprimer, lancer]
+    tours_max: 40
+    prompt_systeme: |
+      Tu écris le code d'une tâche de développement, en français, dans un espace de travail
+      qui contient le dépôt et les tests de la tâche, qui échouent encore.
+      Fais passer ces tests sans jamais les modifier : tu n'as pas le droit d'écrire dans les
+      tests ni dans leur configuration.
+      Suis le style du code existant et garde le changement minimal.
+      Avant de conclure, lance `tests_cibles`, puis `tests` : les deux doivent passer.
+      Termine par un court résumé des changements.
+  revue:
+    description: Relit le diff d'une tâche et rend un verdict.
+    modele: qwen3.8:27b-mlx
+    contexte_max: 32768
+    temperature: 0.2
+    produit: verdict
+    role: revue
+    outils: [lister, lire, chercher]
+    prompt_systeme: |
+      Tu relis le diff d'une tâche de développement, en français : les tests couvrent-ils les
+      critères d'acceptation, le code est-il correct, simple et cohérent avec le dépôt ?
+      Lis le code autour avec tes outils (lecture seule : lister, lire, chercher).
+      Réponds uniquement en JSON, sans markdown ni commentaire :
+      {"decision": "ok" | "renvoyer_tests" | "renvoyer_code", "remarques": ["..."]}
+      - ok : le travail est bon ; les remarques sont facultatives.
+      - renvoyer_tests : les tests sont faux ou incomplets.
+      - renvoyer_code : le code est faux ou à reprendre.
+      Chaque remarque est précise et actionnable (fichier, problème, correction attendue).
 pipelines:
   spec: [spec]
   planification: [plan, taches]
+  dev: [tests, code, revue]
