@@ -197,3 +197,63 @@ class FauxLanceur:
 @pytest.fixture
 def faux_lanceur(tmp_path):
     return FauxLanceur(tmp_path / "espaces")
+
+
+# --- GitHub ------------------------------------------------------------
+
+
+class FauxGitHub:
+    """Même interface async que GitHubApp, état en mémoire.
+
+    - `branche_defaut_nom` : branche par défaut rendue (« main ») ;
+    - `protegee` : ensemble des branches protégées (par défaut `{"main"}`) ;
+    - `prs` : numéro -> {"branche", "base", "titre", "corps", "url"} (créées en brouillon) ;
+    - `etats` : numéro -> "ouverte" | "fusionnee" | "fermee" (les tests le modifient) ;
+    - `commentaires` : liste de (numéro, texte) ;
+    - `erreur` : si renseignée, toute méthode lève cette ErreurGitHub.
+    """
+
+    def __init__(self):
+        self.branche_defaut_nom = "main"
+        self.protegee: set[str] = {"main"}
+        self.prs: dict[int, dict] = {}
+        self.etats: dict[int, str] = {}
+        self.commentaires: list[tuple[int, str]] = []
+        self.erreur: Exception | None = None
+
+    def _verifier(self):
+        if self.erreur:
+            raise self.erreur
+
+    async def branche_defaut(self, depot) -> str:
+        self._verifier()
+        return self.branche_defaut_nom
+
+    async def branche_protegee(self, depot, branche) -> bool:
+        self._verifier()
+        return branche in self.protegee
+
+    async def creer_pr(self, depot, branche, base, titre, corps) -> tuple[int, str]:
+        self._verifier()
+        n = len(self.prs) + 1
+        url = f"https://github.com/{depot}/pull/{n}"
+        self.prs[n] = {"branche": branche, "base": base, "titre": titre, "corps": corps, "url": url}
+        self.etats[n] = "ouverte"
+        return n, url
+
+    async def etat_pr(self, depot, numero) -> str:
+        self._verifier()
+        return self.etats[numero]
+
+    async def commenter(self, depot, numero, texte) -> None:
+        self._verifier()
+        self.commentaires.append((numero, texte))
+
+    async def fermer_pr(self, depot, numero) -> None:
+        self._verifier()
+        self.etats[numero] = "fermee"
+
+
+@pytest.fixture
+def faux_github():
+    return FauxGitHub()
