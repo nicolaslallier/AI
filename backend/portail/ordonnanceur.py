@@ -123,11 +123,14 @@ class Ordonnanceur:
             tache.resume_blocage = raison
             titre = tache.titre
             await s.commit()
-        await self._orch.notifier(
-            titre,
-            "Bloquée : " + raison_courte(raison),
-            self._orch.lien(f"/projets/{projet_id}/kanban"),
-        )
+        try:
+            await self._orch.notifier(
+                titre,
+                "Bloquée : " + raison_courte(raison),
+                self._orch.lien(f"/projets/{projet_id}/kanban"),
+            )
+        except Exception as e:  # noqa: BLE001 — jamais str(e) : pas de fuite
+            logger.warning("ordonnanceur : notification impossible (%s)", type(e).__name__)
 
     async def tourner(self) -> None:
         while True:
