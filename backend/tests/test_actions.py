@@ -169,3 +169,16 @@ async def test_confirmer_refus_du_portail(sessions):
         assert (await s.get(Tache, t.id)).colonne == "a_faire"
         types = (await s.scalars(select(TacheEvenement.type))).all()
     assert types == ["creation"]
+
+
+@pytest.mark.parametrize("mauvais", [2**40, 0, -1, True, "3"])
+async def test_valider_ids_hors_bornes(sessions, mauvais):
+    async with sessions() as s:
+        pid = await _projet(s)
+        t = await _tache(s, pid)
+        await _refus(s, "lancer_pipeline", {"projet_id": mauvais, "type": "spec"})
+        await _refus(s, "deplacer_tache", {"tache_id": mauvais, "colonne": "prete"})
+        await _refus(s, "creer_tache", {"projet_id": pid, "titre": "T", "depend_de": [mauvais]})
+        await _refus(s, "modifier_tache", {"tache_id": t.id, "depend_de": [mauvais]})
+        await _refus(s, "modifier_tache", {"tache_id": t.id, "depend_de": None})
+        assert (await s.get(Tache, t.id)).colonne == "a_faire"  # transaction toujours utilisable

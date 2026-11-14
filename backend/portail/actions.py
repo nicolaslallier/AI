@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +12,7 @@ from portail.schemas import (
     COLONNES,
     DonneesTache,
     DonneesTachePartielles,
+    Id,
     PipelineIn,
     ProjetIn,
     verifier_depot,
@@ -22,31 +23,37 @@ AUTEUR = "nicolas"
 
 
 class DeposerSpec(BaseModel):
-    projet_id: int
+    projet_id: Id
     contenu: str
 
 
+class LancerPipeline(PipelineIn):
+    projet_id: Id
+
+
 class CreerTache(DonneesTache):
-    projet_id: int
+    projet_id: Id
+    depend_de: list[Id] = Field(default_factory=list)
 
 
 class ModifierTache(DonneesTachePartielles):
-    tache_id: int
+    tache_id: Id
+    depend_de: list[Id] | None = None
 
 
 class DeplacerTache(BaseModel):
-    tache_id: int
+    tache_id: Id
     colonne: str
 
 
 class AnnulerTache(BaseModel):
-    tache_id: int
+    tache_id: Id
 
 
 ACTIONS: dict[str, type[BaseModel]] = {
     "creer_projet": ProjetIn,
     "deposer_spec": DeposerSpec,
-    "lancer_pipeline": PipelineIn,
+    "lancer_pipeline": LancerPipeline,
     "creer_tache": CreerTache,
     "modifier_tache": ModifierTache,
     "deplacer_tache": DeplacerTache,

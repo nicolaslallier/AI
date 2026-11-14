@@ -1,22 +1,18 @@
 """Outils de lecture du portail (projets, pipelines, kanban) pour l'agent orchestrateur."""
 
 import json
-from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from portail.db import Etape, Pipeline, Projet, Tache
 from portail.moteur import spec_courante
 from portail.outils import _fonction
-from portail.schemas import COLONNES
+from portail.schemas import COLONNES, Id
 
 _MAX_SORTIE = 8_000
 _MAX_SPEC = 3_000
-
-
-_Id = Annotated[int, Field(strict=True, ge=1, le=2**31 - 1)]
 
 
 class _Args(BaseModel):
@@ -28,15 +24,15 @@ class _Vide(_Args):
 
 
 class _ProjetId(_Args):
-    projet_id: _Id
+    projet_id: Id
 
 
 class _PipelineId(_Args):
-    pipeline_id: _Id
+    pipeline_id: Id
 
 
 class _Pipelines(_Args):
-    projet_id: _Id | None = None
+    projet_id: Id | None = None
     etat: str | None = None
 
 
