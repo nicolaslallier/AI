@@ -186,3 +186,29 @@ async def test_dependances_non_terminees(client):
     vues = {t["id"]: t for t in (await _kanban(client, pid))["taches"]}
     assert vues[b["id"]]["dependances_non_terminees"] == []
     assert (await _kanban(client, pid))["propositions"] == []
+
+
+async def test_deplacements_concurrents_colonne_vide(client, sessions):
+    pid = await _projet(client)
+    a, b = await _agent(sessions, pid, "A"), await _agent(sessions, pid, "B")
+    async with sessions() as s:
+        (await s.get(Tache, b)).colonne = "en_cours"
+        await s.commit()
+
+    async def bouger(tid):
+        async with sessions() as s:
+            t = await s.get(Tache, tid)
+            await deplacer_tache(s, t, "prete", None, "nicolas")
+            await asyncio.sleep(0.1)
+            await s.commit()
+
+    await asyncio.gather(bouger(a), bouger(b))
+    prete = [t for t in (await _kanban(client, pid))["taches"] if t["colonne"] == "prete"]
+    assert sorted(t["rang"] for t in prete) == [1000, 2000]
+
+
+async def test_patch_null_refuse(client):
+    pid = await _projet(client)
+    t = await _tache(client, pid)
+    r = await client.patch(f"/api/taches/{t['id']}", json={"criteres": None})
+    assert r.status_code == 422

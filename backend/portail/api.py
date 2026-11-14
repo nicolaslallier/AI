@@ -53,11 +53,9 @@ from portail.schemas import (
 )
 from portail.taches import (
     creer_tache,
-    definir_dependances,  # noqa: F401
     deplacer_tache,
     modifier_tache,
     supprimer_tache,
-    verifier_modifiable,  # noqa: F401
 )
 
 logger = logging.getLogger(__name__)
@@ -136,9 +134,8 @@ async def _vues(session: AsyncSession, taches: list[Tache]) -> list[TacheVue]:
         ).all()
     )
     return [
-        TacheVue.model_validate(
-            {
-                **{c: getattr(t, c) for c in TacheVue.model_fields if hasattr(t, c)},
+        TacheVue.model_validate(t, from_attributes=True).model_copy(
+            update={
                 "depend_de": deps.get(t.id, []),
                 "dependances_non_terminees": [
                     d for d in deps.get(t.id, []) if colonnes[d] != "terminee"

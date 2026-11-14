@@ -123,7 +123,7 @@ COLONNES = ("a_faire", "prete", "en_cours", "en_revue", "terminee", "bloquee")
 
 def _titre_valide(v: str | None) -> str | None:
     if v is None:
-        return v
+        raise ValueError("le titre ne peut pas être nul")
     v = v.strip()
     if not 1 <= len(v) <= 200:
         raise ValueError("le titre doit faire de 1 à 200 caractères")
@@ -149,6 +149,13 @@ class DonneesTachePartielles(BaseModel):
 
     _titre = field_validator("titre")(_titre_valide)
 
+    @field_validator("description", "criteres", "fichiers", "depend_de")
+    @classmethod
+    def _pas_nul(cls, v):
+        if v is None:
+            raise ValueError("valeur nulle interdite")
+        return v
+
 
 class TacheVue(BaseModel):
     id: int
@@ -166,8 +173,8 @@ class TacheVue(BaseModel):
     version: int
     cree_le: datetime
     maj_le: datetime
-    depend_de: list[int]
-    dependances_non_terminees: list[int]
+    depend_de: list[int] = []
+    dependances_non_terminees: list[int] = []
 
 
 class PropositionVue(BaseModel):

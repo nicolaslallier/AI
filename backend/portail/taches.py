@@ -30,7 +30,9 @@ def _journal(session, t: Tache, type_: str, auteur: str, donnees: dict) -> None:
 
 
 async def _verrouiller_colonnes(session, projet_id: int, colonnes: set[str]) -> list[Tache]:
-    """Verrouille les lignes des colonnes, triées par id : deux déplacements se sérialisent."""
+    """Verrouille le projet puis les lignes des colonnes (par id) : les écritures du tableau se
+    sérialisent par projet, même vers une colonne vide."""
+    await session.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
     return list(
         (
             await session.scalars(
@@ -42,6 +44,12 @@ async def _verrouiller_colonnes(session, projet_id: int, colonnes: set[str]) -> 
             )
         ).all()
     )
+
+
+async def _verrouiller_tache(session, tache: Tache) -> None:
+    """Verrou du projet, puis relecture : colonne et verrou lus après l'attente sont à jour."""
+    await session.scalar(select(Projet.id).where(Projet.id == tache.projet_id).with_for_update())
+    await session.refresh(tache)
 
 
 def _renumeroter(taches: list[Tache]) -> None:
@@ -80,10 +88,9 @@ async def creer_tache(
 async def modifier_tache(
     session: AsyncSession, tache: Tache, donnees: DonneesTachePartielles, auteur: str
 ) -> Tache:
+    await _verrouiller_tache(session, tache)
     verifier_modifiable(tache)
     change = {c: getattr(donnees, c) for c in donnees.model_fields_set if c in CHAMPS}
-    if any(v is None for v in change.values()):
-        raise Refus(422, "valeur nulle interdite")
     for c, v in change.items():
         setattr(tache, c, v)
     if donnees.depend_de is not None:
@@ -100,6 +107,7 @@ async def modifier_tache(
 async def deplacer_tache(
     session: AsyncSession, tache: Tache, colonne: str, avant_id: int | None, auteur: str
 ) -> None:
+    await _verrouiller_tache(session, tache)
     verifier_modifiable(tache)
     source = tache.colonne
     lignes = await _verrouiller_colonnes(session, tache.projet_id, {colonne, source})
@@ -129,6 +137,7 @@ async def deplacer_tache(
 
 
 async def supprimer_tache(session: AsyncSession, tache: Tache, auteur: str) -> None:
+    await _verrouiller_tache(session, tache)
     verifier_modifiable(tache)
     deps = await _dependances(session, tache.id)
     _journal(session, tache, "suppression", auteur, {**_copie(tache), "depend_de": deps})
