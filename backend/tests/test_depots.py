@@ -1,3 +1,4 @@
+import base64
 import subprocess
 from pathlib import Path
 
@@ -110,10 +111,12 @@ async def test_depot_injoignable(depots):
 
 async def test_jeton_jamais_ecrit(origine, tmp_path):
     d = Depots(tmp_path / "donnees", "SECRET123")
+    b64 = base64.b64encode(b"x-access-token:SECRET123").decode()
     await d.preparer(1, url(origine), "main", 10, None)
     for f in (tmp_path / "donnees" / "depots").rglob("*"):
         if f.is_file():
             assert b"SECRET123" not in f.read_bytes()
+            assert b64.encode() not in f.read_bytes()
     with pytest.raises(ErreurDepot) as exc:
         await d.preparer(2, "file:///nexiste/pas", "main", 11, None)
     assert "SECRET123" not in str(exc.value)
@@ -130,3 +133,21 @@ async def test_nettoyer_garde_seulement_les_etapes_demandees(origine, depots, tm
 
 async def test_liberer_sans_arbre(depots):
     await depots.liberer(99)
+
+
+def test_scrub_retire_jeton_et_base64(tmp_path):
+    d = Depots(tmp_path, "SECRET123")
+    b64 = base64.b64encode(b"x-access-token:SECRET123").decode()
+    sortie = d._scrub(f"Authorization: Basic {b64} et SECRET123")
+    assert "SECRET123" not in sortie and b64 not in sortie
+
+
+async def test_clone_echoue_ne_laisse_rien(depots, tmp_path):
+    with pytest.raises(ErreurDepot):
+        await depots.preparer(1, "file:///nexiste/pas", "main", 10, None)
+    assert not (tmp_path / "donnees" / "depots" / "1.git").exists()
+
+
+async def test_sha_inconnu(origine, depots):
+    with pytest.raises(ErreurDepot, match="commit .* introuvable dans le dépôt"):
+        await depots.preparer(1, url(origine), "main", 10, "a" * 40)

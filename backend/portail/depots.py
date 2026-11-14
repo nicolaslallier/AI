@@ -33,7 +33,9 @@ class Depots:
         b64 = base64.b64encode(f"x-access-token:{self.jeton}".encode()).decode()
         return [b64, self.jeton]  # base64 d'abord : il contient le jeton encodé, pas en clair
 
-    async def _git(self, *args: str, cwd: Path | None = None, delai: int = 30, distant=False):
+    async def _git(
+        self, *args: str, cwd: Path | None = None, delai: int = 30, distant: bool = False
+    ) -> str:
         opts = []
         if distant and self.jeton:
             b64 = self._secrets()[0]
@@ -55,10 +57,12 @@ class Depots:
         )
         try:
             out, err = await asyncio.wait_for(proc.communicate(), delai)
-        except TimeoutError:
+        except BaseException as e:
             proc.kill()
             await proc.wait()
-            raise ErreurDepot(f"git {args[0]} : délai dépassé ({delai} s)") from None
+            if isinstance(e, TimeoutError):
+                raise ErreurDepot(f"git {args[0]} : délai dépassé ({delai} s)") from None
+            raise
         if proc.returncode != 0:
             raise ErreurDepot(self._scrub(err.decode(errors="replace").strip()) or "git a échoué")
         return out.decode(errors="replace").strip()
@@ -96,7 +100,7 @@ class Depots:
                     branche_ref = ref.removeprefix("refs/heads/")
                 sha = await self._resoudre(clone, f"refs/heads/{branche_ref}", branche_ref)
             else:
-                sha = await self._resoudre(clone, sha, sha)
+                sha = await self._resoudre(clone, sha, sha, "commit")
             arbre.parent.mkdir(parents=True, exist_ok=True)
             await self._git(
                 "-c", "core.hooksPath=/dev/null",
@@ -105,7 +109,7 @@ class Depots:
             )  # fmt: skip
         return arbre, sha
 
-    async def _resoudre(self, clone: Path, ref: str, nom: str) -> str:
+    async def _resoudre(self, clone: Path, ref: str, nom: str, genre: str = "branche") -> str:
         if ref.startswith("refs/heads/") and not (
             _BRANCHE.fullmatch(nom) and not nom.startswith("-") and ".." not in nom
         ):
@@ -115,12 +119,13 @@ class Depots:
                 "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", cwd=clone
             )
         except ErreurDepot:
-            raise ErreurDepot(f"branche {nom} introuvable dans le dépôt") from None
+            raise ErreurDepot(f"{genre} {nom} introuvable dans le dépôt") from None
 
     async def liberer(self, etape_id: int) -> None:
         arbre = self._dossier(etape_id)
         if not arbre.exists():
             return
+        commun = None
         try:
             commun = await self._git(
                 "rev-parse", "--path-format=absolute", "--git-common-dir", cwd=arbre
@@ -129,6 +134,11 @@ class Depots:
         except ErreurDepot:
             pass
         shutil.rmtree(arbre, ignore_errors=True)
+        if commun:
+            try:
+                await self._git("worktree", "prune", cwd=Path(commun))
+            except ErreurDepot:
+                pass
 
     async def nettoyer(self, garder: set[int]) -> None:
         arbres = self.racine / "arbres"
