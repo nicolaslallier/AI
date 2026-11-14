@@ -33,11 +33,14 @@ from portail.db import (
 from portail.depots import Depots, ErreurDepot
 from portail.dev import Orchestrateur
 from portail.etats import Etat
+from portail.evenements import bus
+from portail.evenements import flux as flux_evenements
 from portail.execution import lire_config
 from portail.github import ErreurGitHub, GitHubApp
 from portail.lanceur import ClientLanceur
 from portail.llm import ClientLLM
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
+from portail.notifications import Notifieur
 from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.schemas import (
@@ -238,11 +241,14 @@ async def _annuler(state, s: AsyncSession, pipeline_id: int, clos: bool) -> None
     """Un pipeline `dev` passe par l'orchestrateur (même terminé : nettoyage), les autres par le
     chat, qui refuse un pipeline clos (`clos` : le lui demander quand même). Libère la
     transaction de `s` avant que le service ouvre la sienne, puis la tâche que le pipeline
-    verrouillait revient « à faire », sans verrou."""
+    verrouillait revient « à faire », sans verrou ; une reprise en cours la ramène *En revue*
+    (la PR existe), verrou gardé."""
     p = await s.get(Pipeline, pipeline_id)
     if p is None:
         raise Refus(404, "pipeline introuvable")
     type_, etat = p.type, p.etat
+    mode = await s.scalar(select(ExecutionDev.mode).where(ExecutionDev.pipeline_id == pipeline_id))
+    reprise = mode == "reprise" and etat == Etat.EN_COURS
     await s.rollback()
     orchestrateur = state.orchestrateur
     if type_ == "dev" and orchestrateur:
@@ -262,7 +268,9 @@ async def _annuler(state, s: AsyncSession, pipeline_id: int, clos: bool) -> None
     )
     if t is not None:
         t.verrou = None
-        await deplacer_tache(s, t, "a_faire", None, "nicolas")
+        await deplacer_tache(s, t, "en_revue" if reprise else "a_faire", None, "nicolas")
+        if reprise:
+            t.verrou = pipeline_id
     await s.commit()
     _reveiller(state)
 
@@ -285,7 +293,8 @@ def _orchestrateur(r: Reglages, sessions, catalogue, llm) -> Orchestrateur | Non
         logger.exception("App GitHub mal configurée : pas d'ordonnanceur")
         return None
     lanceur = ClientLanceur(r.lanceur_url, r.lanceur_secret)
-    return Orchestrateur(sessions, catalogue, llm, lanceur, github, r)
+    notifieur = Notifieur(r.ntfy_url, r.ntfy_sujet, r.ntfy_jeton)
+    return Orchestrateur(sessions, catalogue, llm, lanceur, github, r, notifieur=notifieur)
 
 
 def create_app(
@@ -668,6 +677,14 @@ def create_app(
         service = request.app.state.conversations
         await service.etat(conversation_id)  # 404 avant de commencer le flux
         return StreamingResponse(service.flux(conversation_id), media_type="text/event-stream")
+
+    @app.get("/api/evenements")
+    async def evenements():
+        return StreamingResponse(
+            flux_evenements(bus),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     if r.static_dir:
         racine = r.static_dir.resolve()

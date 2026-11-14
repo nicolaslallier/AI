@@ -23,3 +23,9 @@ class Reglages(BaseSettings):
     duree_max_tache_s: int = 7200
     delai_commande_s: int = 600
     renvois_max: int = 2
+    github_proprietaire: str = ""
+    ntfy_url: str = "http://ntfy"
+    ntfy_sujet: str = "portail"
+    ntfy_jeton: str = ""
+    url_publique: str = ""
+    delai_commentaires_s: int = 600

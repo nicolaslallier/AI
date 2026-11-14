@@ -227,3 +227,106 @@ def test_cle_base64_invalide_erreur_claire():
         GitHubApp("1", "pas du base64 !!")
     with pytest.raises(ErreurGitHub, match="clé"):
         GitHubApp("1", base64.b64encode(b"pas une cle").decode())
+
+
+def _app_lecture(donnees):
+    """App dont GET /pulls|issues renvoie `donnees(req)` ; enregistre les requêtes de lecture."""
+    vues = []
+
+    def g(req):
+        if req.url.path == "/repos/a/b/installation":
+            return httpx.Response(200, json={"id": 7})
+        if req.url.path == "/app/installations/7/access_tokens":
+            return httpx.Response(201, json={"token": "t", "expires_at": "2099-01-01T00:00:00Z"})
+        vues.append(req)
+        return httpx.Response(200, json=donnees(req))
+
+    return _app(g), vues
+
+
+def _revue(i, **kw):
+    return {
+        "id": i, "user": {"login": "n", "type": "User"}, "body": "ok", "state": "COMMENTED",
+        "submitted_at": "2026-11-14T10:00:00Z", "html_url": f"https://x/{i}",
+    } | kw  # fmt: skip
+
+
+def _com(i, **kw):
+    return {
+        "id": i, "user": {"login": "n", "type": "User"}, "body": "x",
+        "created_at": "2026-11-14T10:00:00Z", "html_url": f"https://x/{i}",
+    } | kw  # fmt: skip
+
+
+async def test_revues_paginees():
+    app, vues = _app_lecture(
+        lambda r: [_revue(i) for i in range(100)] if r.url.params["page"] == "1" else [_revue(100)]
+    )
+    assert len(await app.revues("a/b", 7)) == 101
+    assert [r.url.params["per_page"] for r in vues] == ["100", "100"]
+
+
+async def test_revue_pending_ignoree():
+    app, _ = _app_lecture(lambda r: [_revue(1), _revue(2, state="PENDING", submitted_at=None)])
+    res = await app.revues("a/b", 7)
+    assert [c.id for c in res] == [1]
+    assert res[0].type == "revue" and res[0].etat_revue == "COMMENTED"
+
+
+async def test_commentaire_ligne_champs():
+    app, vues = _app_lecture(
+        lambda r: [_com(5, path="a.py", line=None, original_line=12, pull_request_review_id=9)]
+    )
+    (c,) = await app.commentaires_ligne("a/b", 7)
+    assert (c.chemin, c.ligne, c.revue_id, c.type) == ("a.py", 12, 9, "ligne")
+    assert vues[0].url.path == "/repos/a/b/pulls/7/comments"
+
+
+async def test_commentaire_conversation_bot():
+    app, vues = _app_lecture(lambda r: [_com(1, user={"login": "bot", "type": "Bot"})])
+    (c,) = await app.commentaires_conversation("a/b", 7)
+    assert c.auteur_type == "Bot" and c.type == "conversation"
+    assert vues[0].url.path == "/repos/a/b/issues/7/comments"
+
+
+async def test_repondre_ligne_route():
+    vues = []
+
+    def g(req):
+        if req.url.path == "/repos/a/b/installation":
+            return httpx.Response(200, json={"id": 7})
+        if req.url.path == "/app/installations/7/access_tokens":
+            return httpx.Response(201, json={"token": "t", "expires_at": "2099-01-01T00:00:00Z"})
+        vues.append(req)
+        return httpx.Response(201, json={})
+
+    await _app(g).repondre_ligne("a/b", 7, 123, "fait")
+    assert vues[0].method == "POST"
+    assert vues[0].url.path == "/repos/a/b/pulls/7/comments/123/replies"
+    assert json.loads(vues[0].content) == {"body": "fait"}
+
+
+async def test_champ_manquant_erreur():
+    app, _ = _app_lecture(lambda r: [_com(1) | {"user": "nicolas"}])
+    with pytest.raises(ErreurGitHub):
+        await app.commentaires_conversation("a/b", 7)
+
+
+async def test_utilisateur_supprime_ignore():
+    app, _ = _app_lecture(lambda r: [_com(1) | {"user": None}, _com(2)])
+    assert [c.id for c in await app.commentaires_conversation("a/b", 7)] == [2]
+
+
+async def test_date_sans_fuseau_forcee_utc():
+    import datetime as dt
+
+    app, _ = _app_lecture(lambda r: [_com(1, created_at="2026-11-14T10:00:00")])
+    (c,) = await app.commentaires_conversation("a/b", 7)
+    assert c.cree_le.tzinfo is dt.UTC
+
+
+async def test_plus_de_1000_elements_refuse():
+    app, vues = _app_lecture(lambda r: [_com(i) for i in range(100)])
+    with pytest.raises(ErreurGitHub, match="plus de 1000"):
+        await app.commentaires_conversation("a/b", 7)
+    assert len(vues) == 10

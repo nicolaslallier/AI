@@ -171,8 +171,28 @@ async def test_demarrage_impossible_bloque_et_passe_a_la_suivante(tmp_path, sess
                 await s.scalars(select(TacheEvenement.type).where(TacheEvenement.tache_id == 1))
             ).all()
         assert types == ["deplacement"]
+        (envoi,) = m.notifieur.envoyes
+        assert envoi["titre"] == t1.titre
+        assert envoi["message"] == "Bloquée : démarrage impossible : App non installée"
+        assert envoi["lien"] == f"https://portail.x/projets/{t1.projet_id}/kanban"
     finally:
         await _arreter(m)
+
+
+async def test_notifieur_en_erreur_ne_casse_pas_le_blocage(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+
+    async def refuse(depot):
+        raise ErreurGitHub("App non installée", 404)
+
+    async def explose(*a, **k):
+        raise RuntimeError("secret")
+
+    m.github.branche_defaut = refuse
+    m.orch.notifier = explose
+    await Ordonnanceur(sessions, m.orch, 1).tour()
+    async with sessions() as s:
+        assert (await s.get(Tache, 1)).colonne == "bloquee"
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,7 @@ import asyncio
 import os
 import subprocess
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from portail.agents import OUTILS_PORTAIL, Agent, Catalogue
 from portail.api import create_app
 from portail.config import Reglages
 from portail.db import Base, creer_moteur, fabrique_sessions
+from portail.github import CommentaireGitHub
 from portail.lanceur import Resultat
 
 URL = os.environ.get(
@@ -199,12 +201,29 @@ class FauxLanceur:
         self.appels.append({"route": "nettoyer", "espace": espace})
 
 
+class FauxNotifieur:
+    def __init__(self):
+        self.envoyes: list[dict] = []
+
+    async def envoyer(self, titre, message, lien=None) -> None:
+        self.envoyes.append({"titre": titre, "message": message, "lien": lien})
+
+
 @pytest.fixture
 def faux_lanceur(tmp_path):
     return FauxLanceur(tmp_path / "espaces")
 
 
 # --- GitHub ------------------------------------------------------------
+
+
+def commentaire(
+    type_, id_, texte="à revoir", auteur="nicolaslallier", cree_le=None, **kw
+) -> CommentaireGitHub:
+    return CommentaireGitHub(
+        id=id_, type=type_, auteur=auteur, auteur_type=kw.pop("auteur_type", "User"),
+        texte=texte, cree_le=cree_le or datetime.now(UTC), url=f"https://github.com/c/{id_}", **kw,
+    )  # fmt: skip
 
 
 class FauxGitHub:
@@ -215,6 +234,8 @@ class FauxGitHub:
     - `prs` : numéro -> {"branche", "base", "titre", "corps", "url"} (créées en brouillon) ;
     - `etats` : numéro -> "ouverte" | "fusionnee" | "fermee" (les tests le modifient) ;
     - `commentaires` : liste de (numéro, texte) ;
+    - `lus` : numéro de PR -> commentaires lus (les trois lectures filtrent par `type`) ;
+    - `reponses` : liste de (numéro, commentaire_id, texte) ;
     - `erreur` : si renseignée, toute méthode lève cette ErreurGitHub.
     """
 
@@ -224,6 +245,8 @@ class FauxGitHub:
         self.prs: dict[int, dict] = {}
         self.etats: dict[int, str] = {}
         self.commentaires: list[tuple[int, str]] = []
+        self.lus: dict[int, list[CommentaireGitHub]] = {}
+        self.reponses: list[tuple[int, int, str]] = []
         self.erreur: Exception | None = None
 
     def _verifier(self):
@@ -261,6 +284,23 @@ class FauxGitHub:
     async def fermer_pr(self, depot, numero) -> None:
         self._verifier()
         self.etats[numero] = "fermee"
+
+    def _lus(self, numero, type_) -> list[CommentaireGitHub]:
+        self._verifier()
+        return [c for c in self.lus.get(numero, []) if c.type == type_]
+
+    async def revues(self, depot, numero) -> list[CommentaireGitHub]:
+        return self._lus(numero, "revue")
+
+    async def commentaires_ligne(self, depot, numero) -> list[CommentaireGitHub]:
+        return self._lus(numero, "ligne")
+
+    async def commentaires_conversation(self, depot, numero) -> list[CommentaireGitHub]:
+        return self._lus(numero, "conversation")
+
+    async def repondre_ligne(self, depot, numero, commentaire_id, texte) -> None:
+        self._verifier()
+        self.reponses.append((numero, commentaire_id, texte))
 
 
 @pytest.fixture

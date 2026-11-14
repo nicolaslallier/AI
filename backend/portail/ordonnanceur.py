@@ -14,6 +14,7 @@ from portail.db import Etape, ExecutionDev, Pipeline, Projet, Tache, TacheDepend
 from portail.dev import Orchestrateur
 from portail.etats import Etat
 from portail.github import ErreurGitHub
+from portail.notifications import raison_courte
 from portail.taches import deplacer_tache
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,16 @@ class Ordonnanceur:
                 return  # déplacée entre-temps : on n'y touche pas
             await deplacer_tache(s, tache, "bloquee", None, "portail")
             tache.resume_blocage = raison
+            titre = tache.titre
             await s.commit()
+        try:
+            await self._orch.notifier(
+                titre,
+                "Bloquée : " + raison_courte(raison),
+                self._orch.lien(f"/projets/{projet_id}/kanban"),
+            )
+        except Exception as e:  # noqa: BLE001 — jamais str(e) : pas de fuite
+            logger.warning("ordonnanceur : notification impossible (%s)", type(e).__name__)
 
     async def tourner(self) -> None:
         while True:

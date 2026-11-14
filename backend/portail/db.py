@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -9,6 +10,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     false,
     func,
 )
@@ -220,6 +222,7 @@ class ExecutionDev(Base):
     base: Mapped[str] = mapped_column(String)  # branche de référence résolue
     base_sha: Mapped[str] = mapped_column(String)
     # preparation | tests | rouge | code | verification | revue | pr | fini
+    # (reprise : attente | tri | reponses)
     phase: Mapped[str] = mapped_column(String)
     renvois: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     interruptions: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
@@ -228,7 +231,31 @@ class ExecutionDev(Base):
     sortie_rouge: Mapped[str | None] = mapped_column(Text)
     pr_numero: Mapped[int | None] = mapped_column(Integer)
     pr_url: Mapped[str | None] = mapped_column(String)
+    mode: Mapped[str] = mapped_column(String, default="normal", server_default="normal")
+    depart_revue: Mapped[str | None] = mapped_column(String)  # HEAD après fusion de la base
     debut: Mapped[datetime] = _horodatage()
+
+
+class CommentairePris(Base):
+    __tablename__ = "commentaire_pris"
+    __table_args__ = (
+        UniqueConstraint("tache_id", "type", "github_id", name="uq_commentaire_pris"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tache_id: Mapped[int] = mapped_column(ForeignKey("tache.id", ondelete="CASCADE"))
+    execution_id: Mapped[int] = mapped_column(ForeignKey("execution_dev.id", ondelete="CASCADE"))
+    github_id: Mapped[int] = mapped_column(BigInteger)
+    type: Mapped[str] = mapped_column(String)  # revue | ligne | conversation
+    auteur: Mapped[str] = mapped_column(String)
+    texte: Mapped[str] = mapped_column(Text)
+    url: Mapped[str] = mapped_column(String)
+    chemin: Mapped[str | None] = mapped_column(String)
+    ligne: Mapped[int | None] = mapped_column(Integer)
+    cree_le: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # date GitHub
+    tri: Mapped[str | None] = mapped_column(String)  # tests | code | reponse
+    consigne: Mapped[str | None] = mapped_column(Text)
+    repondu_le: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class CommandeLancee(Base):
