@@ -272,6 +272,12 @@ async fn service_postgres_demarre() {
             .state
             .unwrap();
         assert_eq!(etat.running, Some(true));
+        // Le service est joint directement, sans le proxy.
+        let r = b.lancer("echo \"$NO_PROXY|$no_proxy\"", 30, &[]).await;
+        assert_eq!(
+            r.sortie.trim(),
+            "localhost,127.0.0.1,db|localhost,127.0.0.1,db"
+        );
         // Relancer remplace le conteneur du même espace.
         b.docker
             .services(&b.cfg, &postgres(&b.espace))
@@ -310,6 +316,52 @@ async fn service_d_un_autre_espace_refuse() {
         b.docker.remove_container(&nom, force).await.unwrap();
         assert!(matches!(r, Err(Erreur::Refus(_))), "{r:?}");
         assert!(toujours_la);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn image_locale_sans_registre_servie() {
+    avec_banc("locale", async |b: &Banc| {
+        let locale = format!("lanceur-test-locale:{}", std::process::id());
+        let (depot, etiquette) = locale.split_once(':').unwrap();
+        b.docker
+            .tag_image(
+                IMAGE,
+                Some(bollard::query_parameters::TagImageOptions {
+                    repo: Some(depot.into()),
+                    tag: Some(etiquette.into()),
+                }),
+            )
+            .await
+            .unwrap();
+        let cfg = Config {
+            secret: b.cfg.secret.clone(),
+            volume: b.cfg.volume.clone(),
+            reseau: b.cfg.reseau.clone(),
+            proxy: b.cfg.proxy.clone(),
+            images: vec![locale.clone()],
+            images_services: vec![],
+        };
+        let d = DemandeLancer {
+            espace: b.espace.clone(),
+            image: locale.clone(),
+            commande: "echo ok".into(),
+            delai_s: 30,
+            lecture_seule: vec![],
+        };
+        // le tirage échoue (image absente de tout registre) : la copie locale sert
+        let r = b.docker.lancer(&cfg, &d).await;
+        b.docker
+            .remove_image(
+                &locale,
+                None::<bollard::query_parameters::RemoveImageOptions>,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.unwrap().sortie.trim(), "ok");
     })
     .await;
 }

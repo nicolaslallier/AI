@@ -127,6 +127,7 @@ fn libelle(espace: &str) -> HashMap<String, String> {
 }
 
 /// Spécification d'un conteneur de commande durci. Pure : aucune requête Docker.
+/// `services` : noms des services de l'espace, joints sans passer par le proxy.
 pub fn specification(
     cfg: &Config,
     espace: &str,
@@ -134,6 +135,7 @@ pub fn specification(
     commande: &str,
     lecture_seule: &[String],
     reseau_services: Option<&str>,
+    services: &[String],
 ) -> Result<ContainerCreateBody, String> {
     if !espace_valide(espace) {
         return Err(format!("espace invalide : {espace}"));
@@ -169,6 +171,11 @@ pub fn specification(
     if let Some(r) = reseau_services {
         reseaux.insert(r.to_string(), EndpointSettings::default());
     }
+    let sans_proxy = ["localhost", "127.0.0.1"]
+        .into_iter()
+        .chain(services.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(",");
     Ok(ContainerCreateBody {
         image: Some(image.into()),
         cmd: Some(vec!["sh".into(), "-c".into(), commande.into()]),
@@ -178,6 +185,8 @@ pub fn specification(
             format!("HTTP_PROXY={}", cfg.proxy),
             format!("HTTPS_PROXY={}", cfg.proxy),
             "HOME=/home/agent".into(),
+            format!("NO_PROXY={sans_proxy}"),
+            format!("no_proxy={sans_proxy}"),
         ]),
         labels: Some(libelle(espace)),
         host_config: Some(HostConfig {
@@ -256,11 +265,24 @@ impl From<ErreurBollard> for Erreur {
     }
 }
 
-/// Télécharge l'image si elle est absente. L'appelant a déjà vérifié qu'elle est permise.
-async fn assurer_image(docker: &Docker, image: &str) -> Result<(), Erreur> {
-    if docker.inspect_image(image).await.is_ok() {
+/// Télécharge l'image si elle est absente ; avec `rafraichir`, toujours (une `:latest` publiée
+/// à nouveau arrive sur l'hôte), et une copie locale sert si le registre est injoignable.
+/// L'appelant a déjà vérifié qu'elle est permise.
+async fn assurer_image(docker: &Docker, image: &str, rafraichir: bool) -> Result<(), Erreur> {
+    let locale = docker.inspect_image(image).await.is_ok();
+    if locale && !rafraichir {
         return Ok(());
     }
+    match tirer(docker, image).await {
+        Err(e) if locale => {
+            eprintln!("image {image} non rafraîchie, copie locale utilisée : {e:?}");
+            Ok(())
+        }
+        r => r,
+    }
+}
+
+async fn tirer(docker: &Docker, image: &str) -> Result<(), Erreur> {
     // Sans étiquette, Docker téléchargerait toutes les étiquettes.
     let sans_etiquette =
         !image.contains('@') && !image.rsplit('/').next().unwrap_or("").contains(':');
@@ -342,21 +364,33 @@ fn force() -> Option<RemoveContainerOptions> {
 impl Moteur for Docker {
     async fn lancer(&self, cfg: &Config, d: &DemandeLancer) -> Result<Resultat, Erreur> {
         let reseau = reseau_services(&d.espace);
-        let reseau = self
-            .inspect_network(&reseau, None)
-            .await
-            .ok()
-            .map(|_| reseau);
+        let inspection = self.inspect_network(&reseau, None).await.ok();
+        // noms de conteneurs `portail-svc-<espace>_<nom>` : le service répond à `<nom>`
+        let prefixe = nom_service(&d.espace, "");
+        let services: Vec<String> = inspection
+            .as_ref()
+            .and_then(|r| r.containers.as_ref())
+            .into_iter()
+            .flat_map(|c| c.values())
+            .filter_map(|e| {
+                e.name
+                    .as_deref()?
+                    .trim_start_matches('/')
+                    .strip_prefix(&prefixe)
+            })
+            .map(String::from)
+            .collect();
         let corps = specification(
             cfg,
             &d.espace,
             &d.image,
             &d.commande,
             &d.lecture_seule,
-            reseau.as_deref(),
+            inspection.map(|_| reseau).as_deref(),
+            &services,
         )
         .map_err(Erreur::Refus)?;
-        assurer_image(self, &d.image).await?;
+        assurer_image(self, &d.image, true).await?;
         let id = self.create_container(None, corps).await?.id;
         let resultat = executer(self, &id, d.delai_s).await;
         // Supprimé dans tous les cas.
@@ -378,7 +412,7 @@ impl Moteur for Docker {
             .await?;
         }
         for s in &d.services {
-            assurer_image(self, &s.image).await?;
+            assurer_image(self, &s.image, false).await?;
             let nom = nom_service(&d.espace, &s.nom);
             match self.inspect_container(&nom, None).await {
                 Ok(existant) => {
@@ -469,7 +503,7 @@ mod tests {
 
     fn spec(ro: &[&str]) -> Result<ContainerCreateBody, String> {
         let ro: Vec<String> = ro.iter().map(|c| c.to_string()).collect();
-        specification(&config_test(), ESPACE, IMAGE, "pytest", &ro, None)
+        specification(&config_test(), ESPACE, IMAGE, "pytest", &ro, None, &[])
     }
 
     fn montages(c: &ContainerCreateBody) -> &[Mount] {
@@ -489,7 +523,7 @@ mod tests {
 
     #[test]
     fn image_refusee() {
-        let r = specification(&config_test(), ESPACE, "alpine:3", "id", &[], None);
+        let r = specification(&config_test(), ESPACE, "alpine:3", "id", &[], None, &[]);
         assert!(r.is_err());
     }
 
@@ -511,6 +545,8 @@ mod tests {
                 "HTTP_PROXY=http://run-egress:3128".to_string(),
                 "HTTPS_PROXY=http://run-egress:3128".to_string(),
                 "HOME=/home/agent".to_string(),
+                "NO_PROXY=localhost,127.0.0.1".to_string(),
+                "no_proxy=localhost,127.0.0.1".to_string(),
             ])
         );
         let tmpfs = h.tmpfs.as_ref().unwrap();
@@ -579,8 +615,12 @@ mod tests {
             "x",
             &[],
             Some("portail-svc-tache-1-1"),
+            &["db".to_string(), "minio".to_string()],
         )
         .unwrap();
+        let env = c.env.as_ref().unwrap();
+        assert!(env.contains(&"NO_PROXY=localhost,127.0.0.1,db,minio".to_string()));
+        assert!(env.contains(&"no_proxy=localhost,127.0.0.1,db,minio".to_string()));
         let reseaux = c.networking_config.unwrap().endpoints_config.unwrap();
         assert_eq!(reseaux.len(), 2);
         assert!(reseaux.contains_key("run-net") && reseaux.contains_key("portail-svc-tache-1-1"));
