@@ -18,7 +18,7 @@ const ETATS = { refusee: 'refusée', perimee: 'périmée' } as const
 <template>
   <div :class="['bulle', 'agent', 'action', { grise: action.etat === 'refusee' || action.etat === 'perimee' }]">
     <strong>{{ libelleAction(action) }}</strong>
-    <pre>{{ JSON.stringify(autres, null, 2) }}</pre>
+    <pre v-if="Object.keys(autres).length">{{ JSON.stringify(autres, null, 2) }}</pre>
     <div v-if="spec !== null" class="markdown" v-html="rendreMarkdown(spec)"></div>
     <div v-if="action.etat === 'proposee'" class="rangee">
       <button :disabled="occupe" @click="$emit('confirmer')">Confirmer</button>

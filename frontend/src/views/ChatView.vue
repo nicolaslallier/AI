@@ -125,8 +125,14 @@ async function supprimer() {
   }
 }
 
+const envoi = ref(false)
 async function trancher(f: (id: number) => Promise<unknown>, id: number) {
-  if (await action(() => f(id))) await charger()
+  envoi.value = true
+  try {
+    if (await action(() => f(id))) await charger()
+  } finally {
+    envoi.value = false
+  }
 }
 
 watch(
@@ -172,7 +178,7 @@ onBeforeUnmount(() => {
           <CarteAction
             v-if="e.type === 'action'"
             :action="e.action"
-            :occupe="conv.etat === 'en_cours'"
+            :occupe="conv.etat === 'en_cours' || envoi"
             @confirmer="trancher(confirmerAction, e.action.id)"
             @refuser="trancher(refuserAction, e.action.id)"
           />
