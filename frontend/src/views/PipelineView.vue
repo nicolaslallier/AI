@@ -48,13 +48,20 @@ async function charger(ecouter = true) {
     const p = await lirePipeline(Number(props.id))
     if (demonte) return
     pipeline.value = p
-    if (p.etapes.some((e) => e.produit === 'taches'))
-      propositions.value = (await lireKanban(p.projet.id)).propositions
   } catch (e) {
     if (demonte) return
     message.value = (e as Error).message
     return
   }
+  if (pipeline.value.etapes.some((e) => e.produit === 'taches')) {
+    try {
+      const k = await lireKanban(pipeline.value.projet.id)
+      if (!demonte) propositions.value = k.propositions
+    } catch {
+      /* comptage indisponible : on n'empêche ni l'affichage ni l'abonnement */
+    }
+  }
+  if (demonte) return
   if (ecouter) for (const e of pipeline.value.etapes) if (e.etat === 'en_cours') abonner(e.id)
 }
 
@@ -110,7 +117,7 @@ onBeforeUnmount(() => {
           :etape="e"
           :partiel="partiels[e.id]"
           :outils="outils[e.id]"
-          :propositions="e.produit === 'taches' ? propositions.filter((x) => x.etape_id === e.id).length : undefined"
+          :propositions="e.produit === 'taches' ? propositions.filter((x) => x.etape_id === e.id && x.etat === 'ouverte').length : undefined"
           :projet-id="pipeline.projet.id"
           :message="e.document ? '' : message"
           @envoyer="(c, vider) => action(() => envoyerMessage(e.id, c)).then((ok) => ok && vider())"

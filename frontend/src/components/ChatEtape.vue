@@ -4,7 +4,14 @@ import type { Etape } from '../api'
 import { rendreMarkdown } from '../markdown'
 import JaugeContexte from './JaugeContexte.vue'
 
-const props = defineProps<{ etape: Etape; partiel?: string; message?: string; outils?: string[]; propositions?: number; projetId?: number }>()
+const props = defineProps<{
+  etape: Etape
+  partiel?: string
+  message?: string
+  outils?: string[]
+  propositions?: number
+  projetId?: number
+}>()
 const emit = defineEmits<{ envoyer: [contenu: string, vider: () => void]; rediger: []; reessayer: [] }>()
 const saisie = ref('')
 
@@ -31,7 +38,7 @@ function surEntree(e: KeyboardEvent) {
   <section v-else>
     <JaugeContexte v-if="etape.jauge" :jauge="etape.jauge" />
     <div class="messages">
-      <div v-for="m in etape.messages" :key="m.id" :class="['bulle', m.role === 'user' ? 'moi' : 'agent', m.role === 'system' && 'systeme']">
+      <div v-for="m in etape.messages" :key="m.id" :class="['bulle', m.role === 'user' ? 'moi' : 'agent', { systeme: m.role === 'system' }]">
         <details v-if="m.role === 'tool'"><summary>🔎 {{ m.outil }}</summary><pre>{{ m.contenu }}</pre></details>
         <em v-else-if="m.role === 'system'">{{ m.contenu }}</em>
         <template v-else-if="m.role === 'user'">{{ m.contenu }}</template>

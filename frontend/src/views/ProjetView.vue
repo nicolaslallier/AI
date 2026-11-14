@@ -15,6 +15,7 @@ const spec = computed(() =>
 const router = useRouter()
 const depot = ref('')
 const branche = ref('')
+const enCours = ref(false)
 
 async function charger() {
   try {
@@ -40,12 +41,16 @@ async function enregistrer() {
 }
 
 async function planifier() {
+  if (enCours.value) return
+  enCours.value = true
   erreur.value = ''
   try {
     const p = await creerPipeline(Number(props.id), 'planification')
     router.push(`/pipelines/${p.id}`)
   } catch (e) {
     erreur.value = (e as Error).message // un 409 porte déjà son detail en français
+  } finally {
+    enCours.value = false
   }
 }
 
@@ -63,7 +68,7 @@ onMounted(charger)
       <input v-model="branche" placeholder="Branche de référence (vide = branche par défaut)" />
       <button>Enregistrer le dépôt</button>
     </form>
-    <button :disabled="!projet.spec_courante" @click="planifier">Lancer la planification</button>
+    <button :disabled="!projet.spec_courante || enCours" @click="planifier">Lancer la planification</button>
     <h2>Pipelines</h2>
     <p v-if="!projet.pipelines.length">Aucun pipeline.</p>
     <ul>
