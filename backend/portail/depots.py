@@ -36,10 +36,13 @@ async def git(
     """git durci : ni hook, ni fsmonitor, ni config système ou globale ; sortie brute."""
     opts = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
     opts += ["-c", "protocol.file.allow=user"]
+    # jamais de descente dans un sous-module : sa config (filtres…) n'est pas la nôtre
+    opts += ["-c", "diff.ignoreSubmodules=all", "-c", "submodule.recurse=false"]
+    opts += ["-c", "status.submoduleSummary=false"]
     if distant and jeton:
         opts += ["-c", f"http.extraHeader=Authorization: Basic {_secrets(jeton)[0]}"]
     env = {
-        **os.environ,
+        **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": "/dev/null",

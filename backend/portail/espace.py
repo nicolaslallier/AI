@@ -19,8 +19,14 @@ def _rev(rev: str) -> str:
 
 
 class Espace:
-    def __init__(self, racine: Path):
+    """git ne descend jamais dans un sous-module. Un dépôt imbriqué non suivi apparaît dans
+    `changements` ; `restaurer` et `remettre_a_zero` le suppriment. `commiter` refuse
+    (`ErreurDepot`) tout gitlink nouveau ou modifié par rapport à `HEAD`. Le push ne va
+    qu'à l'URL du clone (`depot_url`), jamais à `origin` lu dans `.git/config`."""
+
+    def __init__(self, racine: Path, depot_url: str | None = None):
         self.racine = Path(racine)
+        self.depot_url = depot_url
 
     async def _git(self, *args: str, **kw) -> str:
         return await git(*args, cwd=self.racine, **kw)
@@ -32,6 +38,7 @@ class Espace:
     async def cloner(self, depot_url: str, jeton: str, base: str, branche: str) -> str:
         base, branche = await self._branche(base), await self._branche(branche)
         await self.supprimer()
+        self.depot_url = depot_url
         self.racine.parent.mkdir(parents=True, exist_ok=True)
         try:
             await git(
@@ -50,7 +57,12 @@ class Espace:
     async def _statut(self) -> list[tuple[bool, str]]:
         """(suivi, chemin) de chaque changement ; les ignorés n'y sont pas."""
         sortie = await self._git(
-            "status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"
+            "status",
+            "--porcelain",
+            "-z",
+            "--untracked-files=all",
+            "--no-renames",
+            "--ignore-submodules=all",
         )
         return [(e[:2] != "??", e[3:].rstrip("/")) for e in sortie.split("\0") if e]
 
@@ -78,10 +90,18 @@ class Espace:
 
     async def remettre_a_zero(self) -> None:
         await self._git("reset", "--hard", "HEAD")
-        await self._git("clean", "-fd")  # sans -x : les ignorés restent
+        await self._git("clean", "-ffd")  # -ff : dépôts imbriqués aussi ; sans -x : ignorés gardés
 
     async def commiter(self, nom: str, courriel: str, message: str) -> str | None:
         await self._git("add", "-A")
+        nouveaux = await self._gitlinks("ls-files", "-s", "-z") - await self._gitlinks(
+            "ls-tree", "-r", "-z", "HEAD"
+        )
+        if nouveaux:
+            await self._git("reset", "-q")
+            raise ErreurDepot(
+                "dépôt imbriqué refusé : " + ", ".join(sorted(c for c, _ in nouveaux))
+            )
         if not (await self._git("diff", "--cached", "--name-only", *_SANS_EXTERNE)).strip():
             return None
         await self._git(
@@ -89,6 +109,15 @@ class Espace:
             "commit", "--no-verify", "-m", message,
         )  # fmt: skip
         return (await self._git("rev-parse", "HEAD")).strip()
+
+    async def _gitlinks(self, *args: str) -> set[tuple[str, str]]:
+        """(chemin, sha) des gitlinks listés par `ls-files -s` ou `ls-tree`."""
+        liens = set()
+        for e in (await self._git(*args)).split("\0"):
+            meta, _, chemin = e.partition("\t")
+            if meta.startswith("160000"):
+                liens.add((chemin, meta.split()[1 if args[0] == "ls-files" else 2]))
+        return liens
 
     async def commits(self, depuis: str) -> list[tuple[str, str, list[str]]]:
         shas = (await self._git("rev-list", "--reverse", f"{_rev(depuis)}..HEAD", "--")).split()
@@ -110,12 +139,20 @@ class Espace:
             return None
 
     async def diff(self, depuis: str) -> str:
-        sortie = await self._git("diff", *_SANS_EXTERNE, _rev(depuis), "HEAD", "--")
-        return sortie[:_DIFF_MAX]
+        sortie = await self._git(
+            "diff", *_SANS_EXTERNE, "--ignore-submodules=all", _rev(depuis), "HEAD", "--"
+        )
+        if len(sortie) > _DIFF_MAX:
+            return sortie[:_DIFF_MAX] + "\n[… diff tronqué]"
+        return sortie
 
     async def pousser(self, jeton: str, branche: str) -> None:
         ref = f"refs/heads/{await self._branche(branche)}"
-        await self._git("push", "origin", f"{ref}:{ref}", jeton=jeton, delai=120, distant=True)
+        if not self.depot_url:
+            raise ErreurDepot("URL du dépôt inconnue pour cet espace")
+        await self._git(
+            "push", "--", self.depot_url, f"{ref}:{ref}", jeton=jeton, delai=120, distant=True
+        )
 
     async def supprimer(self) -> None:
         if self.racine.is_symlink():

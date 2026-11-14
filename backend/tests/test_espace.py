@@ -204,3 +204,96 @@ async def test_jeton_absent_des_erreurs_et_du_disque(tmp_path, origine):
 async def test_supprimer(espace):
     await espace.supprimer()
     assert not espace.racine.exists()
+
+
+def planter_depot_imbrique(racine: Path, temoin: Path) -> Path:
+    """Dépôt imbriqué dont le filtre clean crée un témoin s'il est exécuté."""
+    sub = racine / "sub"
+    sub.mkdir(exist_ok=True)
+    git(sub, "init", "-b", "main")
+    (sub / "f.txt").write_text("f\n")
+    git(sub, "add", "-A")
+    git(sub, "commit", "-m", "sub")
+    with (sub / ".git" / "config").open("a") as f:
+        f.write(f'[filter "x"]\n\tclean = touch {temoin}; cat\n')
+    (sub / ".gitattributes").write_text("* filter=x\n")
+    (sub / "f.txt").write_text("g\n")  # même taille : git doit relire (et filtrer)
+    return sub
+
+
+def gitlinks(racine: Path) -> list[str]:
+    return [
+        ligne for ligne in git(racine, "ls-tree", "-r", "HEAD").splitlines() if "160000" in ligne
+    ]
+
+
+async def test_depot_imbrique_jamais_execute_ni_commite(espace, origine, tmp_path):
+    temoin = tmp_path / "filtre-temoin"
+    sub = planter_depot_imbrique(espace.racine, temoin)
+    (espace.racine / "src" / "b.py").write_text("b = 2\n")
+    assert "sub" in await espace.changements()
+    with pytest.raises(ErreurDepot, match="dépôt imbriqué refusé : sub"):
+        await espace.commiter("agent-code", "agent-code@portail.local", "code")
+    await espace.diff(git(origine, "rev-parse", "main"))
+    await espace.remettre_a_zero()
+    assert not sub.exists()
+    assert gitlinks(espace.racine) == []
+    assert not temoin.exists()
+
+
+async def test_sous_module_livre_par_le_depot_jamais_execute(tmp_path, origine):
+    temoin = tmp_path / "filtre-temoin"
+    amont = tmp_path / "amont"
+    sha = git(amont, "rev-parse", "HEAD")
+    git(amont, "update-index", "--add", "--cacheinfo", f"160000,{sha},sub")
+    git(amont, "commit", "-m", "gitlink")
+    git(amont, "push", "origin", "main")
+    e = Espace(tmp_path / "espaces" / "tache-1-1")
+    base = await e.cloner(url(origine), "", "main", "portail/tache-1-x")
+    planter_depot_imbrique(e.racine, temoin)
+    (e.racine / "src" / "b.py").write_text("b = 2\n")
+    assert "src/b.py" in await e.changements()
+    with pytest.raises(ErreurDepot, match="dépôt imbriqué refusé : sub"):
+        await e.commiter("agent-code", "agent-code@portail.local", "code")
+    await e.diff(base)
+    await e.remettre_a_zero()
+    assert not temoin.exists()
+
+
+async def test_environnement_git_herite_ignore(espace, monkeypatch):
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "intrus@x")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "intrus@x")
+    (espace.racine / "src" / "b.py").write_text("b = 2\n")
+    sha = await espace.commiter("agent-code", "agent-code@portail.local", "code")
+    monkeypatch.delenv("GIT_AUTHOR_EMAIL")
+    monkeypatch.delenv("GIT_COMMITTER_EMAIL")
+    assert git(espace.racine, "log", "-1", "--format=%ae %ce", sha) == (
+        "agent-code@portail.local agent-code@portail.local"
+    )
+
+
+async def test_diff_tronque_est_signale(espace, origine):
+    (espace.racine / "gros.txt").write_text("x\n" * 150_000)
+    await espace.commiter("agent-code", "agent-code@portail.local", "gros")
+    d = await espace.diff(git(origine, "rev-parse", "main"))
+    assert d.endswith("\n[… diff tronqué]")
+
+
+async def test_pousser_vers_l_url_du_clone_seulement(espace, origine, tmp_path):
+    leurre = tmp_path / "leurre.git"
+    git(tmp_path, "init", "--bare", str(leurre))
+    git(espace.racine, "remote", "set-url", "origin", str(leurre))
+    (espace.racine / "src" / "b.py").write_text("b = 2\n")
+    await espace.commiter("agent-code", "agent-code@portail.local", "code")
+    await espace.pousser("", "portail/tache-1-x")
+    assert git(origine, "rev-parse", "portail/tache-1-x") == git(espace.racine, "rev-parse", "HEAD")
+    assert git(leurre, "for-each-ref") == ""
+
+
+async def test_pousser_apres_redemarrage(espace, origine):
+    (espace.racine / "src" / "b.py").write_text("b = 2\n")
+    await espace.commiter("agent-code", "agent-code@portail.local", "code")
+    with pytest.raises(ErreurDepot):
+        await Espace(espace.racine).pousser("", "portail/tache-1-x")
+    await Espace(espace.racine, url(origine)).pousser("", "portail/tache-1-x")
+    assert git(origine, "rev-parse", "portail/tache-1-x") == git(espace.racine, "rev-parse", "HEAD")
