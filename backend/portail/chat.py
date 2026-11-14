@@ -14,7 +14,7 @@ from portail.contexte import construire, jauge
 from portail.db import Document, Etape, Message, Pipeline
 from portail.etats import Etat
 from portail.llm import ClientLLM, FiltreReflexion
-from portail.moteur import Refus, changer_etat
+from portail.moteur import Refus, changer_etat, terminer_etape
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +196,39 @@ class ServiceChat:
         doc.etat = "brouillon"
         doc.dernier_message_id = dernier
         doc.maj_le = datetime.now(UTC)
+
+    async def corriger(self, etape_id: int, contenu: str) -> Document:
+        if not contenu.strip():
+            raise Refus(422, "le document est vide")
+        async with self._sessions() as s:
+            etape = await self._etape(s, etape_id)
+            doc = await s.scalar(select(Document).where(Document.etape_id == etape_id))
+            if doc is None:
+                raise Refus(409, "aucun brouillon à corriger")
+            if doc.etat != "brouillon":
+                raise Refus(409, "spec déjà validée")
+            if etape.etat == Etat.EN_COURS:
+                raise Refus(409, "une réponse est en cours")
+            doc.contenu = contenu
+            doc.maj_le = datetime.now(UTC)
+            await s.commit()
+            await s.refresh(doc)
+            return doc
+
+    async def valider(self, etape_id: int) -> int:
+        """Valide le brouillon, termine l'étape ; renvoie l'id du pipeline."""
+        async with self._sessions() as s:
+            etape = await self._etape(s, etape_id)
+            if etape.etat == Etat.EN_COURS:
+                raise Refus(409, "une réponse est en cours")
+            doc = await s.scalar(select(Document).where(Document.etape_id == etape_id))
+            if etape.etat != Etat.EN_ATTENTE or doc is None or doc.etat != "brouillon":
+                raise Refus(409, "rien à valider : clique d'abord « Rédiger la spec »")
+            doc.etat = "validee"
+            doc.maj_le = datetime.now(UTC)
+            await terminer_etape(s, etape)
+            await s.commit()
+            return etape.pipeline_id
 
     async def etat(self, etape_id: int) -> str:
         async with self._sessions() as s:

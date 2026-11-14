@@ -18,6 +18,7 @@ from portail.db import Document, Etape, Pipeline, Projet, creer_moteur, fabrique
 from portail.llm import ClientLLM
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues
 from portail.schemas import (
+    DocumentOut,
     EtapeOut,
     PipelineDetail,
     PipelineIn,
@@ -214,6 +215,18 @@ def create_app(
     async def reessayer(etape_id: int, request: Request):
         await request.app.state.chat.reessayer(etape_id)
         return {}
+
+    class DocumentIn(BaseModel):
+        contenu: str
+
+    @app.put("/api/etapes/{etape_id}/document", response_model=DocumentOut)
+    async def corriger_document(etape_id: int, corps: DocumentIn, request: Request):
+        return await request.app.state.chat.corriger(etape_id, corps.contenu)
+
+    @app.post("/api/etapes/{etape_id}/valider", response_model=PipelineDetail)
+    async def valider(etape_id: int, request: Request, s: Session):
+        pipeline_id = await request.app.state.chat.valider(etape_id)
+        return await _detail(s, request.app.state.catalogue, pipeline_id)
 
     @app.get("/api/etapes/{etape_id}/flux")
     async def flux(etape_id: int, request: Request):
