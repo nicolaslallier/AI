@@ -174,6 +174,16 @@ class Orchestrateur:
 
         tache.add_done_callback(_fini)
 
+    def depot(self, depot_url: str) -> str:
+        return self._depot_de(depot_url)
+
+    async def nettoyer_espace(self, espace: str, depot_url: str) -> None:
+        """Au mieux : arrête, nettoie côté lanceur et supprime le dossier de l'espace."""
+        await self._au_mieux("arrêter", self._lanceur.arreter(espace))
+        await self._au_mieux("nettoyer", self._lanceur.nettoyer(espace))
+        dossier = Espace(self._reglages.espaces_dir / espace, depot_url)
+        await self._au_mieux("supprimer", dossier.supprimer())
+
     async def annuler(self, pipeline_id: int) -> None:
         """Arrête la tâche de fond (même absente : pipeline terminé, ou après un redémarrage),
         nettoie l'espace et marque l'annulation ; la tâche du kanban reste à l'appelant."""
@@ -187,10 +197,7 @@ class Orchestrateur:
             ex = await s.scalar(select(ExecutionDev).where(ExecutionDev.pipeline_id == pipeline_id))
             projet = await s.get(Projet, pipeline.projet_id)
         if ex is not None:
-            await self._au_mieux("arrêter", self._lanceur.arreter(ex.espace))
-            await self._au_mieux("nettoyer", self._lanceur.nettoyer(ex.espace))
-            espace = Espace(self._reglages.espaces_dir / ex.espace, projet.depot_url)
-            await self._au_mieux("supprimer", espace.supprimer())
+            await self.nettoyer_espace(ex.espace, projet.depot_url)
         async with self._sessions() as s:
             await s.execute(
                 update(Etape)

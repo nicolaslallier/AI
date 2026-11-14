@@ -60,6 +60,7 @@ from portail.schemas import (
     SpecCourante,
     TacheVue,
 )
+from portail.suivi_pr import SuiviPR
 from portail.taches import (
     creer_tache,
     deplacer_tache,
@@ -271,15 +272,19 @@ def create_app(
         orch = orchestrateur or _orchestrateur(
             r, app.state.sessions, app.state.catalogue, app.state.llm
         )
-        app.state.orchestrateur, app.state.ordonnanceur, boucle = orch, None, None
+        app.state.orchestrateur, app.state.ordonnanceur, boucles = orch, None, []
         if orch:
             app.state.ordonnanceur = Ordonnanceur(app.state.sessions, orch, r.paralleles_max)
             await reprendre_interrompues(app.state.sessions, orch, app.state.ordonnanceur.lancer)
-            boucle = asyncio.create_task(app.state.ordonnanceur.tourner())
+            suivi = SuiviPR(app.state.sessions, orch._github, orch, app.state.ordonnanceur)
+            boucles = [
+                asyncio.create_task(app.state.ordonnanceur.tourner()),
+                asyncio.create_task(suivi.tourner()),
+            ]
         yield
         taches = list(app.state.chat.taches.values())
         if orch:
-            taches += [boucle, *orch.taches.values()]
+            taches += [*boucles, *orch.taches.values()]
         for t in taches:
             t.cancel()
         await asyncio.gather(*taches, return_exceptions=True)
