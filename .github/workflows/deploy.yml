@@ -33,7 +33,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}-portail
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable={{is_default_branch}}
             type=sha
 
       # ponytail: amd64 seul (hôte de déploiement) ; ajouter arm64 comme DarkAngel si la pile doit tourner sur le Mac mini.

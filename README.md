@@ -16,6 +16,7 @@ uv run pytest
 
 Le workflow `.github/workflows/deploy.yml` construit l'image `ghcr.io/nicolaslallier/ai-portail` (amd64) à chaque push sur `main` et la publie avec les tags `latest` et `sha-<commit>`. Il ne redéploie rien.
 
-- **Pile Portainer** : `deploy/portainer-stack.yml`, sur le réseau externe `infra-net`, sans port publié. Variables à renseigner dans la pile : `PORTAIL_DB_PASSWORD` (mot de passe du rôle `portail` de Postgres), `PORTAIL_LITELLM_CLE` (clé LiteLLM) et `IMAGE_TAG` (optionnel, `latest` par défaut).
+- **Pile Portainer** : `deploy/portainer-stack.yml`, sur le réseau externe `infra-net`, sans port publié. Variables à renseigner dans la pile : `PORTAIL_DB_PASSWORD` (mot de passe du rôle `portail` de Postgres, sans `@ : / %` ni autre caractère spécial d'URL, ou alors encodé en pourcentage : il est inséré tel quel dans l'URL de la base), `PORTAIL_LITELLM_CLE` (clé LiteLLM) et `IMAGE_TAG` (optionnel, `latest` par défaut).
 - **NGINX** : `deploy/nginx/portail.conf` est le vhost `portail.infra.famillelallier.net`. Il se copie dans `Infra/nginx/conf.d/` par une PR séparée sur le dépôt Infra.
+- **Authentification** : un utilisateur Keycloak sans adresse e-mail reçoit un 401 sur tous les appels de l'API.
 - **Mise à jour** : après la publication de l'image, dans Portainer, ouvrir la pile et cliquer sur « Pull and redeploy ».
