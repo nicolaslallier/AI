@@ -123,3 +123,69 @@ def test_apercu_respecte_le_budget(racine):
     assert estimer_jetons([{"content": sortie}]) <= 500
     assert "src.py" in sortie
     assert sortie.endswith("[… tronqué]")
+
+
+async def test_executer_ne_leve_jamais(racine):
+    (racine / "a.txt").write_text("x\n")
+    outils = valider(racine)
+    for nom, args in [
+        ("lire", {"chemin": "a\0b"}),
+        ("chercher", {"motif": "a\0b"}),
+        ("lister", {"chemin": "a.txt"}),
+        ("lire", {"chemin": 5}),
+        ("chercher", {"motif": 5}),
+    ]:
+        texte, mal = await outils.executer(nom, json.dumps(args))
+        assert texte.startswith("erreur : ") and mal is False, (nom, args, texte)
+
+
+async def test_debut_fin_de_mauvais_type_pas_mal_forme(racine):
+    (racine / "a.txt").write_text("x\n")
+    texte, mal = await OutilsDepot(racine).executer("lire", '{"chemin": "a.txt", "debut": "2"}')
+    assert texte == "erreur : debut et fin doivent être des entiers" and mal is False
+
+
+async def test_traversee_par_lister_et_chercher(racine):
+    (racine / "a.txt").write_text("x\n")
+    outils = valider(racine)
+    assert outils.lister("../") == "erreur : chemin interdit"
+    assert await outils.chercher("x", "../") == "erreur : chemin interdit"
+    assert await outils.chercher("x", ".git") == "erreur : chemin interdit"
+
+
+def test_lien_vers_secret_refuse(racine):
+    (racine / ".env").write_text("S=1\n")
+    (racine / "x").symlink_to(".env")
+    assert OutilsDepot(racine).lire("x").startswith("erreur : ")
+
+
+def test_lire_gros_fichier_marque_partiel(racine):
+    (racine / "g.txt").write_text("ligne\n" * 600_000)
+    assert "au moins" in OutilsDepot(racine).lire("g.txt")
+
+
+@pytest.mark.parametrize("nom", [".ENV", "Cle.PEM", ".env/x", "secrets.pem/y.txt", "A/.Env.Prod"])
+async def test_secrets_casse_et_dossiers(racine, nom):
+    f = racine / nom
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("MOTSECRETUNIQUE\n")
+    (racine / "ok.txt").write_text("rien\n")
+    outils = valider(racine)
+    assert outils.lire(nom).startswith("erreur : ")
+    assert "MOTSECRETUNIQUE" not in await outils.chercher("MOTSECRETUNIQUE")
+    assert "MOTSECRETUNIQUE" not in await outils.chercher("MOTSECRETUNIQUE", Path(nom).parts[0])
+    assert ".env" not in outils.lister(".").casefold()
+    assert "cle.pem" not in outils.lister(".").casefold()
+    assert "secrets.pem" not in outils.lister(".").casefold()
+
+
+def test_git_en_majuscules_interdit(racine):
+    assert OutilsDepot(racine).lire(".Git/config") == "erreur : chemin interdit"
+
+
+async def test_chercher_coupe_tot_sur_gros_resultat(racine):
+    (racine / "m.txt").write_text("tas\n" * 5000)
+    outils = valider(racine)
+    sortie = await outils.chercher("tas")
+    assert sortie.splitlines()[-1].startswith("[… plus de ")
+    assert len(sortie.splitlines()) == 101
