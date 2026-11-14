@@ -82,6 +82,7 @@ jobs:
           PORTAINER_URL: ${{ vars.PORTAINER_URL || 'https://portainer.infra.famillelallier.net' }}
           PORTAINER_ENDPOINT_ID: ${{ vars.PORTAINER_ENDPOINT_ID }}
           VAULT_URL: ${{ vars.VAULT_URL || 'https://vault.infra.famillelallier.net' }}
+          VAULT_SECRET_PATH: ${{ vars.VAULT_SECRET_PATH }}
           # CA de l'Infra montée dans le runner (vérifie Portainer et OpenBao).
           PORTAINER_CA_CERT: ${{ vars.INFRA_CA_CERT_PATH || '/etc/ai/infra-ca.crt' }}
           VAULT_CA_CERT: ${{ vars.INFRA_CA_CERT_PATH || '/etc/ai/infra-ca.crt' }}

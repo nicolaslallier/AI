@@ -29,9 +29,9 @@ for pair in $MAP; do
   var="${pair%%=*}"; key="${pair#*=}"
   val="$(jq -er --arg k "$key" '.[$k]' <<<"$secret")" || die "clé $key absente de $VAULT_SECRET_PATH"
   # Un retour à la ligne injecterait une autre variable dans le fichier.
-  case "$val" in *$'\n'*) die "$key contient un retour à la ligne" ;; esac
+  case "$val" in *$'\n'* | *$'\r'*) die "$key contient un retour à la ligne" ;; esac
   # Avant toute autre sortie : le journal Actions masque la valeur.
-  [ "${GITHUB_ACTIONS:-}" != true ] || echo "::add-mask::$val"
+  [ "${GITHUB_ACTIONS:-}" != true ] || printf '::add-mask::%s\n' "$val"
   printf '%s=%s\n' "$var" "$val" >> "$OUT"
   echo "  $var <- $VAULT_SECRET_PATH:$key"
 done
