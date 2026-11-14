@@ -273,3 +273,44 @@ async def test_aucune_proposition_termine_l_etape(client, sessions, faux_llm):
 
 async def test_proposition_inconnue_404(client):
     assert (await client.post("/api/propositions/999/accepter")).status_code == 404
+
+
+async def test_annexe_montre_ce_qu_une_modification_reecrit(client, sessions, faux_llm):
+    pid = await _projet(sessions)
+    t1 = await _tache_agent(sessions, pid, "Base")
+    async with sessions() as s:
+        donnees = DonneesTache(titre="Suite", description="Détail précis", depend_de=[t1])
+        t2 = (await creer_tache(s, pid, donnees, "nicolas")).id
+        await s.commit()
+    await _lancer(client, sessions, faux_llm, _json(), pid=pid)
+    annexe = next(
+        m["content"]
+        for m in faux_llm.appels[-1]["messages"]
+        if m["content"].startswith("Tâches existantes (JSON) :")
+    )
+    taches = {t["id"]: t for t in json.loads(annexe.split("\n\n", 1)[1])}
+    assert taches[t2]["description"] == "Détail précis"
+    assert taches[t2]["depend_de"] == [f"T{t1}"]
+    assert {"criteres", "fichiers", "verrou"} <= taches[t2].keys()
+
+
+async def test_dependance_inverse_ignore_les_cibles_de_modification(client, sessions, faux_llm):
+    pid = await _projet(sessions)
+    tid = await _tache_agent(sessions, pid)
+    modif = {**_m(tid, "Par l'agent"), "depend_de": ["n1"]}
+    _, _, eid = await _lancer(client, sessions, faux_llm, _json(modif, _n("n1")), pid=pid)
+    pm, pn = await _propositions(sessions, eid)
+    assert (await client.post(f"/api/propositions/{pm.id}/accepter")).status_code == 200
+    assert (await client.post(f"/api/propositions/{pn.id}/accepter")).status_code == 200
+    deps, _ = await _deps(client, pid)
+    assert deps["Par l'agent"] == []
+
+
+async def test_etape_de_propositions_refuse_le_chat(client, sessions, faux_llm):
+    _, _, eid = await _lancer(client, sessions, faux_llm, _json(_n("n1")))
+    for r in (
+        await client.post(f"/api/etapes/{eid}/messages", json={"contenu": "Salut"}),
+        await client.post(f"/api/etapes/{eid}/rediger"),
+    ):
+        assert r.status_code == 409
+        assert r.json()["detail"] == "étape de propositions : utiliser le kanban"

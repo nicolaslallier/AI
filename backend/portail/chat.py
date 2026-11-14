@@ -13,7 +13,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from portail.agents import Agent, Catalogue
 from portail.boucle import boucle_outils
 from portail.contexte import construire, jauge
-from portail.db import Document, Etape, Message, Pipeline, Projet, Proposition, Tache
+from portail.db import (
+    Document,
+    Etape,
+    Message,
+    Pipeline,
+    Projet,
+    Proposition,
+    Tache,
+    TacheDependance,
+)
 from portail.depots import Depots, ErreurDepot
 from portail.etats import Etat
 from portail.llm import ClientLLM, FiltreReflexion, retirer_reflexion
@@ -78,8 +87,24 @@ async def annexes(s: AsyncSession, agent: Agent, etape: Etape, projet_id: int) -
         taches = (
             await s.scalars(select(Tache).where(Tache.projet_id == projet_id).order_by(Tache.id))
         ).all()
+        deps: dict[int, list[str]] = {}
+        for a, b in (
+            await s.execute(
+                select(TacheDependance.tache_id, TacheDependance.depend_de_id)
+                .join(Tache, Tache.id == TacheDependance.tache_id)
+                .where(Tache.projet_id == projet_id)
+                .order_by(TacheDependance.depend_de_id)
+            )
+        ).all():
+            deps.setdefault(a, []).append(f"T{b}")
+        # tout ce qu'une modification acceptée réécrit : l'agent doit le voir pour le reprendre
+        champs = ("id", "titre", "description", "criteres", "fichiers", "colonne", "protegee")
         liste = [
-            {c: getattr(t, c) for c in ("id", "titre", "colonne", "protegee", "verrou")}
+            {
+                **{c: getattr(t, c) for c in champs},
+                "verrou": t.verrou,
+                "depend_de": deps.get(t.id, []),
+            }
             for t in taches
         ]
         sortie.append("Tâches existantes (JSON) :\n\n" + json.dumps(liste, ensure_ascii=False))
@@ -127,6 +152,12 @@ class ServiceChat:
             raise Refus(409, f"agent « {etape.agent} » absent de agents.yaml")
         return agent
 
+    def _agent_conversation(self, etape: Etape) -> Agent:
+        agent = self._agent(etape)
+        if agent.produit == "taches":
+            raise Refus(409, "étape de propositions : utiliser le kanban")
+        return agent
+
     async def _contexte(self, s: AsyncSession, etape: Etape):
         messages = (
             await s.scalars(
@@ -148,6 +179,7 @@ class ServiceChat:
     async def envoyer(self, etape_id: int, contenu: str) -> None:
         async with self._sessions() as s:
             etape = await self._etape_relancable(s, etape_id)
+            self._agent_conversation(etape)
             if etape.etat == Etat.EN_COURS:
                 raise Refus(409, "une réponse est déjà en cours")
             if etape.etat != Etat.EN_ATTENTE:
@@ -170,6 +202,7 @@ class ServiceChat:
     async def rediger(self, etape_id: int) -> None:
         async with self._sessions() as s:
             etape = await self._etape_relancable(s, etape_id)
+            self._agent_conversation(etape)
             if etape.etat != Etat.EN_ATTENTE:
                 raise Refus(
                     409,
@@ -443,6 +476,9 @@ class ServiceChat:
         if taches:
             await asyncio.wait(taches)
         async with self._sessions() as s:
+            # ordre des verrous : projet d'abord, comme _tache et les propositions
+            projet_id = await s.scalar(select(Pipeline.projet_id).where(Pipeline.id == pipeline_id))
+            await s.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
             pipeline = await s.scalar(
                 select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update()
             )

@@ -227,10 +227,11 @@ async def accepter(
         )
         proposition.tache_creee_id = tache.id
         # les propositions acceptées plus tôt qui dépendaient de cette clé sont reliées
+        # seulement les tâches créées par une `nouvelle` : une cible de modification peut être
+        # devenue protégée, verrouillée ou sortie de a_faire/prete
         for p in acceptees:
-            cible_id = p.tache_creee_id or p.tache_id
-            if proposition.cle in p.donnees.get("depend_de", []) and cible_id:
-                cible = await session.get(Tache, cible_id)
+            if proposition.cle in p.donnees.get("depend_de", []) and p.tache_creee_id:
+                cible = await session.get(Tache, p.tache_creee_id)
                 if cible is not None:
                     actuelles = await _dependances(session, cible.id)
                     await definir_dependances(session, cible, actuelles + [tache.id])
