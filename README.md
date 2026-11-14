@@ -23,7 +23,7 @@ Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolas
   - Environnement GitHub `production` (Settings → Environments), limité à la branche `main`, qui porte les secrets `PORTAINER_API_KEY` (jeton d'accès Portainer) et `BAO_TOKEN` (jeton OpenBao, lecture seule de `infra/data/portail`). Le job `deploy` ne tourne que sur `main`.
   - Le jeton OpenBao est périodique (32 jours) et renouvelé à chaque déploiement ; sans déploiement pendant 32 jours, en créer un nouveau.
   - Variables du dépôt : `PORTAINER_URL` (défaut `https://portainer.infra.famillelallier.net`), `VAULT_URL` (défaut `https://vault.infra.famillelallier.net`), `PORTAINER_ENDPOINT_ID` (obligatoire), `VAULT_SECRET_PATH` (défaut `infra/data/portail`), `INFRA_CA_CERT_PATH` (chemin de la CA de l'Infra dans le runner, défaut `/etc/ai/infra-ca.crt`).
-  - Clés du secret KV v2 `infra/portail` (lu via l'API à `infra/data/portail`) : `PORTAIL_DB_PASSWORD`, `PORTAIL_LITELLM_CLE`, `PORTAIL_GITHUB_JETON`, `PORTAIL_GITHUB_APP_ID`, `PORTAIL_GITHUB_APP_CLE`, `PORTAIL_LANCEUR_SECRET`.
+  - Clés du secret KV v2 `infra/portail` (lu via l'API à `infra/data/portail`) : `PORTAIL_DB_PASSWORD`, `PORTAIL_LITELLM_CLE`, `PORTAIL_GITHUB_JETON`, `PORTAIL_GITHUB_APP_ID`, `PORTAIL_GITHUB_APP_CLE`, `PORTAIL_LANCEUR_SECRET`, `PORTAIL_NTFY_JETON`.
   - Aucun workflow du dépôt ne doit avoir de déclencheur `pull_request`, `pull_request_target`, `issue_comment` ou `workflow_run` pouvant atteindre le label self-hosted `ai` : une PR de fork peut modifier `ci.yml` elle-même. Le dépôt est public : exiger l'approbation pour tous les collaborateurs externes (Settings → Actions → General → Fork pull request workflows from outside collaborators), et le runner `ai` doit être éphémère (conteneur neuf par job, aucun volume de travail persistant).
   - Le déploiement n'attend pas la CI : activer la protection de branche sur `main` avec les contrôles de CI obligatoires.
 
@@ -40,6 +40,15 @@ La boucle de dev pousse des branches et ouvre des PR par une GitHub App, jamais 
 3. Ranger dans OpenBao, secret `infra/portail` : `PORTAIL_GITHUB_APP_ID` (l'id de l'App), `PORTAIL_GITHUB_APP_CLE` (le PEM en **base64 sur une seule ligne** : `base64 -w0 cle.pem` sous Linux, `base64 -i cle.pem | tr -d '\n'` sous macOS) et `PORTAIL_LANCEUR_SECRET` (`openssl rand -hex 32`, 32 caractères au moins).
 4. Le lanceur (service `lanceur`, seul à monter `/var/run/docker.sock`) démarre les commandes des agents dans des conteneurs jetables de l'image `ai-execution`, sur le réseau `run-net` et le proxy `run-egress` de l'Infra (PR « run-net » du dépôt Infra, à déployer avant ce dépôt). Hôte Docker en version **26 ou plus** (montage de sous-chemin de volume).
 5. **Prérequis bloquant :** les trois clés (`PORTAIL_GITHUB_APP_ID`, `PORTAIL_GITHUB_APP_CLE`, `PORTAIL_LANCEUR_SECRET` d'au moins 32 caractères) doivent exister dans OpenBao `infra/portail` **avant** la fusion et le déploiement de ce dépôt. Sinon le déploiement échoue : `scripts/vault-render-env.sh` s'arrête dès qu'une clé manque, la pile refuse un `PORTAIL_LANCEUR_SECRET` vide et le lanceur quitte (redémarrage en boucle) avec un secret de moins de 32 caractères. Une fois la pile en place, un portail sans App valide garde son ordonnanceur éteint et le reste fonctionne comme avant.
+
+### Reprise sur commentaires et ntfy
+
+Quand Nicolas commente la PR d'une tâche *En revue*, le portail reprend la boucle de dev sur la même branche et la même PR, puis notifie par ntfy.
+
+- Le jeton ntfy s'obtient avec `make ntfy-provision app=portail` dans l'Infra et se range dans OpenBao, secret `infra/portail`, clé `PORTAIL_NTFY_JETON`, **avant** la fusion (**prérequis bloquant** : `scripts/vault-render-env.sh` s'arrête si la clé manque).
+- Seuls les commentaires de `PORTAIL_GITHUB_PROPRIETAIRE` déclenchent une reprise.
+- Une revue part tout de suite ; des commentaires isolés partent 10 minutes après le dernier.
+- Recommenter relance une reprise échouée.
 
 Exemple de configuration d'exécution pour EA (l'image doit figurer dans `LANCEUR_IMAGES`). Les commandes partent de la racine du dépôt, et `{fichiers}` y est remplacé par des chemins relatifs à cette racine (`backend/tests/test_x.py`) : ne pas faire `cd backend` avant `{fichiers}`. Les motifs de `chemins_tests` désignent des fichiers : `backend/tests/**`, pas `backend/tests`.
 
