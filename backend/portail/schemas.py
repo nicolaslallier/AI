@@ -108,12 +108,23 @@ class ConversationResume(BaseModel):
     maj_le: datetime
 
 
+class ActionOut(BaseModel):
+    id: int
+    nom: str
+    parametres: dict
+    etat: str
+    resultat: str | None
+    lien: str | None
+    cree_le: datetime
+
+
 class ConversationDetail(BaseModel):
     id: int
     titre: str
     etat: str
     erreur: str | None
     messages: list[MessageOut]
+    actions: list[ActionOut]
     jauge: Jauge | None  # None si l'agent manque au catalogue
 
 

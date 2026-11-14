@@ -2,20 +2,22 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from portail.actions import executer_action
 from portail.agents import Agent, Catalogue
 from portail.boucle import boucle_outils
-from portail.chat import Diffuseur, _sse
+from portail.chat import Diffuseur, ServiceChat, _sse
 from portail.contexte import jauge
-from portail.db import Conversation, MessageConversation
+from portail.db import ActionConversation, Conversation, MessageConversation, Tache
 from portail.llm import ClientLLM, FiltreReflexion, retirer_reflexion
 from portail.moteur import Refus
 from portail.outils_portail import OutilsPortail
-from portail.schemas import ConversationDetail, MessageOut
+from portail.schemas import ActionOut, ConversationDetail, MessageOut
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +42,17 @@ class ServiceConversation:
         catalogue: Catalogue,
         llm: ClientLLM,
         diffuseur: Diffuseur,
+        chat: ServiceChat,
+        annuler_tache: Callable[[int], Awaitable[None]],
+        reveiller: Callable[[], None],
     ):
         self._sessions = sessions
         self._catalogue = catalogue
         self._llm = llm
         self.diffuseur = diffuseur
+        self._chat = chat
+        self._annuler_tache = annuler_tache
+        self._reveiller = reveiller
         self.taches: dict[int, asyncio.Task] = {}
 
     def _agent(self) -> Agent:
@@ -89,6 +97,13 @@ class ServiceConversation:
             if c is None:
                 raise Refus(404, "conversation introuvable")
             messages = await self._messages(s, cid)
+            actions = (
+                await s.scalars(
+                    select(ActionConversation)
+                    .where(ActionConversation.conversation_id == cid)
+                    .order_by(ActionConversation.id)
+                )
+            ).all()
         agent = self._catalogue.agents.get(AGENT)
         return ConversationDetail(
             id=c.id,
@@ -96,6 +111,7 @@ class ServiceConversation:
             etat=c.etat,
             erreur=c.erreur,
             messages=[MessageOut.model_validate(m, from_attributes=True) for m in messages],
+            actions=[ActionOut.model_validate(a, from_attributes=True) for a in actions],
             jauge=jauge(agent, construire_conversation(agent, messages)) if agent else None,
         )
 
@@ -118,6 +134,15 @@ class ServiceConversation:
             if jauge(agent, avec + [{"role": "user", "content": contenu}]).niveau == "plein":
                 raise Refus(409, "contexte plein : ouvre une nouvelle conversation")
             s.add(MessageConversation(conversation_id=cid, role="user", contenu=contenu))
+            # une action ne s'exécute jamais hors du fil où elle a été proposée
+            await s.execute(
+                update(ActionConversation)
+                .where(
+                    ActionConversation.conversation_id == cid,
+                    ActionConversation.etat == "proposee",
+                )
+                .values(etat="perimee")
+            )
             if not c.titre:
                 c.titre = contenu[:60]
             c.etat, c.erreur = "en_cours", None
@@ -131,6 +156,102 @@ class ServiceConversation:
                 raise Refus(409, "rien à relancer")
             self._agent()
             c.etat, c.erreur = "en_cours", None
+            await s.commit()
+        self.lancer(cid)
+
+    async def _verrouiller(
+        self, s: AsyncSession, action_id: int
+    ) -> tuple[Conversation, ActionConversation]:
+        """Conversation d'abord, puis l'action : même ordre que `envoyer`, qui périme."""
+        cid = await s.scalar(
+            select(ActionConversation.conversation_id).where(ActionConversation.id == action_id)
+        )
+        if cid is None:
+            raise Refus(404, "action introuvable")
+        c = await self._conversation(s, cid)
+        a = await s.scalar(
+            select(ActionConversation)
+            .where(ActionConversation.id == action_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if a is None:
+            raise Refus(404, "action introuvable")
+        if c.etat == "en_cours":
+            raise Refus(409, "attends la fin de la réponse")
+        if a.etat == "perimee":
+            raise Refus(409, "action périmée")
+        if a.etat != "proposee":
+            raise Refus(409, "action déjà traitée")
+        return c, a
+
+    def _systeme(self, s: AsyncSession, c: Conversation, contenu: str) -> None:
+        s.add(MessageConversation(conversation_id=c.id, role="system", contenu=contenu))
+        c.etat, c.erreur = "en_cours", None
+
+    async def confirmer(self, action_id: int) -> None:
+        """Seul chemin d'exécution d'une action : le clic de Nicolas, une seule fois."""
+        async with self._sessions() as s:
+            c, a = await self._verrouiller(s, action_id)
+            cid, nom = c.id, a.nom
+            if nom == "annuler_tache":
+                # passée confirmee et commitée d'abord : jamais exécutée deux fois
+                tache_id = a.parametres["tache_id"]
+                t = await s.get(Tache, tache_id)
+                a.etat, a.lien = "confirmee", t and f"/projets/{t.projet_id}/kanban"
+                c.etat, c.erreur = "en_cours", None
+                await s.commit()
+                try:
+                    await self._annuler(action_id, nom, tache_id)
+                finally:
+                    self._reveiller()
+                    self.lancer(cid)
+                return
+            etapes: list[int] = []
+            try:
+                async with s.begin_nested():
+                    ex = await executer_action(s, self._catalogue, a)
+                a.etat, a.resultat, a.lien = "confirmee", ex.resultat, ex.lien
+                etapes = ex.etapes_a_lancer
+                texte = f"Action n°{action_id} ({nom}) confirmée par Nicolas : {ex.resultat}"
+            except (Refus, SQLAlchemyError) as e:
+                if isinstance(e, Refus):
+                    motif = e.message
+                else:  # course rare (projet ou tâche supprimé entre-temps…)
+                    logger.exception("action %s : erreur de base à l'exécution", action_id)
+                    motif = "le portail a changé entre-temps, réessaie de proposer l'action"
+                a.etat, a.resultat = "echouee", motif
+                texte = f"Action n°{action_id} ({nom}) refusée par le portail : {motif}"
+            self._systeme(s, c, texte)
+            await s.commit()
+        for etape_id in etapes:
+            self._chat.lancer(etape_id)
+        self._reveiller()  # une tâche a pu entrer dans « Prête »
+        self.lancer(cid)
+
+    async def _annuler(self, action_id: int, nom: str, tache_id: int) -> None:
+        try:
+            await self._annuler_tache(tache_id)
+            etat, resultat = "confirmee", "tâche annulée, revenue à faire"
+            texte = f"Action n°{action_id} ({nom}) confirmée par Nicolas : {resultat}"
+        except Exception as e:  # l'action est déjà confirmee : noter l'échec
+            if not isinstance(e, Refus):
+                logger.exception("action %s : annulation de la tâche %s", action_id, tache_id)
+            etat, resultat = "echouee", e.message if isinstance(e, Refus) else f"erreur : {e}"
+            texte = f"Action n°{action_id} ({nom}) refusée par le portail : {resultat}"
+        async with self._sessions() as s:
+            a = await s.get(ActionConversation, action_id)
+            c = await self._conversation(s, a.conversation_id)
+            a.etat, a.resultat = etat, resultat
+            self._systeme(s, c, texte)
+            await s.commit()
+
+    async def refuser(self, action_id: int) -> None:
+        async with self._sessions() as s:
+            c, a = await self._verrouiller(s, action_id)
+            cid = c.id
+            a.etat = "refusee"
+            self._systeme(s, c, f"Nicolas a refusé l'action n°{action_id} ({a.nom})")
             await s.commit()
         self.lancer(cid)
 
@@ -174,7 +295,7 @@ class ServiceConversation:
                 await s.commit()
             self.diffuseur.publier(cid, {"type": "outil", "libelle": libelle})
 
-        outils = OutilsPortail(self._sessions, agent.outils)
+        outils = OutilsPortail(self._sessions, agent.outils, self._catalogue, cid)
         resultat = await boucle_outils(self._llm, agent, demande, outils, sur_appel)
         visible = resultat.texte.strip()
         if visible:
@@ -195,6 +316,7 @@ class ServiceConversation:
             async with self._sessions() as s:
                 c = await self._conversation(s, cid)
                 if c.etat != "en_cours":
+                    d.publier(cid, {"type": "fin"})  # les abonnés ne restent pas bloqués
                     return
                 if not visible:
                     c.etat, c.erreur = "erreur", "réponse vide du modèle"

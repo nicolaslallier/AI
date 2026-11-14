@@ -4,11 +4,15 @@ import json
 from asgi_lifespan import LifespanManager
 from conftest import CATALOGUE_TEST, FauxLLM, _agent
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select, text
 
-from portail.agents import Catalogue
+from portail import conversations
+from portail.actions import ACTIONS
+from portail.agents import OUTILS_ACTIONS_PORTAIL, Catalogue
 from portail.api import create_app
-from portail.db import Conversation
+from portail.db import ActionConversation, Conversation, Etape, Pipeline, Tache
 from portail.llm import ErreurLLM
+from portail.outils_portail import OutilsPortail
 
 
 def _service(client):
@@ -321,3 +325,259 @@ async def test_redemarrage_marque_erreur(client, sessions, reglages):
     ):
         d = await _detail(c, cid)
     assert d["etat"] == "erreur" and d["erreur"] == "interrompue par un redémarrage du serveur"
+
+
+# --- actions -----------------------------------------------------------
+
+
+async def _proposer(client, faux_llm, nom, parametres, cid=None):
+    cid = cid or await _creer(client)
+    faux_llm.reponses = [_appel(nom, json.dumps(parametres)), _texte("Je propose.")]
+    await _envoyer(client, cid, "fais-le")
+    await _attendre(client, cid)
+    return cid, (await _detail(client, cid))["actions"]
+
+
+async def _confirmer(client, aid):
+    return await client.post(f"/api/actions/{aid}/confirmer")
+
+
+async def _projets(client):
+    return (await client.get("/api/projets")).json()
+
+
+async def _tache_verrouillee(client, sessions) -> tuple[int, int, int]:
+    pid = (await client.post("/api/projets", json={"nom": "P"})).json()["id"]
+    tid = (await client.post(f"/api/projets/{pid}/taches", json={"titre": "T"})).json()["id"]
+    async with sessions() as s:
+        pl = Pipeline(projet_id=pid, type="spec", etat="en_cours")
+        s.add(pl)
+        await s.flush()
+        t = await s.get(Tache, tid)
+        t.verrou, t.colonne = pl.id, "en_cours"
+        await s.commit()
+        return pid, tid, pl.id
+
+
+def test_noms_d_actions_alignes():
+    assert set(OUTILS_ACTIONS_PORTAIL) == set(ACTIONS)
+
+
+async def test_proposition_cree_une_carte(client, faux_llm):
+    cid, actions = await _proposer(client, faux_llm, "creer_projet", {"nom": "Beta"})
+    assert [(a["nom"], a["parametres"], a["etat"]) for a in actions] == [
+        ("creer_projet", {"nom": "Beta"}, "proposee")
+    ]
+    assert await _projets(client) == []
+    d = await _detail(client, cid)
+    assert d["etat"] == "pret"
+    assert d["messages"][1]["contenu"] == (
+        f"action n°{actions[0]['id']} proposée, en attente de la confirmation de Nicolas. "
+        "Termine ta réponse sans appeler d'outil."
+    )
+    assert faux_llm.appels[-1]["outils"] is None
+
+
+async def test_proposition_invalide_sans_carte(client, faux_llm):
+    pid = (await client.post("/api/projets", json={"nom": "P"})).json()["id"]
+    faux_llm.reponses = [
+        _appel("lancer_pipeline", json.dumps({"projet_id": pid, "type": "dev"})),
+        _texte("Compris."),
+    ]
+    cid = await _creer(client)
+    await _envoyer(client, cid, "lance le dev")
+    await _attendre(client, cid)
+    d = await _detail(client, cid)
+    assert d["actions"] == []
+    outil = next(m for m in d["messages"] if m["role"] == "tool")
+    assert outil["contenu"].startswith("erreur : ") and "Prête" in outil["contenu"]
+
+
+async def test_deuxieme_proposition_du_tour_ignoree(client, sessions):
+    cid = await _creer(client)
+    outils = OutilsPortail(sessions, ["creer_projet"], CATALOGUE_TEST, cid)
+    texte, mal = await outils.executer("creer_projet", '{"nom": "A"}')
+    assert texte.startswith("action n°") and not mal and outils.arret
+    texte, _ = await outils.executer("creer_projet", '{"nom": "B"}')
+    assert texte == "ignoré : une action attend la confirmation de Nicolas"
+    async with sessions() as s:
+        assert len((await s.scalars(select(ActionConversation))).all()) == 1
+
+
+async def test_confirmer_execute_et_relance(client, faux_llm):
+    cid, [a] = await _proposer(client, faux_llm, "creer_projet", {"nom": "Beta"})
+    faux_llm.reponses = [_texte("C'est fait.")]
+    assert (await _confirmer(client, a["id"])).status_code == 202
+    await _attendre(client, cid)
+    [projet] = await _projets(client)
+    d = await _detail(client, cid)
+    [a] = d["actions"]
+    assert projet["nom"] == "Beta"
+    assert (a["etat"], a["resultat"], a["lien"]) == (
+        "confirmee",
+        "projet « Beta » créé",
+        f"/projets/{projet['id']}",
+    )
+    systeme = f"Action n°{a['id']} (creer_projet) confirmée par Nicolas : projet « Beta » créé"
+    assert [(m["role"], m["contenu"]) for m in d["messages"][-2:]] == [
+        ("system", systeme),
+        ("assistant", "C'est fait."),
+    ]
+    assert d["etat"] == "pret"
+    assert {"role": "system", "content": systeme} in faux_llm.appels[-1]["messages"]
+
+
+async def test_refuser_relance(client, faux_llm):
+    cid, [a] = await _proposer(client, faux_llm, "creer_projet", {"nom": "Beta"})
+    faux_llm.reponses = [_texte("D'accord.")]
+    assert (await client.post(f"/api/actions/{a['id']}/refuser")).status_code == 202
+    await _attendre(client, cid)
+    d = await _detail(client, cid)
+    assert d["actions"][0]["etat"] == "refusee" and await _projets(client) == []
+    assert [(m["role"], m["contenu"]) for m in d["messages"][-2:]] == [
+        ("system", f"Nicolas a refusé l'action n°{a['id']} (creer_projet)"),
+        ("assistant", "D'accord."),
+    ]
+    assert (await _confirmer(client, a["id"])).json()["detail"] == "action déjà traitée"
+
+
+async def test_action_inconnue_404(client):
+    assert (await _confirmer(client, 999)).status_code == 404
+    assert (await client.post("/api/actions/999/refuser")).status_code == 404
+
+
+async def test_confirmer_deux_fois_en_parallele(client, faux_llm):
+    cid, [a] = await _proposer(client, faux_llm, "creer_projet", {"nom": "Beta"})
+    faux_llm.reponses = [_texte("Fait.")]
+    r1, r2 = await asyncio.gather(_confirmer(client, a["id"]), _confirmer(client, a["id"]))
+    await _attendre(client, cid)
+    assert sorted([r1.status_code, r2.status_code]) == [202, 409]
+    assert len(await _projets(client)) == 1
+
+
+async def test_confirmer_pendant_reponse_409(client, faux_llm):
+    cid = await _creer(client)
+    pause = asyncio.Event()
+    faux_llm.reponses = [_appel("creer_projet", '{"nom": "Beta"}'), pause, _texte("Voilà.")]
+    await _envoyer(client, cid, "crée Beta")
+    await _poll(lambda: len(faux_llm.appels) == 2)
+    [a] = (await _detail(client, cid))["actions"]
+    r = await _confirmer(client, a["id"])
+    assert r.status_code == 409 and r.json()["detail"] == "attends la fin de la réponse"
+    pause.set()
+    await _attendre(client, cid)
+    assert (await _detail(client, cid))["actions"][0]["etat"] == "proposee"
+    assert await _projets(client) == []
+
+
+async def test_confirmer_refus_relance_le_modele(client, faux_llm, sessions):
+    pid = (await client.post("/api/projets", json={"nom": "P"})).json()["id"]
+    tid = (await client.post(f"/api/projets/{pid}/taches", json={"titre": "T"})).json()["id"]
+    cid, [a] = await _proposer(
+        client, faux_llm, "deplacer_tache", {"tache_id": tid, "colonne": "prete"}
+    )
+    async with sessions() as s:
+        pl = Pipeline(projet_id=pid, type="spec")
+        s.add(pl)
+        await s.flush()
+        (await s.get(Tache, tid)).verrou = pl.id
+        await s.commit()
+    faux_llm.reponses = [_texte("La tâche est verrouillée.")]
+    assert (await _confirmer(client, a["id"])).status_code == 202
+    await _attendre(client, cid)
+    d = await _detail(client, cid)
+    motif = f"tâche verrouillée par le pipeline {pl.id}"
+    assert (d["actions"][0]["etat"], d["actions"][0]["resultat"]) == ("echouee", motif)
+    systeme = f"Action n°{a['id']} (deplacer_tache) refusée par le portail : {motif}"
+    assert {"role": "system", "content": systeme} in faux_llm.appels[-1]["messages"]
+    assert d["etat"] == "pret"
+    async with sessions() as s:
+        assert (await s.get(Tache, tid)).colonne == "a_faire"
+
+
+async def test_confirmer_erreur_de_base_echoue_proprement(client, faux_llm, monkeypatch):
+    cid, [a] = await _proposer(client, faux_llm, "creer_projet", {"nom": "Beta"})
+
+    async def _casse(s, catalogue, action):
+        await s.execute(text("SELECT 1/0"))
+
+    monkeypatch.setattr(conversations, "executer_action", _casse)
+    faux_llm.reponses = [_texte("Raté.")]
+    assert (await _confirmer(client, a["id"])).status_code == 202
+    await _attendre(client, cid)
+    d = await _detail(client, cid)
+    assert d["actions"][0]["etat"] == "echouee" and d["etat"] == "pret"
+    assert [m["role"] for m in d["messages"][-2:]] == ["system", "assistant"]
+
+
+async def test_nouveau_message_perime_l_action(client, faux_llm):
+    cid, [a] = await _proposer(client, faux_llm, "creer_projet", {"nom": "Beta"})
+    faux_llm.reponses = [_texte("Autre chose.")]
+    await _envoyer(client, cid, "finalement non")
+    await _attendre(client, cid)
+    assert (await _detail(client, cid))["actions"][0]["etat"] == "perimee"
+    r = await _confirmer(client, a["id"])
+    assert r.status_code == 409 and r.json()["detail"] == "action périmée"
+    assert await _projets(client) == []
+
+
+async def test_action_proposee_survit_au_redemarrage(client, faux_llm, reglages):
+    cid, [a] = await _proposer(client, faux_llm, "creer_projet", {"nom": "Beta"})
+    llm = FauxLLM()
+    llm.reponses = [_texte("Fait.")]
+    app = create_app(reglages=reglages, llm=llm, catalogue=CATALOGUE_TEST)
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        assert (await _confirmer(c, a["id"])).status_code == 202
+        await _attendre(c, cid)
+        assert [p["nom"] for p in await _projets(c)] == ["Beta"]
+        assert (await _detail(c, cid))["actions"][0]["etat"] == "confirmee"
+
+
+async def test_lancer_planification_lance_l_etape_auto(client, faux_llm, sessions, monkeypatch):
+    chat = client._transport.app.state.chat
+    lancees = []
+    origine = chat.lancer
+    monkeypatch.setattr(chat, "lancer", lambda i: (lancees.append(i), origine(i)))
+    pid = (await client.post("/api/projets", json={"nom": "P"})).json()["id"]
+    cid, [spec] = await _proposer(
+        client, faux_llm, "deposer_spec", {"projet_id": pid, "contenu": "# Spec"}
+    )
+    faux_llm.reponses = [_texte("Spec déposée.")]
+    await _confirmer(client, spec["id"])
+    await _attendre(client, cid)
+    assert lancees == []
+    _, actions = await _proposer(
+        client, faux_llm, "lancer_pipeline", {"projet_id": pid, "type": "planification"}, cid
+    )
+    faux_llm.reponses = [_texte("ok")] * 5
+    assert (await _confirmer(client, actions[-1]["id"])).status_code == 202
+    async with sessions() as s:
+        plan = await s.scalar(select(Etape.id).where(Etape.agent == "plan"))
+    assert lancees == [plan]
+    await _attendre(client, cid)
+    if t := chat.taches.get(plan):
+        await asyncio.gather(t, return_exceptions=True)
+
+
+async def test_confirmer_annuler_tache(client, faux_llm, sessions):
+    _, tid, _ = await _tache_verrouillee(client, sessions)
+    cid, [a] = await _proposer(client, faux_llm, "annuler_tache", {"tache_id": tid})
+    faux_llm.reponses = [_texte("Annulée.")]
+    assert (await _confirmer(client, a["id"])).status_code == 202
+    await _attendre(client, cid)
+    async with sessions() as s:
+        t = await s.get(Tache, tid)
+        assert (t.colonne, t.verrou) == ("a_faire", None)
+    d = await _detail(client, cid)
+    assert d["actions"][0]["etat"] == "confirmee" and d["etat"] == "pret"
+    assert d["messages"][-2]["contenu"].startswith(f"Action n°{a['id']} (annuler_tache) confirmée")
+
+    _, actions = await _proposer(client, faux_llm, "annuler_tache", {"tache_id": tid}, cid)
+    faux_llm.reponses = [_texte("Rien à faire.")]
+    assert (await _confirmer(client, actions[-1]["id"])).status_code == 202
+    await _attendre(client, cid)
+    b = (await _detail(client, cid))["actions"][-1]
+    assert (b["etat"], b["resultat"]) == ("echouee", "rien à annuler")

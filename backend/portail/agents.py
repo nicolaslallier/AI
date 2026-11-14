@@ -11,6 +11,17 @@ OUTILS_LECTURE_PORTAIL = (
     "lire_pipeline",
     "lire_kanban",
 )
+# n'enregistrent qu'une proposition : l'action ne s'exécute que sur confirmation de Nicolas
+OUTILS_ACTIONS_PORTAIL = (
+    "creer_projet",
+    "deposer_spec",
+    "lancer_pipeline",
+    "creer_tache",
+    "modifier_tache",
+    "deplacer_tache",
+    "annuler_tache",
+)
+OUTILS_PORTAIL = OUTILS_LECTURE_PORTAIL + OUTILS_ACTIONS_PORTAIL
 
 
 class CatalogueInvalide(Exception):
@@ -40,6 +51,13 @@ class Agent(BaseModel):
             "lister_pipelines",
             "lire_pipeline",
             "lire_kanban",
+            "creer_projet",
+            "deposer_spec",
+            "lancer_pipeline",
+            "creer_tache",
+            "modifier_tache",
+            "deplacer_tache",
+            "annuler_tache",
         ]
     ] = []
     tours_max: int = Field(default=20, gt=0)
@@ -49,7 +67,7 @@ class Agent(BaseModel):
     def _coherent(self):
         if self.auto and not self.consigne_redaction:
             raise ValueError(f"l'agent « {self.nom} » est auto : consigne_redaction requise")
-        portail = set(self.outils) & set(OUTILS_LECTURE_PORTAIL)
+        portail = set(self.outils) & set(OUTILS_PORTAIL)
         if portail and portail != set(self.outils):
             raise ValueError(f"l'agent « {self.nom} » mélange outils du portail et outils de dépôt")
         if self.produit == "taches" and self.outils:
@@ -103,7 +121,7 @@ def charger_catalogue(chemin: Path) -> Catalogue:
                 raise CatalogueInvalide(f"pipeline « {p} » : agent inconnu « {a} »")
     for p, etapes in cat.pipelines.items():
         for a in etapes:
-            if set(cat.agents[a].outils) & set(OUTILS_LECTURE_PORTAIL):
+            if set(cat.agents[a].outils) & set(OUTILS_PORTAIL):
                 raise CatalogueInvalide(
                     f"pipeline « {p} » : l'agent « {a} » a des outils du portail"
                 )
