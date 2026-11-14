@@ -6,6 +6,20 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: portail
+          POSTGRES_PASSWORD: portail
+          POSTGRES_DB: portail_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U portail" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      PORTAIL_DATABASE_URL: postgresql+psycopg://portail:portail@localhost:5433/portail_test
     defaults:
       run:
         working-directory: backend
@@ -15,4 +29,6 @@ jobs:
       - run: uv sync
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      - run: uv run alembic upgrade head
+      - run: uv run alembic downgrade base
       - run: uv run pytest
