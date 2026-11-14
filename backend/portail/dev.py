@@ -37,6 +37,7 @@ from portail.github import ErreurGitHub, depot_depuis_url
 from portail.lanceur import ErreurLanceur, Resultat
 from portail.llm import ErreurLLM, retirer_reflexion
 from portail.moteur import Refus
+from portail.notifications import Notifieur, lien_absolu, raison_courte
 from portail.outils import OutilsDepot, OutilsEspace, apercu, empreinte
 from portail.protections import COURRIEL_CODE, verifier_commits_code
 from portail.taches import deplacer_tache
@@ -121,6 +122,7 @@ class Orchestrateur:
         reglages: Reglages,
         horloge: Callable[[], datetime] = lambda: datetime.now(UTC),
         depot_de: Callable[[str], str] = depot_depuis_url,
+        notifieur: Notifieur | None = None,
     ):
         self._sessions = sessions
         self._catalogue = catalogue
@@ -130,7 +132,15 @@ class Orchestrateur:
         self._reglages = reglages
         self._horloge = horloge
         self._depot_de = depot_de
+        self._notifieur = notifieur
         self.taches: dict[int, asyncio.Task] = {}
+
+    def lien(self, chemin: str) -> str | None:
+        return lien_absolu(self._reglages.url_publique, chemin)
+
+    async def notifier(self, titre: str, message: str, lien: str | None) -> None:
+        if self._notifieur:
+            await self._notifieur.envoyer(titre, message, lien)
 
     # --- cycle de vie ---------------------------------------------------
 
@@ -576,6 +586,7 @@ class Orchestrateur:
                 ctx.depot, ctx.ex.branche, ctx.ex.base, ctx.tache.titre, self._corps(ctx, resume)
             )
             await self._maj(ctx, pr_numero=numero, pr_url=url)
+            await self.notifier(ctx.tache.titre, "PR ouverte", url)
         async with self._sessions() as s:
             await s.scalar(select(Projet.id).where(Projet.id == ctx.projet.id).with_for_update())
             tache = await s.get(Tache, ctx.tache.id)
@@ -608,12 +619,14 @@ class Orchestrateur:
         return "fini"
 
     def _corps(self, ctx: _Ctx, resume: str | None) -> str:
-        kanban, pipeline = f"/projets/{ctx.projet.id}/kanban", f"/pipelines/{ctx.pipeline_id}"
+        kanban = self.lien(f"/projets/{ctx.projet.id}/kanban")
+        pipeline = self.lien(f"/pipelines/{ctx.pipeline_id}")
         blocs = [
-            f"Tâche du portail : [kanban]({kanban}) · [pipeline]({pipeline})",
             _liste("## Critères d'acceptation\n", ctx.tache.criteres or ["(aucun)"]),
             "## Revue\n\n" + (resume or "(pas de résumé)"),
         ]
+        if kanban:
+            blocs.insert(0, f"Tâche du portail : [kanban]({kanban}) · [pipeline]({pipeline})")
         if ctx.ex.remarques:
             blocs.append(_liste("## Remarques non résolues\n", ctx.ex.remarques))
         return "\n\n".join(blocs)
@@ -630,7 +643,7 @@ class Orchestrateur:
 
     async def bloquer(self, pipeline_id: int, raison: str) -> None:
         logger.warning("pipeline dev %s bloqué : %s", pipeline_id, raison)
-        ex = projet = None
+        ex = projet = titre = None
         try:
             async with self._sessions() as s:
                 pipeline = await s.get(Pipeline, pipeline_id)
@@ -640,6 +653,8 @@ class Orchestrateur:
                     select(ExecutionDev).where(ExecutionDev.pipeline_id == pipeline_id)
                 )
                 projet = await s.get(Projet, pipeline.projet_id)
+                if ex is not None:
+                    titre = await s.scalar(select(Tache.titre).where(Tache.id == ex.tache_id))
         except Exception:
             logger.exception("blocage du pipeline %s : lecture impossible", pipeline_id)
         branche = None
@@ -655,6 +670,11 @@ class Orchestrateur:
         except Exception:
             logger.exception("blocage du pipeline %s : état non enregistré", pipeline_id)
             await self._au_mieux("blocage minimal", self._blocage_minimal(pipeline_id, raison))
+        if titre and projet is not None:
+            lien = self.lien(f"/projets/{projet.id}/kanban")
+            await self._au_mieux(
+                "notifier", self.notifier(titre, "Bloquée : " + raison_courte(raison), lien)
+            )
 
     async def _enregistrer_blocage(self, pipeline_id: int, raison: str, branche: str | None):
         async with self._sessions() as s:

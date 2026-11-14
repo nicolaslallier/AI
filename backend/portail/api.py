@@ -37,6 +37,7 @@ from portail.github import ErreurGitHub, GitHubApp
 from portail.lanceur import ClientLanceur
 from portail.llm import ClientLLM
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
+from portail.notifications import Notifieur
 from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.schemas import (
@@ -278,7 +279,8 @@ def _orchestrateur(r: Reglages, sessions, catalogue, llm) -> Orchestrateur | Non
         logger.exception("App GitHub mal configurée : pas d'ordonnanceur")
         return None
     lanceur = ClientLanceur(r.lanceur_url, r.lanceur_secret)
-    return Orchestrateur(sessions, catalogue, llm, lanceur, github, r)
+    notifieur = Notifieur(r.ntfy_url, r.ntfy_sujet, r.ntfy_jeton)
+    return Orchestrateur(sessions, catalogue, llm, lanceur, github, r, notifieur=notifieur)
 
 
 def create_app(

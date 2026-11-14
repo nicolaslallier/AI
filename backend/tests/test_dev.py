@@ -4,8 +4,9 @@ import json
 import subprocess
 from pathlib import Path
 
+import httpx
 import pytest
-from conftest import URL, FauxGitHub, FauxLanceur, FauxLLM
+from conftest import URL, FauxGitHub, FauxLanceur, FauxLLM, FauxNotifieur
 from sqlalchemy import select
 
 from portail.agents import Agent, Catalogue
@@ -14,6 +15,7 @@ from portail.db import CommandeLancee, Etape, ExecutionDev, Message, Pipeline, P
 from portail.dev import Orchestrateur
 from portail.github import ErreurGitHub
 from portail.moteur import Refus, creer_pipeline
+from portail.notifications import Notifieur
 
 CONFIG = """
 image: img
@@ -96,13 +98,16 @@ class Monde:
         git(amont, "push", "origin", "main")
         self.origine = nu
         self.sessions = sessions
-        self.reglages = Reglages(database_url=URL, espaces_dir=tmp_path / "espaces")
+        self.reglages = Reglages(
+            database_url=URL, espaces_dir=tmp_path / "espaces", url_publique="https://portail.x"
+        )
         self.llm = FauxLLM()
         self.lanceur = FauxLanceur(tmp_path / "espaces")
         self.github = FauxGitHub()
+        self.notifieur = FauxNotifieur()
         self.orch = Orchestrateur(
             sessions, CATALOGUE, self.llm, self.lanceur, self.github, self.reglages,
-            depot_de=lambda url: "nicolas/projet",
+            depot_de=lambda url: "nicolas/projet", notifieur=self.notifieur,
         )  # fmt: skip
 
     async def creer(self) -> int:
@@ -602,3 +607,48 @@ async def test_creer_pipeline_refuse_dev(sessions):
         with pytest.raises(Refus) as e:
             await creer_pipeline(s, CATALOGUE, 1, "dev")
     assert e.value.code == 422
+
+
+async def test_pr_ouverte_notifie(monde):
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok", "propre")]
+    await monde.lancer()
+    (envoi,) = monde.notifieur.envoyes
+    assert envoi["titre"] == "Ajouter l'équipe" and envoi["message"] == "PR ouverte"
+    assert envoi["lien"] == monde.github.prs[1]["url"]
+
+
+async def test_blocage_notifie_raison_courte(monde):
+    monde.lanceur.codes = {CIBLES: [1], "pytest": [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+    await monde.lancer()
+    (envoi,) = monde.notifieur.envoyes
+    assert envoi["message"].startswith("Bloquée : ")
+    assert "sortie de" not in envoi["message"]
+    assert envoi["lien"] == "https://portail.x/projets/1/kanban"
+
+
+async def test_corps_pr_liens_absolus(monde):
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok", "propre")]
+    await monde.lancer()
+    assert "https://portail.x/projets/1/kanban" in monde.github.prs[1]["corps"]
+
+
+async def test_corps_pr_sans_url_publique(monde):
+    monde.reglages.url_publique = ""
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok", "propre")]
+    await monde.lancer()
+    assert "/projets/" not in monde.github.prs[1]["corps"]
+
+
+async def test_ntfy_en_panne_n_arrete_rien(monde):
+    def panne(requete):
+        raise httpx.ConnectError("non")
+
+    monde.orch._notifieur = Notifieur("http://ntfy", "portail", "sec", httpx.MockTransport(panne))
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok", "propre")]
+    await monde.lancer()
+    assert 1 in monde.github.prs

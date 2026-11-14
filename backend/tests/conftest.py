@@ -200,6 +200,14 @@ class FauxLanceur:
         self.appels.append({"route": "nettoyer", "espace": espace})
 
 
+class FauxNotifieur:
+    def __init__(self):
+        self.envoyes: list[dict] = []
+
+    async def envoyer(self, titre, message, lien=None) -> None:
+        self.envoyes.append({"titre": titre, "message": message, "lien": lien})
+
+
 @pytest.fixture
 def faux_lanceur(tmp_path):
     return FauxLanceur(tmp_path / "espaces")
