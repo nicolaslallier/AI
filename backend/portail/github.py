@@ -5,6 +5,7 @@ import binascii
 import re
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import quote
@@ -31,6 +32,25 @@ class ErreurGitHub(Exception):
     def transitoire(self) -> bool:
         """Injoignable, 5xx ou 429 : à retenter plus tard."""
         return self.statut is None or self.statut == 429 or self.statut >= 500
+
+
+@dataclass(frozen=True)
+class CommentaireGitHub:
+    id: int
+    type: Literal["revue", "ligne", "conversation"]
+    auteur: str
+    auteur_type: str  # User, Bot…
+    texte: str
+    cree_le: datetime
+    url: str
+    etat_revue: str | None = None  # revue : APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED
+    revue_id: int | None = None  # ligne : pull_request_review_id
+    chemin: str | None = None
+    ligne: int | None = None
+
+
+_PAGE = 100
+_PAGES_MAX = 10
 
 
 def _raison(r: httpx.Response) -> str:
@@ -162,3 +182,63 @@ class GitHubApp:
 
     async def fermer_pr(self, depot: str, numero: int) -> None:
         await self._depot("PATCH", depot, f"/pulls/{int(numero)}", {"state": "closed"})
+
+    async def _pages(self, depot: str, chemin: str) -> list[Any]:
+        """Toutes les pages d'une liste : 100 par page, 10 pages au plus."""
+        tout: list[Any] = []
+        for k in range(1, _PAGES_MAX + 1):
+            page = await self._depot("GET", depot, f"{chemin}?per_page={_PAGE}&page={k}")
+            if not isinstance(page, list):
+                raise ErreurGitHub(f"réponse GitHub inattendue : liste attendue sur {chemin}")
+            tout += page
+            if len(page) < _PAGE:
+                break
+        return tout
+
+    def _commentaire(self, d: Any, type_: Literal["revue", "ligne", "conversation"], date: str):
+        user = self._champ(d, "user", dict)
+        try:
+            cree_le = datetime.fromisoformat(self._champ(d, date, str))
+        except ValueError:
+            raise ErreurGitHub(f"réponse GitHub inattendue : {date}") from None
+        corps = d.get("body")
+        revue_id = d.get("pull_request_review_id")
+        ligne = d.get("line") if d.get("line") is not None else d.get("original_line")
+        return CommentaireGitHub(
+            id=self._champ(d, "id", int),
+            type=type_,
+            auteur=self._champ(user, "login", str),
+            auteur_type=self._champ(user, "type", str),
+            texte=corps if isinstance(corps, str) else "",
+            cree_le=cree_le,
+            url=self._champ(d, "html_url", str),
+            etat_revue=self._champ(d, "state", str) if type_ == "revue" else None,
+            revue_id=revue_id if isinstance(revue_id, int) else None,
+            chemin=d.get("path") if type_ == "ligne" and isinstance(d.get("path"), str) else None,
+            ligne=ligne if isinstance(ligne, int) and not isinstance(ligne, bool) else None,
+        )
+
+    async def revues(self, depot: str, numero: int) -> list[CommentaireGitHub]:
+        brutes = await self._pages(depot, f"/pulls/{int(numero)}/reviews")
+        # une revue PENDING (non soumise) n'a pas de submitted_at : ignorée
+        return [
+            self._commentaire(d, "revue", "submitted_at")
+            for d in brutes
+            if not (isinstance(d, dict) and d.get("submitted_at") is None)
+        ]
+
+    async def commentaires_ligne(self, depot: str, numero: int) -> list[CommentaireGitHub]:
+        brutes = await self._pages(depot, f"/pulls/{int(numero)}/comments")
+        return [self._commentaire(d, "ligne", "created_at") for d in brutes]
+
+    async def commentaires_conversation(self, depot: str, numero: int) -> list[CommentaireGitHub]:
+        brutes = await self._pages(depot, f"/issues/{int(numero)}/comments")
+        return [self._commentaire(d, "conversation", "created_at") for d in brutes]
+
+    async def repondre_ligne(
+        self, depot: str, numero: int, commentaire_id: int, texte: str
+    ) -> None:
+        await self._depot(
+            "POST", depot, f"/pulls/{int(numero)}/comments/{int(commentaire_id)}/replies",
+            {"body": texte},
+        )  # fmt: skip
