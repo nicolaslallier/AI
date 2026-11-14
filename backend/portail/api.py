@@ -85,7 +85,7 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
 
 
 def _verifier_depot(url: str | None) -> None:
-    if url is not None and not DEPOT_RE.match(url):
+    if url is not None and not DEPOT_RE.fullmatch(url):
         raise Refus(422, "URL de dépôt GitHub invalide")
 
 

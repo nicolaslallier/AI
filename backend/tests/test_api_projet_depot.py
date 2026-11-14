@@ -28,6 +28,7 @@ async def test_projet_sans_depot(client):
         "https://github.com/a",
         "https://x:y@github.com/a/b",
         "file:///etc",
+        "https://github.com/a/b\n",
     ],
 )
 async def test_url_invalide_422(client, url):
