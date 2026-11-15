@@ -178,19 +178,70 @@ async def test_agent_hors_catalogue_ignore(client, sessions):
 
 
 async def test_bureau_sans_contenu(client, sessions):
-    pid, _ = await _etape(sessions, "dev", "a", "echouee", MARQUEUR, pipeline_etat="echouee")
+    pid, eid = await _etape(sessions, "dev", "a", "echouee", MARQUEUR, pipeline_etat="echouee")
     async with sessions() as s, s.begin():
         pl = await s.get(Pipeline, pid)
-        t = Tache(projet_id=pl.projet_id, titre=MARQUEUR, rang=1, origine="manuel")
+        et = await s.get(Etape, eid)
+        et.apercu = MARQUEUR
+        et.action = MARQUEUR
+        et.sha = MARQUEUR
+        t = Tache(
+            projet_id=pl.projet_id, titre=MARQUEUR, description=MARQUEUR, criteres=[MARQUEUR],
+            fichiers=[MARQUEUR], rang=1, origine="manuel",
+        )  # fmt: skip
         s.add(t)
         await s.flush()
         s.add(
             ExecutionDev(
-                pipeline_id=pid, tache_id=t.id, n=1, branche="b", espace="e", base="main",
-                base_sha="x", phase="tests",
+                pipeline_id=pid, tache_id=t.id, n=1, branche=MARQUEUR, espace=MARQUEUR,
+                base="main", base_sha=MARQUEUR, phase="tests", remarques=[MARQUEUR],
+                fichiers_tests=[MARQUEUR], sortie_rouge=MARQUEUR,
             )
         )  # fmt: skip
-        s.add(Conversation(agent="pm", titre=MARQUEUR, etat="erreur", erreur=MARQUEUR))
-    r = await client.get("/api/bureau")
-    assert MARQUEUR not in r.text
-    assert r.json()["postes"]["a"]["etat"] == "en_erreur"
+        c = Conversation(agent="pm", titre=MARQUEUR, etat="erreur", erreur=MARQUEUR)
+        c2 = Conversation(agent="orchestrateur", titre=MARQUEUR, etat="pret")
+        s.add_all([c, c2])
+        await s.flush()
+        s.add(
+            ActionConversation(
+                conversation_id=c2.id, nom=MARQUEUR, parametres={"x": MARQUEUR},
+                etat="proposee", resultat=MARQUEUR, lien=MARQUEUR,
+            )
+        )  # fmt: skip
+        # un avis en cours, rendu par le bureau, sur un document chargé de contenu
+        d = Document(
+            projet_id=pl.projet_id, pipeline_id=pid, etape_id=eid, type="plan", contenu=MARQUEUR
+        )
+        s.add(d)
+        await s.flush()
+        s.add(Avis(document_id=d.id, version=1, agent="b", contenu=MARQUEUR, etat="en_cours"))
+    b = await _bureau(client)
+    assert MARQUEUR not in (await client.get("/api/bureau")).text
+    assert b["postes"]["a"]["etat"] == "en_erreur"
+    assert b["postes"]["b"]["travaux"][0]["sorte"] == "avis"
+    assert b["postes"]["orchestrateur"]["etat"] == "en_attente"
+
+
+async def test_agent_dans_deux_pipelines_un_seul_poste(client, sessions):
+    from portail.agents import Catalogue
+
+    cat = Catalogue(
+        agents=CATALOGUE_TEST.agents,
+        pipelines={"un": ["a", "b"], "deux": ["a", "plan"]},
+    )
+    await _etape(sessions, "un", "a", "en_cours")
+    await _etape(sessions, "deux", "a", "en_attente", pipeline_etat="en_attente")
+    from portail.bureau import lire_bureau
+
+    async with sessions() as s:
+        b = await lire_bureau(s, cat, datetime.now(UTC))
+    assert list(b.postes).count("a") == 1
+    assert [t.etat for t in b.postes["a"].travaux] == ["au_travail", "en_attente"]
+    assert [g.nom for g in b.groupes if "a" in g.agents] == ["un", "deux"]
+
+
+async def test_etape_abandonnee_pas_une_erreur(client, sessions):
+    from portail.etats import REPRISE_ABANDONNEE
+
+    await _etape(sessions, "double", "a", "echouee", REPRISE_ABANDONNEE, pipeline_etat="echouee")
+    assert (await _bureau(client))["postes"]["a"]["etat"] == "libre"

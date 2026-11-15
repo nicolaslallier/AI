@@ -3,7 +3,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from portail.agents import Catalogue, rangement
@@ -16,7 +16,7 @@ from portail.db import (
     ExecutionDev,
     Pipeline,
 )
-from portail.etats import Etat
+from portail.etats import ANNULE, REPRISE_ABANDONNEE, Etat
 from portail.schemas import Bureau, Groupe, Poste, Travail
 
 FUSEAU = ZoneInfo("America/Toronto")
@@ -36,12 +36,10 @@ async def lire_bureau(s: AsyncSession, cat: Catalogue, maintenant: datetime) -> 
     def ajouter(agent: str, ident: int, **t) -> None:
         trouves[agent].append((ORDRE[t["etat"]], ident, Travail(**t)))
 
-    # étapes de pipeline : actives, ou échouées aujourd'hui (une étape annulée n'est pas une erreur)
+    # étapes de pipeline : actives, ou échouées aujourd'hui (annulée ou abandonnée : pas une erreur)
     tache = (
         select(ExecutionDev.tache_id)
         .where(ExecutionDev.pipeline_id == Pipeline.id)
-        .order_by(ExecutionDev.id.desc())
-        .limit(1)
         .scalar_subquery()
     )
     actif = [Etat.EN_COURS, Etat.EN_ATTENTE]
@@ -53,11 +51,16 @@ async def lire_bureau(s: AsyncSession, cat: Catalogue, maintenant: datetime) -> 
             (Etape.etat.in_(actif) & Pipeline.etat.in_(actif))
             | (
                 (Etape.etat == Etat.ECHOUEE)
-                & Etape.erreur.is_distinct_from("annulé")
+                & Etape.erreur.is_distinct_from(ANNULE)
+                & Etape.erreur.is_distinct_from(REPRISE_ABANDONNEE)
                 & (Pipeline.etat == Etat.ECHOUEE)
+                # ponytail: un poste reste en erreur jusqu'à minuit même si la tâche a été reprise
+                # avec succès ; ignorer l'erreur si un pipeline plus récent de la tâche a réussi.
                 & (Pipeline.maj_le >= debut)
             ),
         )
+        # les travaux actifs d'abord : la coupure ne doit pas les perdre au profit d'erreurs
+        .order_by(case((Etape.etat == Etat.ECHOUEE, 1), else_=0), Etape.id.desc())
         .limit(LIMITE)
     )
     for eid, agent, etat, pid, type_, tid in rows:
@@ -77,6 +80,7 @@ async def lire_bureau(s: AsyncSession, cat: Catalogue, maintenant: datetime) -> 
             | ((Conversation.etat == "pret") & Conversation.id.in_(proposees))
             | ((Conversation.etat == "erreur") & (Conversation.maj_le >= debut)),
         )
+        .order_by(Conversation.id.desc())
         .limit(LIMITE)
     )
     for cid, agent, etat in rows:
@@ -95,6 +99,7 @@ async def lire_bureau(s: AsyncSession, cat: Catalogue, maintenant: datetime) -> 
         select(Avis.id, Avis.agent, Document.type, Document.pipeline_id)
         .join(Document, Document.id == Avis.document_id)
         .where(Avis.agent.in_(agents), Avis.etat == "en_cours")
+        .order_by(Avis.id.desc())
         .limit(LIMITE)
     )
     for aid, agent, type_, pid in rows:
