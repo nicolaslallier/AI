@@ -70,7 +70,7 @@ def test_coffre_rend_chaque_secret():
         assert _secret(n) not in facultatives
 
 
-def _lancer_coffre(tmp_path: Path, court: bool) -> subprocess.CompletedProcess:
+def _lancer_coffre(tmp_path: Path, court: bool, **extra: str) -> subprocess.CompletedProcess:
     secrets = {
         k: "v" * 40
         for k in (
@@ -99,6 +99,10 @@ def _lancer_coffre(tmp_path: Path, court: bool) -> subprocess.CompletedProcess:
         "VAULT_CA_CERT": str(ca),
         "PORTAIL_STACK_ENV": str(tmp_path / "pile.env"),
     }
+    env.pop(
+        "GITHUB_ACTIONS", None
+    )  # sinon le script masque les valeurs : un autre test s'en charge
+    env.update(extra)
     return subprocess.run([str(VAULT)], check=False, env=env, capture_output=True, text=True)
 
 
@@ -115,6 +119,41 @@ def test_secrets_longs_acceptes(tmp_path):
     assert "v" * 40 not in r.stdout + r.stderr
 
 
+def test_valeurs_seulement_dans_les_lignes_masquees(tmp_path):
+    r = _lancer_coffre(tmp_path, court=False, GITHUB_ACTIONS="true")
+    assert r.returncode == 0, r.stderr
+    lignes = [x for x in (r.stdout + r.stderr).splitlines() if "v" * 40 in x]
+    assert lignes and all(x.startswith("::add-mask::") for x in lignes)
+
+
 def test_vhost_ne_sert_pas_interne():
     conf = (RACINE / "deploy" / "nginx" / "portail.conf").read_text()
-    assert re.search(r"location\s+\^~\s+/interne/\s*\{\s*return\s+404;\s*\}", conf)
+    bloc = re.search(r"location\s+\^~\s+/interne\s*\{\s*return\s+404;\s*\}", conf)
+    assert bloc and bloc.start() < conf.index("location / {")
+
+
+def test_agent_aux_cles_connues():
+    for nom, s in _agents().items():
+        assert set(s) == {
+            "image", "networks", "read_only", "cap_drop", "security_opt", "mem_limit",
+            "pids_limit", "restart", "user", "cpus", "entrypoint", "environment",
+        }, nom  # fmt: skip
+        assert s["user"] == "65532:65532" and s["cpus"] == "0.5", nom
+
+
+def test_lanceur_sans_secret_d_agent():
+    env = json.dumps(PILE["services"]["lanceur"])
+    assert "PORTAIL_AGENT_SECRET" not in env and "AGENT_SECRET" not in env
+
+
+def test_reseau_des_agents_fixe_et_connu_du_portail():
+    config = PILE["networks"]["portail-agents"]["ipam"]["config"]
+    assert len(config) == 1
+    assert (
+        PILE["services"]["portail"]["environment"]["PORTAIL_RESEAU_AGENTS"] == config[0]["subnet"]
+    )
+
+
+def test_digests_verifies_au_deploiement():
+    wf = (RACINE / ".github" / "workflows" / "deploy.yml").read_text()
+    assert wf.count("sha256:[0-9a-f]{64}") == 1 and "for v in EXECUTION_DIGEST AGENTS_DIGEST" in wf

@@ -1,3 +1,4 @@
+import ipaddress
 import re
 from pathlib import Path
 
@@ -36,7 +37,20 @@ class Reglages(BaseSettings):
     duree_mission_s: int = Field(
         default=3600, gt=0
     )  # PORTAIL_DUREE_MISSION_S : durée de vie d'une mission en conteneur
+    reseau_agents: str = (
+        ""  # PORTAIL_RESEAU_AGENTS : CIDR du réseau des agents ; vide : aucun filtrage
+    )
     deploye_le: int = 0  # PORTAIL_DEPLOYE_LE : secondes Unix du déploiement
+
+    @field_validator("reseau_agents")
+    @classmethod
+    def _reseau_agents(cls, v: str) -> str:
+        if v:
+            try:
+                ipaddress.ip_network(v)
+            except ValueError:
+                raise ValueError("PORTAIL_RESEAU_AGENTS doit être vide ou un réseau CIDR") from None
+        return v
 
     @field_validator("resume_heure")
     @classmethod

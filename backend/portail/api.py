@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import logging
 import os
 import time
@@ -402,6 +403,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.reglages = r
+        app.state.reseau_agents = ipaddress.ip_network(r.reseau_agents) if r.reseau_agents else None
         metriques.initialiser(r)
         app.state.catalogue = catalogue or charger_catalogue(r.agents_fichier)
         # un agent à `service:` sans secret valide empêche le démarrage
@@ -553,6 +555,20 @@ def create_app(
                 methode = request.method if request.method in _METHODES else "AUTRE"
                 metriques.HTTP_REQUETES.labels(methode, route, code).inc()
                 metriques.HTTP_DUREE.labels(methode, route).observe(time.perf_counter() - debut)
+
+    @app.middleware("http")
+    async def _reseau_agents(request: Request, call_next):
+        # Déclaré en dernier : le plus extérieur, exécuté avant toute lecture d'en-tête. Le pair est
+        # celui de la connexion (uvicorn sans --proxy-headers) : aucun en-tête ne le réécrit.
+        reseau = request.app.state.reseau_agents
+        if reseau is not None:
+            try:
+                pair = ipaddress.ip_address(request.client.host) if request.client else None
+            except ValueError:
+                pair = None
+            if (pair is not None and pair in reseau) != request.url.path.startswith("/interne/"):
+                return Response(status_code=404)
+        return await call_next(request)
 
     @app.get("/api/sante")
     async def sante():

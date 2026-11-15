@@ -211,6 +211,9 @@ jobs:
           for v in PORTAINER_API_KEY BAO_TOKEN PORTAINER_ENDPOINT_ID EXECUTION_DIGEST AGENTS_DIGEST; do
             [ -n "${!v}" ] || { echo "::error::$v absent (secret ou variable du dépôt)"; exit 1; }
           done
+          for v in EXECUTION_DIGEST AGENTS_DIGEST; do
+            printf '%s' "${!v}" | grep -Eqx 'sha256:[0-9a-f]{64}' || { echo "::error::$v n'a pas la forme sha256:<64 hexadécimaux>"; exit 1; }
+          done
           umask 077
           export PORTAIL_STACK_ENV="$RUNNER_TEMP/portail.env"
           trap 'rm -f "$PORTAIL_STACK_ENV"' EXIT
