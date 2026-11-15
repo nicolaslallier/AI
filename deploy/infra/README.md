@@ -66,9 +66,12 @@ Sans cette PR, `/metrics` répond sur `infra-net` sans être lu : rien ne casse.
 3. Après la fusion, ouvrir la PR Infra : recopier `deploy/nginx/portail.conf` (bloc
    `location ^~ /interne { return 404; }`). Sans elle, `/interne/` passe par `location /`
    derrière oauth2-proxy : pas exposé sans session, mais le 404 voulu manque.
-   Vérifier ensuite : `curl -sk -o /dev/null -w '%{http_code}' https://<hôte du portail>/interne/x` rend `404`.
-4. Décider, agent par agent, de poser `service:` dans `agents.yaml` (aucun agent ne migre
-   dans ce lot).
+   Vérifier ensuite :
+   - `curl -sk -o /dev/null -w '%{http_code}' -X POST https://portail.infra.famillelallier.net/interne/modele` rend `404` ;
+   - Loki rend des lignes JSON pour `{container=~"portail-agent-.*"} | json | agent != ""` (Alloy les ramasse déjà, rien à ajouter) ;
+   - `docker network inspect portail_portail-agents` ne liste que `portail` et les `agent-*`.
+4. Décider, agent par agent, de poser `service:` dans `agents.yaml` (procédure et retour arrière :
+   section « Agents en conteneur » du README ; aucun agent ne migre dans ce lot).
 
 Les services `agent-<nom>` sont tous sur le réseau `portail-agents` (interne) : ils voient le
 portail, pas l'Infra, ni la base, ni LiteLLM, ni le lanceur, ni Internet. Ils partagent ce

@@ -70,6 +70,35 @@ flowchart LR
 ```
 <!-- schema-pipelines:fin -->
 
+## Agents en conteneur
+
+Chaque agent peut tourner dans son propre conteneur, écrit en Rust (`agents/`, une image `ai-agents`, un service `agent-<nom>` par agent dans la pile). Aucun agent ne migre de lui-même : sans `service:` dans `agents.yaml`, rien ne change.
+
+- **Rôles** : le portail garde le modèle (LiteLLM), les outils, `protections.py`, les compteurs et la fin de mission ; l'agent ne fait que la boucle (et, plus tard, du code propre à lui).
+- **Réseau** : les services sont sur `portail-agents` (interne) : ils voient le portail, ni l'Infra, ni la base, ni LiteLLM, ni le lanceur, ni Internet.
+- **Secrets** : l'agent ne connaît que son propre secret (`AGENT_SECRET`, variable `PORTAIL_AGENT_SECRET_<NOM>` côté portail) ; la mission porte un jeton qui ne vaut que pour elle.
+- **Limites** : tours, appels d'outils, contexte et durée sont comptés par le portail, quoi que dise l'agent. Le détail du contrat : [`docs/agents-contrat-v1.md`](docs/agents-contrat-v1.md).
+- **Image** : la pile référence l'image par digest (`AGENTS_DIGEST`, posé par le déploiement).
+
+**Écrire du code sur mesure pour un agent** : ajouter un module dans `agents/catalogue/src/`, donner sa branche à l'agent dans `catalogue::tourner` (`agents/catalogue/src/lib.rs`, aujourd'hui tous sur `agent::boucle::par_defaut`), puis `cd agents && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` : `cargo test` rejoue la conformité (`agents/catalogue/tests/conformite.rs`) pour chaque agent.
+
+### Migrer un agent (pilote : `revue`)
+
+1. **Relever la référence** (au moins une semaine) dans Grafana : tableau « Portail : agents et modèles » avec `agent=revue` et `lieu=portail` (panneaux « Jetons par heure », « Durée d'un appel, p95 », « Erreurs LiteLLM (1 h) », « Réussite par lieu »), et tableau « Portail : boucle de dev » (« Renvois (1 j) », « Blocages par cause (7 j) »).
+2. **Vérifier la page Bureau** : le poste `revue` doit montrer « conteneur ● <version> » (« conteneur injoignable » sinon). La sonde est faite par `GET /api/bureau`, au plus une fois toutes les 10 secondes par agent, et jamais plus d'une seconde d'attente.
+3. **Poser `service:`** : une PR qui ajoute `service: http://agent-revue:8080` à `revue` dans `agents.yaml` (forme `http://agent-<nom>:<port>`, aucune autre) ; le déploiement suit la fusion. Le portail refuse de démarrer si la variable `PORTAIL_AGENT_SECRET_REVUE` manque ou fait moins de 32 caractères.
+4. **Comparer** après quelques jours : mêmes panneaux avec `lieu=conteneur` ; et la requête SQL
+
+   ```sql
+   select lieu, version_image, issue, count(*), avg(duree_ms), sum(jetons_entree + jetons_sortie)
+   from appel_llm where agent = 'revue' group by 1, 2, 3;
+   ```
+
+   Suivre une mission dans Loki : `{container=~"portail-agent-revue.*"} | json | mission="<id>"`, et la même mission côté portail : `{container=~"portail-portail.*"} | json | mission="<id>"`.
+5. **Revenir en arrière** : une PR qui retire la ligne `service:` de `revue`, rien d'autre ; le conteneur reste en marche, inoccupé, et `lieu` redevient `portail`.
+
+Ordre prévu pour la suite, un agent à la fois et seulement sur décision de Nicolas : `tri`, `plan`, `taches`, `spec`, `orchestrateur`, `tests`, `code`, puis les agents ajoutés plus tard. Le retrait de `boucle.py` viendra après deux semaines où tous ont tenu.
+
 ## Monitoring
 
 - **`/metrics`** : format Prometheus, lu par Prometheus sur `infra-net` (job `portail`) ; le frontal NGINX répond 404 (`location ^~ /metrics` de `deploy/nginx/portail.conf`).
@@ -98,10 +127,13 @@ Le dépôt est public : rien de secret n'y entre, tout passe par OpenBao.
 5. Ouvrir la PR Infra décrite dans `deploy/infra/README.md` (règle Alloy, vhost, vérifications) ; le détail y reste.
 6. Décider si le dépôt devient privé (question ouverte de la spec).
 7. Épingler MinIO : `minio/minio:latest` est resté sans digest dans `deploy/portainer-stack.yml` (Docker Hub refuse l'accès anonyme à ce dépôt). Choisir un tag `RELEASE` daté, relever son digest avec un accès authentifié, le remplacer, puis nommer ce tag dans les projets.
-8. Lancer `actionlint` sur `.github/workflows` avant la fusion : il n'a pas pu tourner pendant le lot, et une erreur dans `deploy.yml` ne se verrait qu'après la fusion dans `main`.
+8. Lancer `actionlint` sur `.github/workflows` et `docker compose -f deploy/portainer-stack.yml config -q` avant la fusion : ils n'ont pas pu tourner pendant le lot, et une erreur dans `deploy.yml` ne se verrait qu'après la fusion dans `main`.
 9. Au premier déploiement, vérifier que le lanceur durci (`cap_drop: ALL`, `read_only`) répond et démarre une exécution, et que Trivy lit bien GHCR.
 10. Dans Settings > Actions > General du dépôt, exiger l'approbation des workflows pour TOUS les contributeurs externes (« Require approval for all outside collaborators » ; le réglage par défaut ne couvre que les nouveaux contributeurs), et relire le diff de `.github/` avant d'approuver.
 11. Rendre le runner auto-hébergé `ai` éphémère (un job, puis il est recréé). Le dépôt est public : une PR de fork peut AJOUTER son propre workflow `on: pull_request` avec `runs-on: [self-hosted, ai]`, donc le contenu des workflows de `main` ne protège pas le runner ; seuls l'approbation de tout fork et l'éphémérité le font.
+12. **Avant la fusion du lot I** : ranger dans OpenBao, dans le secret `infra/portail`, une clé par agent `PORTAIL_AGENT_SECRET_<NOM>` : `SPEC`, `ORCHESTRATEUR`, `PLAN`, `TACHES`, `TESTS`, `CODE`, `REVUE`, `ARCHITECTE`, `CHALLENGER`, `SECURITE`, `DOC`, `PM`, `TRI` (13 clés, chacune tirée de `openssl rand -hex 32`). Sans elles, le déploiement s'arrête proprement sur « clé absente ».
+13. Ajouter le contrôle `agents` à la protection de `main` (avec `backend`, `frontend`, `lanceur` et `securite`).
+14. **Après la fusion** : ouvrir la PR Infra du lot I (`deploy/infra/README.md`).
 
 ### Jeton GitHub (lecture seule)
 
