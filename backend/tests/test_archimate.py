@@ -400,3 +400,39 @@ def test_xml_modele_sans_vue_ni_relation_reste_valide():
     assert racine.find("a:views", NS) is None
     vide = xml_echange(Modele(), "P")
     SCHEMA.validate(io.StringIO(vide))
+
+
+def test_xml_retire_les_caracteres_interdits_en_xml_1_0():
+    m = Modele(
+        elements=[
+            Element(
+                id="app-a",
+                type="ApplicationComponent",
+                nom="a\x0bb￾",
+                description="d\x01e￿f\tg\nh\ri",
+            )
+        ],
+        relations=[Relation(type="Association", source="app-a", cible="app-a", nom="r\x00s")],
+        vues=[Vue(nom="v\x1fw", elements=["app-a"])],
+    )
+    texte = xml_echange(m, "P\x0cQ")
+    racine = ET.fromstring(texte)
+    SCHEMA.validate(io.StringIO(texte))
+    assert racine.find("a:name", NS).text == "PQ"
+    element = racine.find("a:elements/a:element", NS)
+    assert element.find("a:name", NS).text == "ab"
+    assert (
+        element.find("a:documentation", NS).text == "def\tg\nh\ni"
+    )  # \r conservé à l'écriture, normalisé en \n par l'analyseur
+    assert racine.find("a:relationships/a:relationship/a:name", NS).text == "rs"
+    assert racine.find("a:views/a:diagrams/a:view/a:name", NS).text == "vw"
+
+
+def test_xml_un_element_repete_dans_une_vue_donne_un_seul_noeud():
+    m = Modele(
+        elements=[Element(id="app-a", type="ApplicationComponent", nom="A")],
+        vues=[Vue(nom="V", elements=["app-a", "app-a"])],
+    )
+    texte = xml_echange(m, "P")
+    SCHEMA.validate(io.StringIO(texte))
+    assert len(ET.fromstring(texte).findall("a:views/a:diagrams/a:view/a:node", NS)) == 1

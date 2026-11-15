@@ -184,8 +184,12 @@ def _noeud(parent: ET.Element, balise: str, type_: str, ident: str, **attrs: str
     )
 
 
+# Caractères interdits en XML 1.0 (tabulation, saut de ligne et retour chariot sont permis).
+_INTERDITS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
 def _texte(parent: ET.Element, balise: str, texte: str) -> None:
-    ET.SubElement(parent, f"{{{_NS}}}{balise}", {_LANG: "fr"}).text = texte
+    ET.SubElement(parent, f"{{{_NS}}}{balise}", {_LANG: "fr"}).text = _INTERDITS.sub("", texte)
 
 
 def xml_echange(modele: Modele, nom: str) -> str:
@@ -219,7 +223,7 @@ def xml_echange(modele: Modele, nom: str) -> str:
             vue = _noeud(diagrammes, "view", "Diagram", f"id-vue-{n}", **attrs)
             _texte(vue, "name", v.nom)
             noeuds: dict[str, str] = {}
-            for k, ident in enumerate(v.elements):
+            for k, ident in enumerate(dict.fromkeys(v.elements)):
                 noeuds[ident] = f"id-vue-{n}-n{k + 1}"
                 _noeud(
                     vue,
