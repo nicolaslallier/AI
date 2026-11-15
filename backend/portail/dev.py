@@ -47,6 +47,7 @@ from portail.execution import (
     dossiers_lecture_seule,
     lire_config,
 )
+from portail.faits import Fait, verifier_faits
 from portail.github import CommentaireGitHub, ErreurGitHub, depot_depuis_url
 from portail.lanceur import ErreurLanceur, Resultat
 from portail.llm import ErreurLLM, retirer_reflexion
@@ -613,6 +614,9 @@ class Orchestrateur:
         if ctx.cfg.services:
             await self._lanceur.services(ctx.ex.espace, ctx.cfg.services)
         await self._installer(ctx)
+        if not reprise and "lint" in ctx.cfg.commandes:  # la dette existante ne bloque pas
+            lint = await self._commande(ctx, "lint", tout_lecture_seule=True)
+            champs["lint_base_ok"] = lint.code == 0
         return await self._transition(ctx, "tri" if reprise else "tests", base_sha=sha, **champs)
 
     async def _tri(self, ctx: _Ctx) -> str:
@@ -852,7 +856,19 @@ class Orchestrateur:
         await self._proteger(ctx)
         # rien d'ignoré (.venv/ piégé par une commande de l'agent…) ne survit : on réinstalle
         await ctx.espace.remettre_a_zero()
-        await self._installer(ctx)
+        r = await self._commande(ctx, "installer")
+        if r.code != 0:  # un paquet inventé : l'agent de code corrige, dans la limite des renvois
+            fait = Fait(
+                type="installation", role="code", bloquant=True,
+                texte="installation des dépendances échouée (paquet inventé ?)",
+            )  # fmt: skip
+            sortie = r.sortie[-_FIN_SORTIE:]
+            if ctx.ex.renvois >= self._reglages.renvois_max:
+                raise _Blocage(f"installation échouée :\n{sortie}")
+            return await self._transition(
+                ctx, fait.role, renvois=ctx.ex.renvois + 1, controle_courant=0,
+                remarques=[f"{fait.texte} :\n{sortie}"],
+            )  # fmt: skip
         for nom, fichiers in (("tests_cibles", ctx.ex.fichiers_tests), ("tests", [])):
             r = await self._commande(ctx, nom, fichiers)
             if r.code != 0:
@@ -885,6 +901,27 @@ class Orchestrateur:
                     categories = {"tests", "code", "doc", "reponse"}
                     annexes.append(await self._annexe_commentaires(ctx, categories))
                 if nom == "challenger":
+                    faits = await self._faits(ctx, diff)
+                    notes += [
+                        n
+                        for n in (
+                            {"agent": "faits", "texte": f.texte} for f in faits if not f.bloquant
+                        )
+                        if n not in notes
+                    ]
+                    if bloquants := [f for f in faits if f.bloquant]:
+                        if ctx.ex.renvois < self._reglages.renvois_max:  # pas de challenger
+                            return await self._transition(
+                                ctx, bloquants[0].role, renvois=ctx.ex.renvois + 1,
+                                remarques=[f.texte for f in faits], controle_courant=0,
+                                notes=notes,
+                            )  # fmt: skip
+                        remarques += [f"faits : {f.texte}" for f in bloquants]
+                    annexes.append(
+                        _liste(
+                            "Faits vérifiés par le portail :", [f.texte for f in faits] or ["aucun"]
+                        )
+                    )
                     annexes += await self._regles(ctx)
                 verdict = await self._verdict(ctx, nom, annexes)
                 # un contrôle rejoué après un renvoi ne répète pas ses notes
@@ -906,6 +943,25 @@ class Orchestrateur:
                 ctx, "controles", controle_courant=i + 1, notes=notes, remarques=remarques
             )
         return await self._transition(ctx, "reponses" if reprise else "pr")
+
+    async def _faits(self, ctx: _Ctx, diff: str) -> list[Fait]:
+        """Faits vérifiés par du code (étape `faits`) ; le lint tourne en lecture seule."""
+        await self._etape(ctx, "portail", "faits")
+        lint = None
+        if "lint" in ctx.cfg.commandes:
+            lint = await self._commande(ctx, "lint", tout_lecture_seule=True)
+        faits = await verifier_faits(
+            self._sessions, ctx.pipeline_id, ctx.racine, ctx.cfg, diff, lint, ctx.ex.lint_base_ok
+        )
+        await self._message(
+            ctx, "system", "\n".join(f"- {f.texte}" for f in faits) or "aucun fait à signaler"
+        )
+        async with self._sessions() as s:  # l'étape suivante est celle du challenger
+            await s.execute(
+                update(Etape).where(Etape.id == ctx.etape_id).values(etat=Etat.TERMINEE)
+            )
+            await s.commit()
+        return faits
 
     async def _verdict(self, ctx: _Ctx, nom: str, annexes: list[str]) -> Verdict:
         """Verdict d'un agent de contrôle ; illisible même après une relance : une note."""

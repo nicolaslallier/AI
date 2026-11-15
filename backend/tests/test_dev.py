@@ -292,11 +292,24 @@ async def test_verification_efface_les_ignores_et_reinstalle(monde):
 
 
 async def test_installation_echouee_en_verification_bloque(monde):
-    monde.lanceur.codes = {CIBLES: [1], "installer": [0, 1]}
-    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+    # le blocage n'arrive qu'après `renvois_max` renvois au code
+    monde.lanceur.codes = {CIBLES: [1], "installer": [0, 1, 1, 1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, texte("rien"), texte("rien")]
     pid = await monde.lancer()
     _ex, tache, _pipeline = await monde.etat(pid)
+    ex, tache, _pipeline = await monde.etat(pid)
+    assert ex.renvois == 2
     assert tache.resume_blocage.startswith("installation échouée")
+
+
+async def test_installation_echouee_renvoie_au_code(monde):
+    monde.lanceur.codes = {CIBLES: [1], "installer": [0, 1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, texte("paquet retiré"), verdict("ok")]
+    pid = await monde.lancer()
+    ex, _tache, pipeline = await monde.etat(pid)
+    assert (pipeline.etat, ex.renvois) == ("terminee", 1)
+    code2 = monde.llm.appels[4]["messages"]
+    assert any("paquet inventé" in (m["content"] or "") for m in code2)
 
 
 @pytest.mark.parametrize(
@@ -734,7 +747,7 @@ async def test_tous_les_controles_tournent_dans_l_ordre(monde_d):
     _ex, _tache, pipeline = await monde_d.etat(pid)
     assert pipeline.etat == "terminee"
     assert await etapes_apres(monde_d, "verification") == [
-        "revue", "challenger", "securite", "doc", "pr"
+        "revue", "faits", "challenger", "securite", "doc", "pr"
     ]  # fmt: skip
     (challenger,) = appels_de(monde_d, "challenger")
     annexes = "\n".join(m["content"] or "" for m in challenger["messages"])
@@ -756,7 +769,7 @@ async def test_renvoi_du_challenger_reprend_tout(monde_d):
     ex, _tache, pipeline = await monde_d.etat(pid)
     assert pipeline.etat == "terminee" and ex.renvois == 1
     assert await etapes_apres(monde_d, "challenger") == [
-        "code", "verification", "revue", "challenger", "securite", "doc", "pr"
+        "code", "verification", "revue", "faits", "challenger", "securite", "doc", "pr"
     ]  # fmt: skip
     code2 = appels_de(monde_d, "code")[-1]["messages"]
     assert any("cas limite" in (m["content"] or "") for m in code2)
@@ -776,7 +789,7 @@ async def test_compteur_partage(monde_d):
     assert pipeline.etat == "terminee" and ex.renvois == 2
     assert ex.remarques == ["challenger : c toujours faux"]
     noms = await etapes_apres(monde_d, "securite")  # après le renvoi de la sécurité
-    assert noms[-4:] == ["challenger", "securite", "doc", "pr"]
+    assert noms[-5:] == ["faits", "challenger", "securite", "doc", "pr"]
     corps = monde_d.github.prs[1]["corps"]
     assert "Remarques non résolues" in corps and "c toujours faux" in corps
 
@@ -883,7 +896,7 @@ async def test_relance_en_controles_reprend_au_bon_index(monde_d):
     ex, _tache, pipeline = await monde_d.etat(pid)
     assert pipeline.etat == "terminee" and ex.renvois == 1
     assert await etapes_apres(monde_d, "portail", "reprise") == [
-        "challenger", "securite", "doc", "pr"
+        "faits", "challenger", "securite", "doc", "pr"
     ]  # fmt: skip
     assert len(appels_de(monde_d, "revue")) == 2  # rien de rejoué
 
@@ -941,3 +954,67 @@ async def test_notes_d_un_controle_rejoue_dedoublonnees(monde):
     ex, _tache, _pipeline = await monde.etat(pid)
     assert ex.notes == [{"agent": "revue", "texte": "nommage"}]
     assert monde.github.prs[1]["corps"].count("nommage") == 1
+
+
+CONFIG_LINT = CONFIG_D + '  lint: "lint"\n'
+
+
+async def monde_lint(monde_d, codes_lint):
+    async with monde_d.sessions() as s:
+        (await s.get(Projet, 1)).config_execution = CONFIG_LINT
+        await s.commit()
+    monde_d.lanceur.codes["lint"] = codes_lint
+    return monde_d
+
+
+def lints(monde):
+    return [a for a in monde.lanceur.appels if a.get("commande") == "lint"]
+
+
+async def test_lint_dette_existante_note_seulement(monde_d):
+    await monde_lint(monde_d, [1, 1])  # échoue déjà sur la base
+    monde_d.llm.reponses = [*TESTS_OK, *CODE_OK, *CONTROLES_OK]
+    pid = await monde_d.lancer()
+    ex, _tache, pipeline = await monde_d.etat(pid)
+    assert (pipeline.etat, ex.renvois, ex.lint_base_ok) == ("terminee", 0, False)
+    assert [n["agent"] for n in ex.notes] == ["faits"] and "dette existante" in ex.notes[0]["texte"]
+    assert len(lints(monde_d)) == 2 and all(a["tout_lecture_seule"] for a in lints(monde_d))
+    (challenger,) = appels_de(monde_d, "challenger")
+    assert "dette existante" in "\n".join(m["content"] or "" for m in challenger["messages"])
+
+
+async def test_lint_nouveau_bloque(monde_d):
+    await monde_lint(monde_d, [0, 1])  # propre sur la base, cassé par la tâche
+    monde_d.llm.reponses = [
+        *TESTS_OK, *CODE_OK, verdict("ok"),
+        texte("lint corrigé"),
+        *CONTROLES_OK,
+    ]  # fmt: skip
+    pid = await monde_d.lancer()
+    ex, _tache, pipeline = await monde_d.etat(pid)
+    assert (pipeline.etat, ex.renvois, ex.lint_base_ok) == ("terminee", 1, True)
+    assert ex.notes == [] and len(appels_de(monde_d, "challenger")) == 1
+    code2 = appels_de(monde_d, "code")[-1]["messages"]
+    assert any("passait sur la base" in (m["content"] or "") for m in code2)
+
+
+async def test_faits_bloquants_renvoient_avant_le_challenger(monde_d):
+    monde_d.llm.reponses = [
+        *TESTS_OK,
+        appel("ecrire", chemin="src/x.py", contenu="x = 1\n"), texte("Fait, les tests passent."),
+        verdict("ok"),
+        texte("rien à dire"),  # le challenger n'est pas appelé à ce passage
+        *CONTROLES_OK,
+    ]  # fmt: skip
+    pid = await monde_d.lancer()
+    ex, _tache, pipeline = await monde_d.etat(pid)
+    assert (pipeline.etat, ex.renvois) == ("terminee", 1)
+    assert await etapes_apres(monde_d, "revue") == [
+        "faits", "code", "verification", "revue", "faits", "challenger", "securite", "doc", "pr"
+    ]  # fmt: skip
+    (challenger,) = appels_de(monde_d, "challenger")
+    assert "Faits vérifiés par le portail" in "\n".join(
+        m["content"] or "" for m in challenger["messages"]
+    )
+    code2 = appels_de(monde_d, "code")[-1]["messages"]
+    assert any("tests passent » sans commande" in (m["content"] or "") for m in code2)

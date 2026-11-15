@@ -564,7 +564,7 @@ async def test_reprise_passe_par_tous_les_controles(monde_d):
             await s.scalars(select(Etape).where(Etape.pipeline_id == pid).order_by(Etape.ordre))
         ).all()
     assert [e.action or e.agent for e in etapes][1:] == [
-        "tri", "code", "verification", "revue", "challenger", "securite", "doc", "reponses"
+        "tri", "code", "verification", "revue", "faits", "challenger", "securite", "doc", "reponses"
     ]  # fmt: skip
     annexes = "\n".join(
         m["content"] or "" for m in appels_de(monde_d, "challenger")[-1]["messages"]
@@ -585,7 +585,7 @@ async def test_reprise_commentaire_doc_passe_par_l_agent_doc(monde_d):
     _ex, tache, pipeline = await monde_d.etat(pid)
     assert (tache.colonne, pipeline.etat) == ("en_revue", "terminee")
     assert await etapes_apres(monde_d, "tri") == [
-        "revue", "challenger", "securite", "doc", "reponses"
+        "revue", "faits", "challenger", "securite", "doc", "reponses"
     ]  # fmt: skip
     doc = "\n".join(m["content"] or "" for m in appels_de(monde_d, "doc")[-1]["messages"])
     assert "documente l'équipe" in doc
