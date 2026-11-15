@@ -73,3 +73,19 @@ async def test_en_tete_forwarded_ne_change_pas_le_pair(moteur, tmp_path, faux_ll
 def test_cidr_invalide_refuse():
     with pytest.raises(ValidationError):
         Reglages(database_url=URL, reseau_agents="pas-un-reseau")
+
+
+async def test_pair_ipv4_mappe_en_ipv6_reste_du_reseau(moteur, tmp_path, faux_llm):
+    pair = ("::ffff:172.31.250.5", 5000)
+    code, _ = await _code(moteur, tmp_path, faux_llm, pair, "/interne/modele", methode="POST")
+    assert code == 401  # le filtre l'a laissé passer jusqu'à la route
+    code, _ = await _code(moteur, tmp_path, faux_llm, pair, "/api/sante")
+    assert code == 404
+
+
+@pytest.mark.parametrize(
+    "chemin", ["/interne/../assets/x.js", "/interne/%2e%2e/api/taches", "/interne/%2E%2E/"]
+)
+async def test_pair_agent_ne_remonte_pas_hors_de_interne(moteur, tmp_path, faux_llm, chemin):
+    code, corps = await _code(moteur, tmp_path, faux_llm, AGENT, chemin, entetes=FORGE)
+    assert code == 404 and "detail" not in corps.lower()

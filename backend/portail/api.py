@@ -566,7 +566,12 @@ def create_app(
                 pair = ipaddress.ip_address(request.client.host) if request.client else None
             except ValueError:
                 pair = None
-            if (pair is not None and pair in reseau) != request.url.path.startswith("/interne/"):
+            pair = getattr(pair, "ipv4_mapped", None) or pair  # ::ffff:a.b.c.d est a.b.c.d
+            chez_agents = pair is not None and pair in reseau
+            if chez_agents != request.url.path.startswith("/interne/"):
+                return Response(status_code=404)
+            # un chemin non normalisé (`/interne/../x`, `%2e%2e`) ne sort pas de /interne/
+            if chez_agents and "/.." in request.url.path:
                 return Response(status_code=404)
         return await call_next(request)
 
