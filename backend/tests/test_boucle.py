@@ -305,3 +305,23 @@ async def test_tours_et_outils(outils):
     ]
     assert [a - b for a, b in zip(ap, av, strict=True)] == [2, 1, 1, 1]
     assert b"zzz_987" not in generate_latest()
+
+
+async def test_tours_non_observes_sans_appel_et_observe_garde(outils, monkeypatch):
+    sans_outil = Agent(
+        nom="plan", description="p", modele="m", prompt_systeme="s", contexte_max=100
+    )
+    compte = {"agent": "plan"}
+    avant = valeur("portail_tours_mission_count", **compte)
+    with pytest.raises(ErreurOutils):
+        await _go(FauxLLM(), outils, agent=sans_outil)
+    assert valeur("portail_tours_mission_count", **compte) == avant  # 0 tour : rien observé
+
+    def casse(**_):
+        raise RuntimeError("métrique cassée")
+
+    monkeypatch.setattr("portail.boucle.metriques.TOURS_MISSION.labels", casse)
+    llm = FauxLLM()
+    llm.reponses = [_texte("Fini")]
+    resultat, _, _ = await _go(llm, outils)  # l'observation qui lève ne masque pas le résultat
+    assert resultat.texte == "Fini"

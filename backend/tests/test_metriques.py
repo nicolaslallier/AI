@@ -9,7 +9,7 @@ from httpx import ASGITransport, AsyncClient
 from portail.api import _flux, create_app
 from portail.config import Reglages
 from portail.db import ExecutionDev, Pipeline, Projet, Tache
-from portail.metriques import rafraichir
+from portail.metriques import BASE_JOIGNABLE, rafraichir
 from tests.conftest import CATALOGUE_TEST, URL, FauxLLM, valeur
 
 VHOST = Path(__file__).parents[2] / "deploy" / "nginx" / "portail.conf"
@@ -86,6 +86,21 @@ async def test_requete_par_modele_de_route(moteur, tmp_path):
     )
 
 
+async def test_methode_inventee_rabattue_sur_autre(moteur, tmp_path):
+    from prometheus_client import generate_latest
+
+    app = await _client(tmp_path)
+    etiq = {"methode": "AUTRE", "route": "aucune", "code": "404"}
+    avant = valeur(_REQ, **etiq)
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        assert (await c.request("ZZINVENTEE", "/api/inconnu/1")).status_code == 404
+    assert valeur(_REQ, **etiq) == avant + 1
+    assert "ZZINVENTEE" not in generate_latest().decode()
+
+
 async def test_chemin_sans_route(moteur, tmp_path):
     app = await _client(tmp_path)
     etiq = {"methode": "GET", "route": "aucune", "code": "404"}
@@ -139,6 +154,23 @@ async def test_flux_ouverts():
     assert valeur("portail_flux_ouverts", flux="conversations") == avant + 1
     await r.body_iterator.aclose()
     assert valeur("portail_flux_ouverts", flux="conversations") == avant
+
+
+async def test_fermeture_du_flux_ferme_le_generateur_interne():
+    fini = []
+
+    async def gen():
+        try:
+            yield "a"
+            await asyncio.sleep(60)
+            yield "b"
+        finally:
+            fini.append(True)
+
+    r = _flux(gen(), "evenements")
+    await r.body_iterator.__anext__()
+    await r.body_iterator.aclose()
+    assert fini == [True]  # sans attendre le ramasse-miettes
 
 
 async def test_flux_ouverts_annule():
@@ -226,3 +258,13 @@ async def test_collecte_base_injoignable():
 
     await rafraichir(casse)
     assert valeur("portail_base_joignable") == 0.0
+
+
+async def test_base_injoignable_journalisee_une_seule_fois(caplog):
+    def casse():
+        raise ConnectionError("base saturée")
+
+    BASE_JOIGNABLE.set(1)
+    for _ in range(3):
+        await rafraichir(casse)
+    assert len([r for r in caplog.records if r.levelname == "ERROR"]) == 1

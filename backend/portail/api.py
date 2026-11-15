@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -106,13 +106,17 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 
+_METHODES = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
+
+
 async def _compter(generateur, nom: str):
     """Compte le flux ouvert dès le premier morceau demandé ; `finally` couvre fermeture et annulation."""
     jauge_flux = metriques.FLUX_OUVERTS.labels(flux=nom)
     jauge_flux.inc()
     try:
-        async for morceau in generateur:
-            yield morceau
+        async with aclosing(generateur):  # ferme le générateur interne (son `finally` désabonne)
+            async for morceau in generateur:
+                yield morceau
     finally:
         jauge_flux.dec()
 
@@ -527,10 +531,10 @@ def create_app(
             # Le modèle de route, jamais l'URL : sans route, une valeur fixe (cardinalité bornée).
             route = getattr(request.scope.get("route"), "path", "aucune")
             if route != "/metrics":
-                metriques.HTTP_REQUETES.labels(request.method, route, code).inc()
-                metriques.HTTP_DUREE.labels(request.method, route).observe(
-                    time.perf_counter() - debut
-                )
+                # ensemble fixe : une méthode inventée par un client ne crée pas de série
+                methode = request.method if request.method in _METHODES else "AUTRE"
+                metriques.HTTP_REQUETES.labels(methode, route, code).inc()
+                metriques.HTTP_DUREE.labels(methode, route).observe(time.perf_counter() - debut)
 
     @app.get("/api/sante")
     async def sante():

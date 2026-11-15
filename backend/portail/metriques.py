@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 
-from prometheus_client import Counter, Gauge, Histogram
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 from sqlalchemy import func, select
 
 from portail import journal
@@ -73,6 +73,7 @@ ECHECS_DEV = Gauge(
     "portail_echecs_dev_consecutifs", "Échecs consécutifs parmi les derniers pipelines dev"
 )
 BASE_JOIGNABLE = Gauge("portail_base_joignable", "1 si la base répond à la collecte")
+BASE_JOIGNABLE.set(1)  # présumée joignable : la première panne est journalisée
 for _c in COLONNES:  # chaque colonne existe dès le démarrage, même vide
     TACHES.labels(_c).set(0)
 
@@ -105,7 +106,8 @@ async def rafraichir(sessions) -> None:
         async with asyncio.timeout(DELAI_COLLECTE_S):
             par_colonne, debut, derniers = await _lire(sessions)
     except Exception:  # noqa: BLE001 — la collecte ne doit jamais rendre /metrics inutilisable
-        journal.erreur(logger, "collecte des jauges en base impossible")
+        if REGISTRY.get_sample_value("portail_base_joignable") != 0:  # seulement à la transition
+            journal.erreur(logger, "collecte des jauges en base impossible")
         BASE_JOIGNABLE.set(0)
         return
     for c in COLONNES:  # ponytail: ensemble fixe ; une colonne inconnue en base est ignorée

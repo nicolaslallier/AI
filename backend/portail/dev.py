@@ -400,7 +400,7 @@ class Orchestrateur:
                 raison, cause = "erreur inattendue : TimeoutError", "inattendue"
         except Refus as e:  # config stockée qui ne passe plus la validation
             raison, cause = e.message, "config"
-        except (ErreurLanceur, ErreurGitHub, ErreurDepot, ErreurLLM, ErreurOutils) as e:
+        except tuple(_CAUSES) as e:
             raison, cause = str(e), next(c for t, c in _CAUSES.items() if isinstance(e, t))
         except Exception as e:  # dernier recours : une tâche ne reste jamais verrouillée en cours  # noqa: BLE001
             journal.erreur(logger, "pipeline dev %s : erreur inattendue", pipeline_id)

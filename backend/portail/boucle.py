@@ -1,15 +1,18 @@
 """Boucle d'outils en lecture seule : le modèle explore le dépôt, tour après tour."""
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel
 
-from portail import metriques
+from portail import journal, metriques
 from portail.agents import Agent
 from portail.contexte import elaguer_resultats_outils
 from portail.llm import retirer_reflexion
 from portail.outils import OutilsDepot
+
+logger = logging.getLogger(__name__)
 
 _LIMITE = "Limite d'outils atteinte : conclus maintenant avec ce que tu as, sans appeler d'outil."
 _IGNORE = "ignoré : une action attend la confirmation de Nicolas"
@@ -74,7 +77,11 @@ async def boucle_outils(
     try:
         return await _boucle(compte, agent, messages, outils, sur_appel)
     finally:
-        metriques.TOURS_MISSION.labels(agent=agent.nom).observe(compte.tours)
+        if compte.tours:  # aucun appel (agent sans outil, refus) : rien à observer
+            try:
+                metriques.TOURS_MISSION.labels(agent=agent.nom).observe(compte.tours)
+            except Exception:  # noqa: BLE001 (une métrique ne masque ni l'erreur ni l'annulation)
+                journal.erreur(logger, "métrique des tours non enregistrée")
 
 
 async def _boucle(

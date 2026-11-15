@@ -142,3 +142,35 @@ def test_colonnes_sans_contenu():
         "duree_ms",
         "issue",
     }
+
+
+def _flux_de(morceaux):
+    def handler(requete: httpx.Request) -> httpx.Response:
+        texte = "".join(f"data: {json.dumps(m)}\n\n" for m in morceaux) + "data: [DONE]\n\n"
+        return httpx.Response(200, text=texte)
+
+    return handler
+
+
+async def test_flux_usage_sans_choices(sessions):
+    handler = _flux_de(
+        [{"choices": [{"delta": {"content": "Bon"}}]}, {"usage": USAGE}]  # pas de `choices`
+    )
+    texte = "".join([m async for m in _client(handler, sessions).flux("m", MSG, None)])
+    assert texte == "Bon"
+    (ligne,) = await _lignes(sessions)
+    assert (ligne.jetons_entree, ligne.jetons_sortie, ligne.issue) == (10, 5, "ok")
+
+
+async def test_flux_sans_usage(sessions):
+    handler = _flux_de([{"choices": [{"delta": {"content": "Bon"}}]}])
+    assert "".join([m async for m in _client(handler, sessions).flux("m", MSG, None)]) == "Bon"
+    (ligne,) = await _lignes(sessions)
+    assert (ligne.jetons_entree, ligne.jetons_sortie, ligne.issue) == (None, None, "ok")
+
+
+async def test_version_non_definie_inscrite_null(sessions):
+    client = ClientLLM("http://l", "k", httpx.MockTransport(_ok), sessions=sessions)
+    await client.completer("m", MSG, None)
+    (ligne,) = await _lignes(sessions)
+    assert ligne.version_image is None

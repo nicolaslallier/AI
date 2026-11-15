@@ -66,7 +66,7 @@ class ClientLLM:
                         agent=ctx.get("agent", "inconnu"),
                         modele=modele,
                         lieu=ctx.get("lieu", "portail"),
-                        version_image=ctx.get("version_image", self._version),
+                        version_image=ctx.get("version_image", self._version or None),
                         mission=ctx.get("mission"),
                         pipeline_id=ctx.get("pipeline"),
                         etape_id=ctx.get("etape"),
@@ -119,7 +119,7 @@ class ClientLLM:
                     try:
                         morceau = json.loads(donnees)
                         usage = morceau.get("usage") or usage
-                        choix = morceau["choices"]
+                        choix = morceau.get("choices")  # absent sur le morceau d'usage de certains
                         contenu = choix[0]["delta"].get("content") if choix else None
                     except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
                         raise ErreurLLM(f"Réponse de LiteLLM illisible : {donnees[:200]}") from e
