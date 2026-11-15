@@ -1,7 +1,8 @@
 # Schémas XSD du format d'échange ArchiMate
 
-Copies non modifiées, utilisées uniquement par les tests (`tests/test_archimate.py`) pour valider
-hors ligne le fichier produit par `portail.archimate.xml_echange`.
+Les schémas ne sont pas dans le dépôt. `tests/test_archimate.py` les télécharge ici au premier
+lancement (dossier ignoré par git) pour valider le fichier produit par
+`portail.archimate.xml_echange` ; sans réseau ni copie locale, ces tests sont sautés.
 
 | Fichier | Source |
 | --- | --- |
@@ -24,5 +25,4 @@ https://www.opengroup.org/xsd/archimate/ qui les publie :
 `xml.xsd` est le schéma de l'espace de noms XML du W3C,
 publié pour être importé par d'autres schémas ; il ne porte aucun avis.
 
-Les fichiers viennent des adresses ci-dessus. Leur redistribution dans un dépôt public reste à
-trancher.
+Faute de licence de redistribution, les fichiers ne sont pas commités dans ce dépôt public.

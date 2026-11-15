@@ -1,5 +1,7 @@
+import functools
 import io
 import json
+import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -262,14 +264,42 @@ NS = {
     "xsi": "http://www.w3.org/2001/XMLSchema-instance",
 }
 XSI_TYPE = "{http://www.w3.org/2001/XMLSchema-instance}type"
-# Les XSD sont rangés dans le dépôt : `uri_mapper` redirige l'import réseau de xml.xsd vers la
-# copie locale et `allow="local"` interdit tout accès réseau, la validation se fait hors ligne.
+# Les XSD de l'Open Group ne sont pas dans le dépôt (droits réservés) : ils sont téléchargés une
+# fois dans tests/xsd/ (ignoré par git), puis la validation se fait hors ligne (`allow="local"`).
+# Sans réseau et sans copie locale, les tests de validation sont sautés.
 XSD = Path(__file__).parent / "xsd"
-SCHEMA = xmlschema.XMLSchema(
-    XSD / "archimate3_Diagram.xsd",
-    uri_mapper={"http://www.w3.org/2001/xml.xsd": (XSD / "xml.xsd").as_uri()},
-    allow="local",
-)
+SOURCES = {
+    "archimate3_Model.xsd": "https://www.opengroup.org/xsd/archimate/3.1/archimate3_Model.xsd",
+    "archimate3_View.xsd": "https://www.opengroup.org/xsd/archimate/3.1/archimate3_View.xsd",
+    "archimate3_Diagram.xsd": "https://www.opengroup.org/xsd/archimate/3.1/archimate3_Diagram.xsd",
+    "xml.xsd": "https://www.w3.org/2001/xml.xsd",
+}
+
+
+@functools.cache
+def _schema() -> xmlschema.XMLSchema:
+    for nom, url in SOURCES.items():
+        if not (XSD / nom).exists():
+            try:
+                with urllib.request.urlopen(url, timeout=20) as r:
+                    (XSD / nom).write_bytes(r.read())
+            except OSError as e:
+                pytest.skip(f"XSD ArchiMate indisponible ({nom}) : {e}")
+    return xmlschema.XMLSchema(
+        XSD / "archimate3_Diagram.xsd",
+        uri_mapper={"http://www.w3.org/2001/xml.xsd": (XSD / "xml.xsd").as_uri()},
+        allow="local",
+    )
+
+
+class _Paresseux:
+    """Le schéma n'est chargé (et téléchargé au besoin) qu'au premier test qui s'en sert."""
+
+    def __getattr__(self, nom):
+        return getattr(_schema(), nom)
+
+
+SCHEMA = _Paresseux()
 
 MODELE_COMPLET = Modele(
     elements=[
