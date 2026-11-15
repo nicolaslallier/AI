@@ -34,6 +34,8 @@ jobs:
     # Digest de l'image d'exécution, pour le lanceur (liste des images permises).
     outputs:
       execution_digest: ${{ steps.construire-execution.outputs.digest }}
+      # Digest de l'image des agents, épinglé par la pile.
+      agents_digest: ${{ steps.construire-agents.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -70,6 +72,13 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ghcr.io/${{ github.repository }}-execution
+          tags: |
+            type=sha
+
+      - id: meta-agents
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ghcr.io/${{ github.repository }}-agents
           tags: |
             type=sha
 
@@ -130,7 +139,26 @@ jobs:
           ignore-unfixed: true
           exit-code: 1
 
-      # `latest` n'est posé qu'après les trois analyses : une image refusée par Trivy
+      - id: construire-agents
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: agents
+          file: agents/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta-agents.outputs.tags }}
+          labels: ${{ steps.meta-agents.outputs.labels }}
+          cache-from: type=gha,scope=agents
+          cache-to: type=gha,mode=max,scope=agents
+
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.nom.outputs.base }}-agents@${{ steps.construire-agents.outputs.digest }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 1
+
+      # `latest` n'est posé qu'après les quatre analyses : une image refusée par Trivy
       # n'existe que sous son tag immuable sha-<7>, que rien ne déploie.
       - name: Publier latest
         if: github.ref == 'refs/heads/main'
@@ -139,11 +167,13 @@ jobs:
           DIGEST_PORTAIL: ${{ steps.construire.outputs.digest }}
           DIGEST_LANCEUR: ${{ steps.construire-lanceur.outputs.digest }}
           DIGEST_EXECUTION: ${{ steps.construire-execution.outputs.digest }}
+          DIGEST_AGENTS: ${{ steps.construire-agents.outputs.digest }}
         run: |
           set -euo pipefail
           docker buildx imagetools create -t "$BASE-portail:latest" "$BASE-portail@$DIGEST_PORTAIL"
           docker buildx imagetools create -t "$BASE-lanceur:latest" "$BASE-lanceur@$DIGEST_LANCEUR"
           docker buildx imagetools create -t "$BASE-execution:latest" "$BASE-execution@$DIGEST_EXECUTION"
+          docker buildx imagetools create -t "$BASE-agents:latest" "$BASE-agents@$DIGEST_AGENTS"
 
   deploy:
     needs: image
@@ -175,9 +205,10 @@ jobs:
           BAO_TOKEN: ${{ secrets.BAO_TOKEN }}
           GITHUB_SHA_FULL: ${{ github.sha }}
           EXECUTION_DIGEST: ${{ needs.image.outputs.execution_digest }}
+          AGENTS_DIGEST: ${{ needs.image.outputs.agents_digest }}
         run: |
           set -euo pipefail
-          for v in PORTAINER_API_KEY BAO_TOKEN PORTAINER_ENDPOINT_ID EXECUTION_DIGEST; do
+          for v in PORTAINER_API_KEY BAO_TOKEN PORTAINER_ENDPOINT_ID EXECUTION_DIGEST AGENTS_DIGEST; do
             [ -n "${!v}" ] || { echo "::error::$v absent (secret ou variable du dépôt)"; exit 1; }
           done
           umask 077
@@ -190,4 +221,6 @@ jobs:
           printf 'DEPLOYE_LE=%s\n' "$(date +%s)" >> "$PORTAIL_STACK_ENV"
           # Digest de l'image d'exécution que le job image vient de pousser.
           printf 'EXECUTION_DIGEST=%s\n' "$EXECUTION_DIGEST" >> "$PORTAIL_STACK_ENV"
+          # Digest de l'image des agents que le job image vient de pousser.
+          printf 'AGENTS_DIGEST=%s\n' "$AGENTS_DIGEST" >> "$PORTAIL_STACK_ENV"
           BAO_TOKEN= scripts/portainer-stack.sh up

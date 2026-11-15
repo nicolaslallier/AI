@@ -14,7 +14,7 @@ STACK=portail
 REPO_URL=https://github.com/nicolaslallier/AI
 REF=refs/heads/main
 COMPOSE_FILE=deploy/portainer-stack.yml
-REQUIRED="PORTAIL_DB_PASSWORD PORTAIL_LITELLM_CLE IMAGE_TAG DEPLOYE_LE EXECUTION_DIGEST"
+REQUIRED="PORTAIL_DB_PASSWORD PORTAIL_LITELLM_CLE IMAGE_TAG DEPLOYE_LE EXECUTION_DIGEST AGENTS_DIGEST"
 
 die() { echo "::error::portainer-stack.sh : $*" >&2; exit 1; }
 [ "${1:-}" = up ] || die "usage : scripts/portainer-stack.sh up"
