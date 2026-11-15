@@ -1,8 +1,13 @@
 import pytest
 
-from portail.db import CommandeLancee
+from portail.db import CommandeLancee, Etape, Message, Pipeline, Projet
 from portail.execution import lire_config
-from portail.faits import references_ajoutees, verifier_affirmations, verifier_references
+from portail.faits import (
+    references_ajoutees,
+    verifier_affirmations,
+    verifier_faits,
+    verifier_references,
+)
 
 CFG = lire_config(
     """
@@ -62,20 +67,53 @@ def test_import_ts_relatif_resolu_avec_extensions(tmp_path):
 
 def test_affirmation_prouvee():
     assert (
-        verifier_affirmations("Les tests passent.", [cmd("tests", 1), cmd("tests", 0)], "code")
+        verifier_affirmations(
+            "Les tests passent.", [cmd("tests", 1), cmd("tests", 0)], "code", set(CFG.commandes)
+        )
         == []
     )
 
 
 def test_affirmation_sans_preuve_bloque():
-    (fait,) = verifier_affirmations("Le lint passe et tout va bien", [cmd("tests", 0)], "code")
+    (fait,) = verifier_affirmations(
+        "Le lint passe et tout va bien", [cmd("tests", 0)], "code", {"tests", "lint"}
+    )
     assert (fait.type, fait.role, fait.bloquant) == ("affirmation", "code", True)
     assert fait.texte == "affirmation « lint passe » sans commande qui la prouve"
 
 
+def test_affirmation_sans_commande_declaree_ignoree():
+    texte = "Le lint passe et le build est ok."
+    assert verifier_affirmations(texte, [], "code", set(CFG.commandes)) == []
+
+
+@pytest.mark.parametrize("code_lint", [0, 1])
+async def test_lint_du_portail_tranche_l_affirmation_lint(sessions, tmp_path, code_lint):
+    cfg = lire_config(
+        "image: img\nchemins_tests: ['tests/**']\n"
+        "commandes: {installer: i, tests: t, tests_cibles: 't {fichiers}', lint: l}\n"
+    )
+    async with sessions() as s:
+        projet = Projet(nom="p")
+        s.add(projet)
+        await s.flush()
+        pipeline = Pipeline(projet_id=projet.id, type="dev")
+        s.add(pipeline)
+        await s.flush()
+        etape = Etape(pipeline_id=pipeline.id, ordre=0, agent="code")
+        s.add(etape)
+        await s.flush()
+        s.add(Message(etape_id=etape.id, role="assistant", contenu="Fait, le lint passe."))
+        await s.commit()
+    lint = cmd("lint", code_lint)
+    lint.sortie = "E501"
+    faits = await verifier_faits(sessions, pipeline.id, tmp_path, cfg, "", lint, True)
+    assert [f.type for f in faits] == ([] if code_lint == 0 else ["lint"])
+
+
 def test_affirmation_dont_la_derniere_commande_echoue_bloque():
     faits = verifier_affirmations(
-        "All tests pass", [cmd("tests", 0), cmd("tests_cibles", 1)], "tests"
+        "All tests pass", [cmd("tests", 0), cmd("tests_cibles", 1)], "tests", set(CFG.commandes)
     )
     assert len(faits) == 1 and faits[0].role == "tests"
 
@@ -91,7 +129,7 @@ def test_affirmation_dont_la_derniere_commande_echoue_bloque():
     ],
 )
 def test_negation_ignoree(texte):
-    assert verifier_affirmations(texte, [], "code") == []
+    assert verifier_affirmations(texte, [], "code", set(CFG.commandes)) == []
 
 
 def test_dossier_homonyme_d_un_paquet_tiers_non_verifie(tmp_path):
