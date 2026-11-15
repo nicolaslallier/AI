@@ -22,3 +22,7 @@ Ces éléments vivent côté Infra ; ce dossier en garde la source.
 5. **Vérification du vhost** (`nginx -t` échoue ici : `include` et certificat absents) :
    après la PR Infra, la page Chat s'affiche sans erreur CSP dans la console, et
    une réponse de l'orchestrateur arrive au fil de l'eau (pas d'un bloc à la fin).
+   Refaire aussi le parcours de connexion complet (session expirée, retour par
+   Keycloak) : `form-action 'self'` s'applique aux redirections qui suivent un
+   formulaire, donc au bouton de `/oauth2/sign_in`. S'il est bloqué, activer
+   `skip_provider_button` ou ajouter l'hôte Keycloak à `form-action`.
