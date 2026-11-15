@@ -162,6 +162,8 @@ class Ordonnanceur:
                 return None
             pipeline_id = ex.pipeline_id
             demarree = await self._orch.demarrer_reprise(s, ex)
+            if demarree:
+                inscrire(s, "ordonnanceur", "pipeline.reprendre", "pipeline", pipeline_id)
             await s.commit()
         if demarree:
             self.lancer(pipeline_id)

@@ -1,6 +1,7 @@
 import asyncio
 import itertools
 import json
+import logging
 import subprocess
 from pathlib import Path
 
@@ -454,6 +455,20 @@ async def test_verification_rouge_avec_violation_ne_pousse_pas(monde):
     assert tache.resume_blocage.startswith("vérification échouée (tests)")
     assert "branche poussée" not in tache.resume_blocage
     assert BRANCHE not in monde.branches()
+
+
+async def test_titre_de_tache_absent_des_journaux(monde, caplog):
+    # la branche porte le slug du titre (en minuscules) : elle ne doit jamais être journalisée
+    async with monde.sessions() as s:
+        (await s.get(Tache, 1)).titre = "MarqueurTitre"
+        await s.commit()
+    monde.lanceur.effets = {"pytest": triche}
+    monde.lanceur.codes = {CIBLES: [1], "pytest": [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+    with caplog.at_level(logging.DEBUG):
+        await monde.lancer()
+    assert "non poussée" in caplog.text  # le chemin concerné a bien été pris
+    assert "marqueurtitre" not in caplog.text.lower()
 
 
 async def test_duree_max_apres_violation_ne_pousse_pas(monde):

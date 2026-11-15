@@ -1299,7 +1299,9 @@ class Orchestrateur:
         if not any(a in COURRIELS_AGENTS for _, a, _ in await espace.commits(ex.base_sha)):
             return False
         if violations := await verifier_commits_code(espace, ex.base_sha, lire_config(config)):
-            logger.warning("branche %s non poussée : %d violation(s)", ex.branche, len(violations))
+            logger.warning(
+                "exécution %s : branche non poussée, %d violation(s)", ex.id, len(violations)
+            )
             return False
         jeton = await self._github.jeton(self._depot_de(espace.depot_url))
         await espace.pousser(jeton, ex.branche)

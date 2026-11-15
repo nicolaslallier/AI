@@ -121,6 +121,7 @@ async def _tracer(s: AsyncSession, request: Request, action: str, objet: str, ob
         inscrire(s, auteur_de(request), action, objet, objet_id)
         await s.commit()
     except SQLAlchemyError:
+        await s.rollback()  # sinon la lecture qui suit dans la route lève PendingRollbackError
         journal.erreur(logger, "audit non inscrit : %s %s", action, objet_id)
 
 
