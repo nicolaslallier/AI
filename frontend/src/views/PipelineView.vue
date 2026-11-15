@@ -30,9 +30,11 @@ function desabonner(etapeId: number) {
 
 function abonner(etapeId: number) {
   if (demonte || abonnements.has(etapeId)) return
-  const fini = () => {
+  // à la fin d'une étape, on écoute la suivante si elle s'enchaîne seule (volets d'architecture) ;
+  // sur une erreur de flux on ne se réabonne pas, pour ne pas boucler sur un serveur tombé
+  const fini = (suivre: boolean) => {
     desabonner(etapeId)
-    charger(false)
+    charger(suivre)
   }
   abonnements.set(
     etapeId,
@@ -40,8 +42,8 @@ function abonner(etapeId: number) {
       partiel: (t) => (partiels[etapeId] = t),
       delta: (t) => (partiels[etapeId] = (partiels[etapeId] ?? '') + t),
       outil: (l) => (outils[etapeId] = [...(outils[etapeId] ?? []), l]),
-      fin: fini,
-      erreur: fini,
+      fin: () => fini(true),
+      erreur: () => fini(false),
     }),
   )
 }
@@ -173,14 +175,14 @@ onBeforeUnmount(() => {
           :etapes="pipeline.etapes"
           :message="message"
           @enregistrer="(c) => action(() => enregistrerDocument(e.id, c), false)"
-          @valider="action(() => valider(e.id), false)"
+          @valider="action(() => valider(e.id))"
         />
         <EditeurDocument
           v-else-if="e.document"
           :etape="e"
           :message="message"
           @enregistrer="(c) => action(() => enregistrerDocument(e.id, c), false)"
-          @valider="action(() => valider(e.id), false)"
+          @valider="action(() => valider(e.id))"
         />
         <PanneauAvis
           v-if="e.document && (e.produit === 'spec' || e.produit === 'plan')"
