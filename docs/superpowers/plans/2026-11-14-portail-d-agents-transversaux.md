@@ -32,12 +32,12 @@ Le plan initial précédait C1, C2 et E. Écarts corrigés contre le code de `ma
 - Le test existant `test_agents_yaml_du_depot_a_l_orchestrateur` compare à `OUTILS_PORTAIL` : il exclut désormais les deux outils du PM.
 - `ClientLLM` a `flux(modele, messages, temperature)` et `completer(modele, messages, temperature, outils=None, response_format=None)` ; `boucle_outils(llm, agent, messages, outils, sur_appel)` lit `agent.modele` : le modèle du challenger passe par `agent.model_copy(update={"modele": ...})`.
 - Le LLM est construit dans le lifespan de `api.py` et partagé par `ServiceChat`, `ServiceConversation` et `Orchestrateur` (via `_orchestrateur(r, sessions, catalogue, llm)`) : c'est là qu'on enveloppe, pas dans `chat.py` ni `dev.py`.
-- Phases réelles de `dev.py` : `preparation`, `tests`, `rouge`, `code`, `verification`, `revue`, `pr`, `fini` (reprise : `attente`, `tri`, `reponses`). La phase `revue` est renommée `controles` par une mise à jour de données dans `0007`, sans compatibilité en lecture.
+- Phases réelles de `dev.py` : `preparation`, `tests`, `rouge`, `code`, `verification`, `revue`, `pr`, `fini` ; en reprise : `attente`, `preparation`, `tri`, `tests`, `code`, `verification`, `revue`, `reponses`, `fini`. La phase `revue` est renommée `controles` par une mise à jour de données dans `0007`, sans compatibilité en lecture.
 - Une seule phase `controles` (avec `ExecutionDev.controle_courant`) couvre aussi l'agent `doc` : pas de phase `doc` séparée.
 - `Verdict` (dans `dev.py`) gagne `notes` ; `_revue` devient `_controles`.
 - Vérification « rouge » après un renvoi aux tests : prévue par la spec, absente du plan initial ; ajoutée à la tâche 4 (colonne `fichiers_rouge`). Elle remplace le test C1 `test_revue_renvoie_aux_tests_saute_le_rouge`.
 - Installation : `_verification` réinstalle déjà avant les contrôles ; on ne relance pas `installer` avant le challenger. L'échec d'installation en vérification devient un fait `installation` qui renvoie au code (dans la limite des renvois), au lieu d'un blocage immédiat.
-- Reprise sur commentaires : C2 n'a construit que `preparation → tri → reponses` (tâche 6 de C2, « travail des agents », non faite) ; D ne touche pas la reprise. Le compteur repart déjà à zéro : chaque reprise est une nouvelle `ExecutionDev` (`renvois = 0`).
+- Reprise sur commentaires : C2 est maintenant entier (commits 7cbc550, 09d5542, f88a90d, 16bc897 : `tri → tests/code → verification → revue → reponses`, `_suite_reprise`, `_reponses`, `ExecutionVue.mode`). La tâche 4 y branche la même phase `controles` qu'en mode normal, ajoute la catégorie `doc` au tri (commentaires traités par l'agent `doc`) ; le compteur repart à zéro parce que chaque reprise est une nouvelle `ExecutionDev`. `suivi_pr.py` et `ordonnanceur.py` ne changent pas.
 - Faux de test réels : `FauxLLM`, `FauxLanceur`, `FauxNotifieur`, `FauxGitHub` (`backend/tests/conftest.py`), `Monde` et `CATALOGUE` (`backend/tests/test_dev.py`). `FauxLanceur.lancer` gagne le paramètre `tout_lecture_seule=False`.
 - Avis : l'état `en_cours` est une ligne `avis` (pas un dictionnaire en mémoire), ce qui donne « Avis en cours » au détail du pipeline sans nouvel état de service ; au démarrage, les `en_cours` deviennent `abandonne`.
 - Notifications : `Notifieur(url, sujet, jeton).envoyer(titre, message, lien)` n'est construit que dans `_orchestrateur` ; le résumé en construit un dans le lifespan, et utilise `lien_absolu(r.url_publique, f"/chat/{id}")`.
@@ -168,7 +168,7 @@ Le plan initial précédait C1, C2 et E. Écarts corrigés contre le code de `ma
 
 **Fichiers :**
 - Créer : `backend/migrations/versions/0007_agents_transversaux.py` (complétée par les tâches 6 à 8)
-- Modifier : `backend/portail/agents.py` (`modele_pour`), `backend/portail/dev.py`, `backend/portail/db.py`, `backend/portail/schemas.py` (`ExecutionVue.notes`), `backend/tests/test_dev.py`, `backend/tests/test_agents.py`
+- Modifier : `backend/portail/agents.py` (`modele_pour`), `agents.yaml` (prompt de `tri`), `backend/portail/dev.py`, `backend/portail/db.py`, `backend/portail/schemas.py` (`ExecutionVue.notes`), `backend/tests/test_dev.py`, `backend/tests/test_reprise.py`, `backend/tests/test_agents.py`
 
 **Interfaces :**
 - `db.py`, `ExecutionDev` gagne `controle_courant: int` (défaut 0), `notes: list` (JSON, défaut `[]`, éléments `{agent, texte}`), `lint_base_ok: bool | None` (utilisé tâche 5) et `fichiers_rouge: list` (JSON, défaut `[]`). Le commentaire des phases devient `preparation | tests | rouge | code | verification | controles | pr | fini`.
@@ -186,10 +186,16 @@ Le plan initial précédait C1, C2 et E. Écarts corrigés contre le code de `ma
     - après chaque contrôle : `_maj(ctx, controle_courant=i + 1, notes=..., remarques=...)`, pour qu'une reprise après arrêt reparte au bon contrôle ;
     - après le dernier : `_transition(ctx, "pr")`.
   - `_derouler` : table de phases avec `"controles": self._controles` (plus de `"revue"`), et la liste des phases qui réinstallent à la relance contient `controles` au lieu de `revue`.
-  - `_tests` après un renvoi : `fichiers_rouge` = les fichiers de tests changés dans cette passe (`espace.changements()` filtré par `chemins_tests`), puis `rouge` s'il y en a, sinon `code`. `_rouge` lance `tests_cibles` sur `fichiers_rouge or fichiers_tests` ; `_transition` vers `code` remet `fichiers_rouge=[]`.
+  - `_tests` après un renvoi, en mode normal seulement (la branche `reprise` de `_tests` reste celle de C2) : `fichiers_rouge` = les fichiers de tests changés dans cette passe (`espace.changements()` filtré par `chemins_tests`), puis `rouge` s'il y en a, sinon `code`. `_rouge` lance `tests_cibles` sur `fichiers_rouge or fichiers_tests` ; `_transition` vers `code` remet `fichiers_rouge=[]`.
   - `_pr` : `_corps` gagne une section « ## Notes des contrôles » (par agent) ; « ## Remarques non résolues » existe déjà. `_pousser_si_commits` compte aussi `AUTEUR_DOC`.
 - `schemas.py` : `ExecutionVue.notes: list[dict] = []`.
-- **Reprise (C2)** : rien dans D. La tâche 6 de C2 (« travail des agents »), quand elle sera faite, passera par `controles` au lieu de `revue` et pourra ajouter la catégorie `doc` au tri.
+- **Reprise (C2, `mode == "reprise"`)** : même enchaînement de contrôles que le chemin normal.
+  - La table des phases de reprise remplace `"revue": self._revue` par `"controles": self._controles` (C2 : `tri → tests/code → verification → revue → reponses`). Le commentaire des phases de `ExecutionDev.phase` (`db.py`) suit.
+  - `_controles` reprend ce que fait `_revue` en reprise : diff depuis `ctx.ex.depart_revue`, annexe `_annexe_commentaires(ctx, {"tests", "code", "doc", "reponse"})` donnée à chaque contrôle ; après le dernier contrôle, `reponses` au lieu de `pr`. Un renvoi mène à `tests` ou `code`, dont la suite de reprise existante (`_suite_reprise`) ramène à `verification` puis `controles` depuis l'index 0. Jamais de `rouge` en reprise (règle C2 conservée : le `rouge` après renvoi ne vaut que pour le mode normal).
+  - Le compteur repart à zéro sans code : chaque reprise est une nouvelle `ExecutionDev` (`renvois = 0`, `controle_courant = 0`).
+  - Tri : `Classement.categorie` accepte `"doc"` ; le prompt de `tri` dans `agents.yaml` ajoute « doc : il faut changer la documentation ». Dans `_tri`, la suite devient `tests`, sinon `code`, sinon `controles` s'il y a un commentaire `doc`, sinon `reponses`. `_suite_reprise` devient : `verification` s'il y a un commit d'agent, sinon `controles` s'il y a un commentaire `doc`, sinon `reponses`.
+  - Agent `doc` en reprise : il reçoit en remarques `_annexe_commentaires(ctx, {"doc"})` ; commit `docs: <titre> (reprise)`. `_commits_agents` compte aussi `AUTEUR_DOC` (le commit de doc est poussé par `_reponses`, et `_texte_reponse` répond « Fait dans <sha> » aux commentaires `doc`).
+  - `_derouler` : la liste des phases qui réinstallent à la relance contient `controles` au lieu de `revue`, pour les deux modes.
 
 - [ ] **Étape 1 : tests** (`test_dev.py`, avec `Monde`, `FauxLLM`, `FauxLanceur`, et un `CATALOGUE_D` qui ajoute `challenger`, `securite` et `doc` à `CATALOGUE`) :
   - `test_tous_les_controles_tournent_dans_l_ordre` : les étapes créées après `verification` sont, dans l'ordre, `revue`, `challenger`, `securite`, `doc`, puis `pr` ;
@@ -202,7 +208,8 @@ Le plan initial précédait C1, C2 et E. Écarts corrigés contre le code de `ma
   - `test_relance_en_controles_reprend_au_bon_index` (point de revue n° 6) ;
   - `test_renvoi_aux_tests_rouge_sur_les_seuls_fichiers_du_renvoi` (remplace `test_revue_renvoie_aux_tests_saute_le_rouge`) ;
   - `test_modele_pour` (`test_agents.py`) ;
-  - les autres tests C1 et `test_reprise.py` passent sans changement de fond.
+  - `test_reprise.py` : `test_reprise_passe_par_tous_les_controles` (tri `code` → `code`, `verification`, `revue`, `challenger`, `securite`, `doc`, `reponses`) ; `test_reprise_commentaire_doc_passe_par_l_agent_doc` (tri `doc` seul → l'agent `doc` reçoit le commentaire, son commit est poussé, la réponse cite le SHA court) ; `test_reprise_compteur_repart_a_zero` (l'exécution d'origine avait `renvois == 2` ; un renvoi de la reprise est encore accepté) ;
+  - les autres tests C1, C2 de `test_dev.py` et `test_reprise.py` passent sans changement de fond.
 - [ ] **Étape 2 :** échec. **Étape 3 :** implémenter. **Étape 4 :** PASS (toute la suite backend) ; `alembic upgrade head`, `check`, `downgrade base`.
 - [ ] **Étape 5 : commit** `feat(portail): suite de contrôles avec compteur de renvois partagé`.
 
