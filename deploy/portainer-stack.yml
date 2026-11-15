@@ -32,7 +32,7 @@ services:
       PORTAIL_NTFY_SUJET: portail
       PORTAIL_URL_PUBLIQUE: https://portail.infra.famillelallier.net
       PORTAIL_NTFY_JETON: ${PORTAIL_NTFY_JETON:-}
-      PORTAIL_RESEAU_AGENTS: 172.31.250.0/24
+      PORTAIL_RESEAU_AGENTS: 10.250.250.0/24
       PORTAIL_AGENT_SECRET_SPEC: ${PORTAIL_AGENT_SECRET_SPEC:?}
       PORTAIL_AGENT_SECRET_ORCHESTRATEUR: ${PORTAIL_AGENT_SECRET_ORCHESTRATEUR:?}
       PORTAIL_AGENT_SECRET_PLAN: ${PORTAIL_AGENT_SECRET_PLAN:?}
@@ -208,9 +208,10 @@ networks:
   portail-lanceur:
     internal: true
   # Portail et agents seulement : ni Infra, ni base, ni LiteLLM, ni lanceur, ni Internet.
-  # Sous-réseau fixe, réservé : le portail n'accepte /api/ et /metrics d'aucun pair de cette plage.
+  # Sous-réseau fixe, réservé, hors des plages que Docker attribue seul (172.17-31, 192.168) :
+  # le portail n'accepte /api/ et /metrics d'aucun pair de cette plage.
   portail-agents:
     internal: true
     ipam:
       config:
-        - subnet: 172.31.250.0/24
+        - subnet: 10.250.250.0/24
