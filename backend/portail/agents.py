@@ -114,9 +114,11 @@ class Catalogue(BaseModel):
 
 
 def agent_effectif(cat: Catalogue, nom: str, modele: str | None) -> Agent | None:
-    """L'agent du catalogue, avec le modèle choisi pour l'étape s'il y en a un (le catalogue reste intact)."""
+    """L'agent du catalogue, avec le modèle choisi pour l'étape s'il est encore permis (le catalogue reste intact)."""
     agent = cat.agents.get(nom)
-    return agent.model_copy(update={"modele": modele}) if agent and modele else agent
+    if agent and modele in cat.modeles_permis:
+        return agent.model_copy(update={"modele": modele})
+    return agent
 
 
 def rangement(cat: Catalogue) -> list[tuple[str | None, list[str]]]:

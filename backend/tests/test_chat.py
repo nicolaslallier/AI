@@ -320,3 +320,26 @@ async def test_rediger_utilise_le_modele_choisi(client, faux_llm):
     assert (await client.post(f"/api/etapes/{eid}/rediger")).status_code == 202
     await _attendre(client, eid)
     assert faux_llm.appels[-1]["modele"] == "g"
+
+
+async def test_modele_ignore_hors_spec(client_conteneur):
+    cat = _catalogue("plan", produit="plan")
+    cat.modeles_permis = ["m", "g"]
+    client = await client_conteneur(cat, FauxAgent("plan"))
+    pid, eid = await _etape(client, "plan")
+    r = await client.post(f"/api/etapes/{eid}/messages", json={"contenu": "A", "modele": "g"})
+    assert r.status_code == 202
+    await _attendre(client, eid)
+    assert (await _etat(client, pid))["modele"] == "m"
+
+
+async def test_rediger_sans_message_fige_le_modele(client, faux_llm):
+    pid, eid = await _etape(client)
+    faux_llm.morceaux = ["# Spec"]
+    assert (await client.post(f"/api/etapes/{eid}/rediger")).status_code == 202
+    await _attendre(client, eid)
+    faux_llm.morceaux = ["r"]
+    await client.post(f"/api/etapes/{eid}/messages", json={"contenu": "A", "modele": "g"})
+    await _attendre(client, eid)
+    assert faux_llm.appels[-1]["modele"] == "m"
+    assert (await _etat(client, pid))["modele"] == "m"

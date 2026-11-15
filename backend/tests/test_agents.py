@@ -376,4 +376,5 @@ def test_agent_effectif():
     assert agent_effectif(cat, "spec", None).modele == "m"
     assert agent_effectif(cat, "spec", "g").modele == "g"
     assert cat.agents["spec"].modele == "m"  # le catalogue n'est pas modifié
+    assert agent_effectif(cat, "spec", "retire").modele == "m"  # retiré d'agents.yaml : repli
     assert agent_effectif(cat, "absent", "g") is None

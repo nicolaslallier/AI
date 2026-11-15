@@ -24,6 +24,7 @@ CATALOGUE_AVIS = Catalogue(
     },
     pipelines={"spec": ["spec"], "planification": ["plan"]},
     avis={"plan": ["architecte", "challenger"]},
+    modeles_permis=["m", "m2"],
 )  # fmt: skip
 
 

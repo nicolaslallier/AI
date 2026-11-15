@@ -15,7 +15,7 @@ const props = defineProps<{
 const emit = defineEmits<{ envoyer: [contenu: string, vider: () => void, modele?: string]; rediger: []; reessayer: [] }>()
 const saisie = ref('')
 const modele = ref(props.etape.modele ?? '')
-const choixModele = () => props.etape.produit === 'spec' && props.etape.messages.length === 0
+const choixModele = () => props.etape.produit === 'spec' && props.etape.messages.length === 0 && !props.etape.document
 
 function envoyer() {
   const t = saisie.value.trim()

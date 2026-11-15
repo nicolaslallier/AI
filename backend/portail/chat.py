@@ -206,7 +206,7 @@ class ServiceChat:
     async def envoyer(self, etape_id: int, contenu: str, modele: str | None = None) -> None:
         async with self._sessions() as s:
             etape = await self._etape_relancable(s, etape_id)
-            self._agent_conversation(etape)
+            spec = self._agent_conversation(etape).produit == "spec"
             if etape.etat == Etat.EN_COURS:
                 raise Refus(409, "une réponse est déjà en cours")
             if etape.etat != Etat.EN_ATTENTE:
@@ -214,8 +214,11 @@ class ServiceChat:
             contenu = contenu.strip()
             if not contenu:
                 raise Refus(422, "le message est vide")
-            if modele and not await s.scalar(
-                select(Message.id).where(Message.etape_id == etape_id)
+            if (
+                spec
+                and modele
+                and not etape.modele
+                and not await s.scalar(select(Message.id).where(Message.etape_id == etape_id))
             ):
                 if modele not in self._catalogue.modeles_permis:  # figé dès le premier message
                     raise Refus(422, f"modèle non permis : {modele}")
@@ -235,7 +238,7 @@ class ServiceChat:
     async def rediger(self, etape_id: int) -> None:
         async with self._sessions() as s:
             etape = await self._etape_relancable(s, etape_id)
-            self._agent_conversation(etape)
+            agent = self._agent_conversation(etape)
             if etape.etat != Etat.EN_ATTENTE:
                 raise Refus(
                     409,
@@ -243,8 +246,10 @@ class ServiceChat:
                     if etape.etat != Etat.EN_COURS
                     else "une réponse est déjà en cours",
                 )
-            if not self._agent(etape).consigne_redaction:
+            if not agent.consigne_redaction:
                 raise Refus(409, "cet agent ne rédige pas de document")
+            if not etape.modele:  # le modèle auteur du brouillon est figé
+                etape.modele = agent.modele
             etape.action = "rediger"
             await changer_etat(s, etape, Etat.EN_COURS)
             await s.commit()

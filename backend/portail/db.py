@@ -69,7 +69,9 @@ class Etape(Base):
     action: Mapped[str | None] = mapped_column(String)  # "repondre" | "rediger"
     sha: Mapped[str | None] = mapped_column(String)  # point de départ calculé une fois
     apercu: Mapped[str | None] = mapped_column(Text)
-    modele: Mapped[str | None] = mapped_column(String)  # choix de l'utilisateur ; sinon celui de l'agent
+    modele: Mapped[str | None] = mapped_column(
+        String
+    )  # choix de l'utilisateur ; sinon celui de l'agent
 
     pipeline: Mapped[Pipeline] = relationship(back_populates="etapes")
     messages: Mapped[list["Message"]] = relationship(order_by="Message.id", back_populates="etape")
