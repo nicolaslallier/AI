@@ -12,4 +12,7 @@ def inscrire(session: AsyncSession, auteur: str, action: str, objet: str, objet_
 
 
 def auteur_de(request: Request) -> str:
-    return request.headers.get("X-Auth-Request-Email") or "local"
+    """Sans oauth2-proxy (`exiger_utilisateur` faux), l'en-tête vient du client : on ne le lit pas."""
+    if not request.app.state.reglages.exiger_utilisateur:
+        return "local"
+    return (request.headers.get("X-Auth-Request-Email") or "local")[:320]

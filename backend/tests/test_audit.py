@@ -1,7 +1,11 @@
+import logging
+from types import SimpleNamespace
+
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
-from portail.audit import inscrire
+from portail.audit import auteur_de, inscrire
 from portail.db import ActionConversation, Audit, Conversation
 
 MOI = {"X-Auth-Request-Email": "n@exemple.net"}
@@ -29,7 +33,8 @@ async def _tache(client) -> int:
     return r.json()["id"]
 
 
-async def test_confirmer_inscrit(client, sessions):
+async def test_confirmer_inscrit(client, sessions, reglages):
+    reglages.exiger_utilisateur = True
     aid = await _action(sessions)
     assert (await client.post(f"/api/actions/{aid}/confirmer", headers=MOI)).status_code == 202
     [ligne] = [x for x in await _lignes(sessions) if x.action == "action.confirmer"]
@@ -100,3 +105,43 @@ async def test_survit_a_la_suppression(client, sessions):
     await client.delete(f"/api/taches/{tid}")
     lignes = [x for x in await _lignes(sessions) if x.objet == "tache"]
     assert [x.action for x in lignes] == ["tache.creer", "tache.supprimer"]
+
+
+def _requete(exiger: bool, entete: str | None):
+    reglages = SimpleNamespace(exiger_utilisateur=exiger)
+    app = SimpleNamespace(state=SimpleNamespace(reglages=reglages))
+    headers = {} if entete is None else {"X-Auth-Request-Email": entete}
+    return SimpleNamespace(app=app, headers=headers)
+
+
+def test_auteur_entete_ignore_sans_exiger():
+    # sans oauth2-proxy devant, l'en-tête vient du client : forgeable
+    assert auteur_de(_requete(False, "intrus@exemple.net")) == "local"
+
+
+def test_auteur_entete_tronque_si_exige():
+    assert auteur_de(_requete(True, "n@exemple.net")) == "n@exemple.net"
+    assert auteur_de(_requete(True, "a" * 400)) == "a" * 320
+
+
+async def test_creer_conversation_inscrit(client, sessions):
+    cid = (await client.post("/api/conversations")).json()["id"]
+    [ligne] = await _lignes(sessions)
+    assert (ligne.action, ligne.objet, ligne.objet_id) == (
+        "conversation.creer",
+        "conversation",
+        cid,
+    )
+
+
+async def test_audit_en_echec_ne_casse_pas_la_route(client, monkeypatch, caplog):
+    secret = "contenu-secret"
+
+    def casse(*_):
+        raise SQLAlchemyError(secret)
+
+    monkeypatch.setattr("portail.api.inscrire", casse)
+    with caplog.at_level(logging.ERROR):
+        r = await client.post("/api/conversations")
+    assert r.status_code == 201  # l'action a eu lieu : pas de 500, pas de rejeu
+    assert "SQLAlchemyError" in caplog.text and secret not in caplog.text

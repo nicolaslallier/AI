@@ -211,6 +211,11 @@ def test_modele_si_meme_identique_refuse(tmp_path):
         _avec(tmp_path, "    modele_si_meme: m")
 
 
+def test_modele_si_meme_hors_liste_refuse(tmp_path):
+    with pytest.raises(CatalogueInvalide, match="gpt-x"):
+        _avec(tmp_path, "    modele_si_meme: gpt-x")
+
+
 def test_doc_avec_lancer_refuse(tmp_path):
     with pytest.raises(CatalogueInvalide, match="spec"):
         _avec(tmp_path, "    produit: travail\n    role: doc\n    outils: [lire, ecrire, lancer]")

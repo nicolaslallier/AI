@@ -127,7 +127,7 @@ async def test_tests_n_ecrit_pas_le_code(espace):
     ]
     reponses = [lecture, *manipules, {"role": "assistant", "content": "fait"}]
     vus = await _jouer(reponses, _agent("tests", TOUS), espace.outils("tests"))
-    assert PIEGE in vus[0]
+    assert len(vus) == 5 and PIEGE in vus[0]
     assert all(v.startswith("erreur") for v in vus[1:]), vus
     assert espace.contenus() == avant
 
@@ -251,7 +251,8 @@ async def test_commande_non_nommee(espace, role):
 # --- orchestrateur : il ne fait que proposer ----------------------------------
 
 
-async def test_orchestrateur_ne_fait_que_proposer(client, faux_llm, sessions):
+@pytest.mark.parametrize("premier", ["creer_projet", "lancer_pipeline", "annuler_tache"])
+async def test_orchestrateur_ne_fait_que_proposer(client, faux_llm, sessions, premier):
     pid, tid, plid = await _tache_verrouillee(client, sessions)
     cid = await _creer(client)
 
@@ -259,15 +260,15 @@ async def test_orchestrateur_ne_fait_que_proposer(client, faux_llm, sessions):
         return {"id": f"a-{nom}", "type": "function", "function": {
             "name": nom, "arguments": json.dumps(args)}}  # fmt: skip
 
+    appels = {
+        "creer_projet": appel("creer_projet", nom="Pirate"),
+        "lancer_pipeline": appel("lancer_pipeline", projet_id=pid, type="planification"),
+        "annuler_tache": appel("annuler_tache", tache_id=tid),
+    }
+    # l'outil testé passe en premier : la garde d'arrêt doit écarter les deux autres
+    ordre = [premier, *[n for n in appels if n != premier]]
     faux_llm.reponses = [
-        {
-            "content": None,
-            "tool_calls": [
-                appel("creer_projet", nom="Pirate"),
-                appel("lancer_pipeline", projet_id=pid, type="planification"),
-                appel("annuler_tache", tache_id=tid),
-            ],
-        },
+        {"content": None, "tool_calls": [appels[n] for n in ordre]},
         texte(PIEGE),
     ]
     await _envoyer(client, cid, PIEGE)
@@ -281,19 +282,26 @@ async def test_orchestrateur_ne_fait_que_proposer(client, faux_llm, sessions):
             return projets, pipelines, (t.colonne, t.verrou)
 
     d = await _detail(client, cid)
-    assert [a["nom"] for a in d["actions"]] == ["creer_projet"]  # une seule proposition
+    assert [a["nom"] for a in d["actions"]] == [premier]  # une seule proposition
     # les deux autres appels du même tour sont écartés, et le modèle en est informé
     rendus = [m["content"] for m in faux_llm.appels[-1]["messages"] if m["role"] == "tool"]
+    assert len(rendus) == 3
     assert rendus[1:] == ["ignoré : une action attend la confirmation de Nicolas"] * 2
-    assert await etat() == (["P"], [plid], ("en_cours", plid))  # rien n'a bougé
+    # une action proposée, état inchangé jusqu'à confirmation
+    assert await etat() == (["P"], [plid], ("en_cours", plid))
 
     assert (await _confirmer(client, d["actions"][0]["id"])).status_code == 202
     faux_llm.reponses = [texte("fait")]
     await _attendre(client, cid)
     # seule l'action confirmée s'exécute, pas les deux autres appels du même tour
-    assert await etat() == (["P", "Pirate"], [plid], ("en_cours", plid))
     async with sessions() as s:
         assert len((await s.scalars(select(ActionConversation))).all()) == 1
+    projets, pipelines, tache = await etat()
+    assert (projets == ["P", "Pirate"]) == (premier == "creer_projet")
+    if premier != "lancer_pipeline":
+        assert pipelines == [plid]
+    if premier != "annuler_tache":
+        assert tache == ("en_cours", plid)
 
 
 # --- commentaires de PR -------------------------------------------------------

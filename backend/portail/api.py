@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -113,9 +114,13 @@ def _flux(generateur) -> StreamingResponse:
 
 
 async def _tracer(s: AsyncSession, request: Request, action: str, objet: str, objet_id: int):
-    """Pour les routes dont le service a déjà validé : une ligne d'audit, commitée aussitôt."""
-    inscrire(s, auteur_de(request), action, objet, objet_id)
-    await s.commit()
+    """Ligne d'audit « au mieux », commitée après le service (qui a sa propre session) : elle peut
+    manquer après un crash entre les deux commits. Un échec est journalisé, jamais relevé : l'action a eu lieu."""
+    try:
+        inscrire(s, auteur_de(request), action, objet, objet_id)
+        await s.commit()
+    except SQLAlchemyError:
+        journal.erreur(logger, "audit non inscrit : %s %s", action, objet_id)
 
 
 async def _avis(session: AsyncSession, docs: list[Document]) -> dict[int, list[AvisOut]]:
