@@ -3,6 +3,7 @@ commande, lint. Ils précèdent le challenger, qui les reçoit tous en annexe.""
 
 import os
 import re
+from collections.abc import Collection
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
@@ -123,11 +124,17 @@ _NEGATION = re.compile(r"\bne\b.*\bpas\b|\bn['’].*\bpas\b|\bnot\b|\bdon['’]t
 
 
 def verifier_affirmations(
-    texte: str, commandes: list[CommandeLancee], role: Literal["tests", "code"]
+    texte: str,
+    commandes: list[CommandeLancee],
+    role: Literal["tests", "code"],
+    a_prouver: Collection[str],
 ) -> list[Fait]:
-    """Chaque affirmation exige que la dernière des commandes qui la prouvent ait réussi."""
+    """Chaque affirmation exige que la dernière des commandes qui la prouvent ait réussi.
+    Un motif dont aucune commande n'est dans `a_prouver` est ignoré : rien ne pourrait le prouver."""
     faits = []
     for motif, noms in AFFIRMATIONS.items():
+        if not noms & set(a_prouver):
+            continue
         for m in re.finditer(motif, texte, re.IGNORECASE):
             if _NEGATION.search(texte[max(0, m.start() - 30) : m.start()]):
                 continue
@@ -176,6 +183,8 @@ async def verifier_faits(
     la dernière `verification` comptent aussi comme preuve), et `lint` (le résultat de la
     commande, ou None si non déclaré)."""
     faits = verifier_references(racine, references_ajoutees(diff), cfg)
+    # le lint du portail tranche : réussi, l'affirmation est prouvée ; échoué, le fait `lint`
+    a_prouver = set(cfg.commandes) - ({"lint"} if lint is not None else set())
     async with sessions() as s:
         verif = await s.scalar(
             select(Etape.id)
@@ -212,7 +221,9 @@ async def verifier_faits(
                     .order_by(CommandeLancee.id)
                 )
             )
-            faits += verifier_affirmations(message or "", commandes + preuves_verif, role)
+            faits += verifier_affirmations(
+                message or "", commandes + preuves_verif, role, a_prouver
+            )
     if lint is not None and lint.code != 0:
         faits.append(fait_lint(lint.sortie, lint_base_ok))
     return faits
