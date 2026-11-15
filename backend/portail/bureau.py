@@ -38,6 +38,9 @@ async def _tour_et_jauge(
 ) -> None:
     """Deux requêtes par travail : la mission de son dernier appel, puis ses appels (compte du tour,
     derniers vrais jetons d'entrée rendus par le modèle)."""
+    # ponytail: appel_llm n'est écrit qu'à la fin d'un appel, donc pendant le premier appel d'une
+    # nouvelle mission le poste montre encore le tour et la jauge de la précédente ; dater le début
+    # de l'activité si cela gêne.
     mission = await s.scalar(
         select(AppelLLM.mission)
         .where(AppelLLM.agent == agent, *(getattr(AppelLLM, k) == v for k, v in filtre.items()))
@@ -209,6 +212,8 @@ async def lire_poste(s: AsyncSession, cat: Catalogue, nom: str) -> PosteDetail:
     agent = cat.agents.get(nom)
     if agent is None:
         raise Refus(404, "agent inconnu")  # sans écho du nom : il vient de l'URL
+    # ponytail: la fenêtre peut couper la plus ancienne mission (ses derniers appels manquent) ;
+    # agréger en SQL par mission si cela gêne.
     lignes = (
         await s.scalars(
             select(AppelLLM)

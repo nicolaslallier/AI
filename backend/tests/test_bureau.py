@@ -319,7 +319,21 @@ async def test_avis_tour_par_pipeline(client, sessions):
         await s.flush()
         s.add(Avis(document_id=d.id, version=1, agent="a", etat="en_cours"))
     await _appels(sessions, "a", "m", 2, pipeline_id=pid)
+    # même agent, même pipeline, plus récentes, mais d'une étape : pas le tour de l'avis
+    await _appels(sessions, "a", "m-etape", 3, pipeline_id=pid, etape_id=eid)
     assert (await _bureau(client))["postes"]["a"]["travaux"][0]["tour"] == 2
+
+
+async def test_tour_conversation_au_travail(client, sessions):
+    async with sessions() as s, s.begin():
+        c = Conversation(agent="orchestrateur", etat="en_cours")
+        s.add(c)
+        await s.flush()
+        cid = c.id
+    await _appels(sessions, "orchestrateur", "m1", 2, conversation_id=cid)
+    await _appels(sessions, "orchestrateur", "m2", 4, conversation_id=cid)
+    t = (await _bureau(client))["postes"]["orchestrateur"]["travaux"][0]
+    assert t["etat"] == "au_travail" and t["tour"] == 4
 
 
 # --- détail d'un poste -------------------------------------------------
