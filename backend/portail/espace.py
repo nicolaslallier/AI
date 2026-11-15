@@ -12,6 +12,8 @@ from portail.outils import EXCLUSIONS
 _DIFF_MAX = 200_000
 _SANS_EXTERNE = ("--no-ext-diff", "--no-textconv")
 AUTEUR_PORTAIL = ("portail", "portail@portail.local")
+# pointe de la base récupérée par `fusionner` : survit à `remettre_a_zero` (pas de refetch)
+BASE_FUSIONNEE = "refs/portail/base"
 
 
 def _rev(rev: str) -> str:
@@ -76,7 +78,10 @@ class Espace:
         ref = f"refs/heads/{await self._branche(base)}"
         if not self.depot_url:
             raise ErreurDepot("URL du dépôt inconnue pour cet espace")
-        await self._git("fetch", "--", self.depot_url, ref, jeton=jeton, delai=120, distant=True)
+        await self._git(
+            "fetch", "--", self.depot_url, f"+{ref}:{BASE_FUSIONNEE}",
+            jeton=jeton, delai=120, distant=True,
+        )  # fmt: skip
         nom, courriel = AUTEUR_PORTAIL
         try:
             await self._git(

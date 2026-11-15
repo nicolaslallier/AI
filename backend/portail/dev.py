@@ -38,7 +38,7 @@ from portail.db import (
     Tache,
 )
 from portail.depots import ErreurDepot, git
-from portail.espace import Espace
+from portail.espace import BASE_FUSIONNEE, Espace
 from portail.etats import Etat
 from portail.execution import (
     ConfigExecution,
@@ -1005,7 +1005,9 @@ class Orchestrateur:
 
     async def _regles(self, ctx: _Ctx) -> list[str]:
         """Règles du dépôt données au challenger : CLAUDE.md, AGENTS.md et `cfg.regles`, lues à
-        la base de la branche : un agent ne réécrit jamais les règles qui le jugent."""
+        la base de la branche : un agent ne réécrit jamais les règles qui le jugent. En reprise,
+        `base_sha` est la pointe de la PR (commits des agents) : on lit la base fusionnée."""
+        rev = BASE_FUSIONNEE if ctx.ex.mode == "reprise" else ctx.ex.base_sha
         blocs = []
         for chemin in dict.fromkeys((*REGLES_DU_DEPOT, ctx.cfg.regles)):
             if not chemin:
@@ -1014,7 +1016,7 @@ class Orchestrateur:
             if chemin.startswith(("/", ":")) or ".." in parties or _secret_chemin(parties):
                 continue  # jamais hors du dépôt, jamais un secret
             try:
-                texte = await ctx.espace.fichier_a(ctx.ex.base_sha, chemin)
+                texte = await ctx.espace.fichier_a(rev, chemin)
             except ErreurDepot:  # un dossier, un chemin refusé par git : pas de règles ici
                 texte = None
             if texte is not None:
