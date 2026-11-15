@@ -14,9 +14,13 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ envoyer: [contenu: string, vider: () => void]; rediger: []; reessayer: [] }>()
 const saisie = ref('')
-// Volets et architecture tournent seuls : pas de discussion, l'utilisateur ne fait que valider la fin.
-const automatique = computed(() => props.etape.produit === 'volet' || props.etape.produit === 'architecture')
-const livrable: Record<string, string> = { vision: 'la vision', plan: 'le plan' }
+// Les volets tournent seuls ; l'architecture aussi, jusqu'à son premier jet : ensuite Nicolas peut demander des retouches.
+const automatique = computed(
+  () =>
+    props.etape.produit === 'volet' ||
+    (props.etape.produit === 'architecture' && !['en_attente', 'echouee'].includes(props.etape.etat)),
+)
+const livrable: Record<string, string> = { vision: 'la vision', plan: 'le plan', architecture: 'l’architecture' }
 
 function envoyer() {
   const t = saisie.value.trim()

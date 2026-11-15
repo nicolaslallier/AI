@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { Jauge } from '../api'
 const props = defineProps<{ jauge: Jauge; compacte?: boolean; produit?: string | null }>()
-const rediger = props.produit === 'vision' ? 'Rédiger la vision' : 'Rédiger la spec'
+const livrable: Record<string, string> = { vision: 'la vision', architecture: 'l’architecture' }
+const rediger = `Rédiger ${livrable[props.produit ?? ''] ?? 'la spec'}`
 const couleurs = { ok: 'var(--succes)', alerte: 'var(--alerte)', plein: 'var(--danger)' }
 </script>
 
