@@ -101,8 +101,13 @@ class MessageOut(BaseModel):
     cree_le: datetime
 
 
+class ConversationIn(BaseModel):
+    agent: str = "orchestrateur"
+
+
 class ConversationResume(BaseModel):
     id: int
+    agent: str
     titre: str
     etat: str
     maj_le: datetime
@@ -120,6 +125,7 @@ class ActionOut(BaseModel):
 
 class ConversationDetail(BaseModel):
     id: int
+    agent: str
     titre: str
     etat: str
     erreur: str | None
@@ -132,11 +138,22 @@ class ConversationPatch(BaseModel):
     titre: str = Field(max_length=200)
 
 
+class AvisOut(BaseModel):
+    id: int
+    agent: str
+    contenu: str
+    etat: str
+    version: int
+    ancienne: bool = False
+
+
 class DocumentOut(BaseModel):
     id: int
     contenu: str
     etat: str
+    version: int
     maj_le: datetime
+    avis: list[AvisOut] = []
 
 
 class EtapeOut(BaseModel):
@@ -164,6 +181,7 @@ class ExecutionVue(BaseModel):
     renvois: int
     pr_url: str | None
     mode: str
+    notes: list[dict] = []
 
 
 class CommentaireVue(BaseModel):

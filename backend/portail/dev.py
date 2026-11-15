@@ -1,7 +1,8 @@
 """Orchestrateur du pipeline `dev` : une tâche *Prête* devient une PR en brouillon.
 
-tests (agent) → rouge (portail) → code (agent) → vérification (portail) → revue (agent) → PR.
-Reprise sur commentaires de PR : préparation → tri → tests → code → vérification → revue →
+tests (agent) → rouge (portail) → code (agent) → vérification (portail) → contrôles (les agents
+qui suivent `code` dans `pipelines.dev`) → PR. Un seul compteur de renvois pour tous les contrôles.
+Reprise sur commentaires de PR : préparation → tri → tests → code → vérification → contrôles →
 réponses, sur la même branche et la même PR ; un échec ramène la tâche *En revue*.
 L'état du pipeline et de ses étapes est écrit ici seul, sans `changer_etat`.
 """
@@ -14,7 +15,7 @@ import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from posixpath import basename
 from typing import Literal
 
@@ -22,7 +23,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from portail.agents import Catalogue
+from portail.agents import Catalogue, modele_pour
 from portail.boucle import ErreurOutils, boucle_outils
 from portail.config import Reglages
 from portail.contexte import construire
@@ -37,7 +38,7 @@ from portail.db import (
     Tache,
 )
 from portail.depots import ErreurDepot, git
-from portail.espace import Espace
+from portail.espace import BASE_FUSIONNEE, Espace
 from portail.etats import Etat
 from portail.execution import (
     ConfigExecution,
@@ -46,28 +47,38 @@ from portail.execution import (
     dossiers_lecture_seule,
     lire_config,
 )
+from portail.faits import Fait, verifier_faits
 from portail.github import CommentaireGitHub, ErreurGitHub, depot_depuis_url
 from portail.lanceur import ErreurLanceur, Resultat
 from portail.llm import ErreurLLM, retirer_reflexion
 from portail.moteur import Refus
 from portail.notifications import Notifieur, lien_absolu, raison_courte
-from portail.outils import OutilsDepot, OutilsEspace, apercu, empreinte
-from portail.protections import COURRIEL_CODE, MANIFESTES, section_de_test, verifier_commits_code
+from portail.outils import OutilsDepot, OutilsEspace, _secret_chemin, apercu, empreinte
+from portail.protections import (
+    COURRIEL_CODE,
+    COURRIEL_DOC,
+    MANIFESTES,
+    section_de_test,
+    verifier_commits_code,
+)
 from portail.taches import deplacer_tache
 
 logger = logging.getLogger(__name__)
 
 AUTEUR_TESTS = ("agent-tests", "agent-tests@portail.local")
 AUTEUR_CODE = ("agent-code", COURRIEL_CODE)
+AUTEUR_DOC = ("agent-doc", COURRIEL_DOC)
+COURRIELS_AGENTS = {AUTEUR_TESTS[1], AUTEUR_CODE[1], AUTEUR_DOC[1]}
+REGLES_DU_DEPOT = ("CLAUDE.md", "AGENTS.md")
 PROTECTION = "protection des tests"
 PASSENT_DEJA = "les tests passent déjà : ils ne testent rien de nouveau"
-ILLISIBLE = "revue automatique illisible"
 MANIFESTE_A_NICOLAS = (
     "Cette section de tests du manifeste ne peut être modifiée par aucun agent : "
     "c'est à Nicolas de le faire."
 )
 _TEXTE_MAX = 20_000
 _FIN_SORTIE = 3000
+_REGLES_MAX = 50_000  # par fichier de règles donné au challenger
 
 
 class _Blocage(Exception):
@@ -79,6 +90,7 @@ class _Blocage(Exception):
 class Verdict(BaseModel):
     decision: Literal["ok", "renvoyer_tests", "renvoyer_code"]
     remarques: list[str] = []
+    notes: list[str] = []  # ne bloquent jamais
 
 
 FORMAT_VERDICT = {
@@ -96,7 +108,7 @@ def _lire_verdict(texte: str) -> Verdict | None:
 
 class Classement(BaseModel):
     id: int  # id du CommentairePris
-    categorie: Literal["tests", "code", "reponse"]
+    categorie: Literal["tests", "code", "doc", "reponse"]
     consigne: str
 
 
@@ -389,20 +401,21 @@ class Orchestrateur:
             await ctx.espace.remettre_a_zero()  # -x : .venv/ et autres ignorés effacés
             if ctx.cfg.services:
                 await self._lanceur.services(ctx.ex.espace, ctx.cfg.services)
-            if phase in ("tri", "tests", "rouge", "code", "revue"):  # la vérification réinstalle
+            # la vérification réinstalle elle-même
+            if phase in ("tri", "tests", "rouge", "code", "controles"):
                 await self._installer(ctx)
-            await self._transition(ctx, phase)
+            await self._transition(ctx, phase)  # `controles` repart de `controle_courant`
         if ctx.ex.mode == "reprise":
             phases = {
                 "preparation": self._preparation, "tri": self._tri, "tests": self._tests,
-                "code": self._code, "verification": self._verification, "revue": self._revue,
-                "reponses": self._reponses,
+                "code": self._code, "verification": self._verification,
+                "controles": self._controles, "reponses": self._reponses,
             }  # fmt: skip
         else:
             phases = {
                 "preparation": self._preparation, "tests": self._tests, "rouge": self._rouge,
-                "code": self._code, "verification": self._verification, "revue": self._revue,
-                "pr": self._pr,
+                "code": self._code, "verification": self._verification,
+                "controles": self._controles, "pr": self._pr,
             }  # fmt: skip
         while phase != "fini":
             await self._maj(ctx, phase=phase)
@@ -470,8 +483,11 @@ class Orchestrateur:
 
     # --- commandes --------------------------------------------------------
 
-    async def _commande(self, ctx: _Ctx, nom: str, fichiers: list[str] = ()) -> Resultat:
-        """Lance une commande nommée ; pendant `code` et `verification`, protège les tests."""
+    async def _commande(
+        self, ctx: _Ctx, nom: str, fichiers: list[str] = (), tout_lecture_seule: bool = False
+    ) -> Resultat:
+        """Lance une commande nommée ; pendant `code` et `verification`, protège les tests.
+        `tout_lecture_seule` : tout l'espace monté en lecture seule (commandes de contrôle)."""
         protege = ctx.phase in ("code", "verification")
         lecture_seule, avant = [], {}
         if protege:  # recalculé à chaque fois : jamais en cache
@@ -480,7 +496,7 @@ class Orchestrateur:
         debut = self._horloge()
         r = await self._lanceur.lancer(
             ctx.ex.espace, ctx.cfg.image, commande(ctx.cfg, nom, fichiers),
-            self._reglages.delai_commande_s, lecture_seule,
+            self._reglages.delai_commande_s, lecture_seule, tout_lecture_seule,
         )  # fmt: skip
         sortie = r.sortie
         if protege and (restaures := await self._restaurer_proteges(ctx, avant)):
@@ -525,6 +541,15 @@ class Orchestrateur:
 
         return lancer
 
+    def _lancer_controle(self, ctx: _Ctx):
+        """`lancer` d'un agent de contrôle : tout l'espace en lecture seule."""
+
+        async def lancer(nom: str) -> str:
+            r = await self._commande(ctx, nom, tout_lecture_seule=True)
+            return f"code {r.code}\n{r.sortie}"
+
+        return lancer
+
     async def _fichiers_tests(self, ctx: _Ctx) -> list[str]:
         """Tests changés dans cette passe, plus ceux des passes précédentes encore présents."""
         candidats = {*await ctx.espace.changements(), *ctx.ex.fichiers_tests}
@@ -537,9 +562,17 @@ class Orchestrateur:
     # --- agents -----------------------------------------------------------
 
     async def _agent(
-        self, ctx: _Ctx, nom: str, annexes: list[str], consigne: str, outils: OutilsDepot
+        self,
+        ctx: _Ctx,
+        nom: str,
+        annexes: list[str],
+        consigne: str,
+        outils: OutilsDepot,
+        modele: str | None = None,
     ) -> tuple[str, list[dict]]:
         agent = self._catalogue.agents[nom]
+        if modele:
+            agent = agent.model_copy(update={"modele": modele})
         await self._etape(ctx, nom)
         messages = construire(agent, [], None, consigne, annexes)
 
@@ -581,6 +614,9 @@ class Orchestrateur:
         if ctx.cfg.services:
             await self._lanceur.services(ctx.ex.espace, ctx.cfg.services)
         await self._installer(ctx)
+        if not reprise and "lint" in ctx.cfg.commandes:  # la dette existante ne bloque pas
+            lint = await self._commande(ctx, "lint", tout_lecture_seule=True)
+            champs["lint_base_ok"] = lint.code == 0
         return await self._transition(ctx, "tri" if reprise else "tests", base_sha=sha, **champs)
 
     async def _tri(self, ctx: _Ctx) -> str:
@@ -628,7 +664,8 @@ class Orchestrateur:
                     .values(tri=categorie, consigne=consigne)
                 )
             await s.commit()
-        suivante = next((p for p in ("tests", "code") if p in categories), "reponses")
+        sinon = "controles" if "doc" in categories else "reponses"
+        suivante = next((p for p in ("tests", "code") if p in categories), sinon)
         return await self._transition(ctx, suivante)
 
     async def _commentaires(self, ctx: _Ctx) -> list[CommentairePris]:
@@ -648,12 +685,14 @@ class Orchestrateur:
 
     async def _commits_agents(self, ctx: _Ctx) -> list[str]:
         """SHA des commits des agents depuis la fusion de la base (reprise)."""
-        agents = {AUTEUR_TESTS[1], AUTEUR_CODE[1]}
         commits = await ctx.espace.commits(ctx.ex.depart_revue)
-        return [sha for sha, auteur, _ in commits if auteur in agents]
+        return [sha for sha, auteur, _ in commits if auteur in COURRIELS_AGENTS]
 
     async def _suite_reprise(self, ctx: _Ctx) -> str:
-        return "verification" if await self._commits_agents(ctx) else "reponses"
+        if await self._commits_agents(ctx):
+            return "verification"
+        doc = any(c.tri == "doc" for c in await self._commentaires(ctx))
+        return "controles" if doc else "reponses"
 
     async def _reponses(self, ctx: _Ctx) -> str:
         await self._etape(ctx, "portail", "reponses")
@@ -732,18 +771,28 @@ class Orchestrateur:
         fichiers = await self._fichiers_tests(ctx)
         if not fichiers and not reprise:
             raise _Blocage("aucun test écrit")
+        # après un renvoi, le rouge ne porte que sur les tests changés dans cette passe
+        rouge = [
+            c
+            for c in await ctx.espace.changements()
+            if correspond(c, ctx.cfg.chemins_tests) and (ctx.racine / c).is_file()
+        ]
         await self._maj(ctx, fichiers_tests=fichiers)
         titre = f"test: {ctx.tache.titre}" + (" (reprise)" if reprise else "")
         commit = await ctx.espace.commiter(*AUTEUR_TESTS, titre)
         if reprise:
             code = commit or any(c.tri == "code" for c in await self._commentaires(ctx))
             return await self._transition(ctx, "code" if code else await self._suite_reprise(ctx))
-        # après un renvoi de la revue, le code existe déjà : pas de vérification rouge
-        return await self._transition(ctx, "code" if ctx.ex.renvois else "rouge")
+        if not ctx.ex.renvois:
+            return await self._transition(ctx, "rouge")
+        # renvoi sans nouveau test : le code existe déjà, pas de vérification rouge
+        return await self._transition(ctx, "rouge" if rouge else "code", fichiers_rouge=rouge)
 
     async def _rouge(self, ctx: _Ctx) -> str:
         await self._etape(ctx, "portail", "rouge")
-        r = await self._commande(ctx, "tests_cibles", ctx.ex.fichiers_tests)
+        r = await self._commande(
+            ctx, "tests_cibles", ctx.ex.fichiers_rouge or ctx.ex.fichiers_tests
+        )
         if r.delai_depasse:
             raise _Blocage(
                 f"délai dépassé pendant la vérification rouge :\n{r.sortie[-_FIN_SORTIE:]}"
@@ -755,6 +804,10 @@ class Orchestrateur:
             raise _Blocage(f"commande de tests invalide :\n{r.sortie[-_FIN_SORTIE:]}")
         if r.code == 5:
             raise _Blocage("aucun test écrit (aucun test collecté)")
+        # `fichiers_rouge` n'est rempli que par une passe de tests après un renvoi
+        renvoi = bool(ctx.ex.fichiers_rouge)
+        if r.code == 0 and renvoi:  # test d'un cas déjà géré : attendu, le code existe
+            return await self._transition(ctx, "verification", fichiers_rouge=[])
         if r.code == 0:
             async with self._sessions() as s:
                 deja = await s.scalar(
@@ -767,7 +820,11 @@ class Orchestrateur:
             if deja:
                 raise _Blocage(PASSENT_DEJA)
             return await self._transition(ctx, "tests", PASSENT_DEJA, remarques=[PASSENT_DEJA])
-        return await self._transition(ctx, "code", sortie_rouge=r.sortie, remarques=[])
+        # les remarques du renvoi vont jusqu'à l'agent de code ; `PASSENT_DEJA` est effacé
+        remarques = ctx.ex.remarques if renvoi else []
+        return await self._transition(
+            ctx, "code", sortie_rouge=r.sortie, remarques=remarques, fichiers_rouge=[]
+        )
 
     async def _code(self, ctx: _Ctx) -> str:
         annexes = [
@@ -799,28 +856,116 @@ class Orchestrateur:
         await self._proteger(ctx)
         # rien d'ignoré (.venv/ piégé par une commande de l'agent…) ne survit : on réinstalle
         await ctx.espace.remettre_a_zero()
-        await self._installer(ctx)
+        r = await self._commande(ctx, "installer")
+        if r.code != 0:  # un paquet inventé : l'agent de code corrige, dans la limite des renvois
+            sortie = r.sortie[-_FIN_SORTIE:]
+            if ctx.ex.renvois >= self._reglages.renvois_max:
+                raise _Blocage(f"installation échouée :\n{sortie}")
+            return await self._transition(
+                ctx, "code", renvois=ctx.ex.renvois + 1, controle_courant=0,
+                remarques=[f"installation des dépendances échouée (paquet inventé ?) :\n{sortie}"],
+            )  # fmt: skip
         for nom, fichiers in (("tests_cibles", ctx.ex.fichiers_tests), ("tests", [])):
             r = await self._commande(ctx, nom, fichiers)
             if r.code != 0:
                 raise _Blocage(f"vérification échouée ({nom}) :\n{r.sortie[-_FIN_SORTIE:]}")
-        return await self._transition(ctx, "revue")
+        return await self._transition(ctx, "controles", controle_courant=0)
 
     async def _proteger(self, ctx: _Ctx) -> None:
         if violations := await verifier_commits_code(ctx.espace, ctx.ex.base_sha, ctx.cfg):
             raise _Blocage(f"{PROTECTION} : " + ", ".join(violations))
 
-    async def _revue(self, ctx: _Ctx) -> str:
-        agent = self._catalogue.agents["revue"]
+    async def _controles(self, ctx: _Ctx) -> str:
+        """Les agents qui suivent `code` dans `pipelines.dev`, à partir de `controle_courant`.
+        Un renvoi, tant que le compteur partagé le permet, ramène aux tests ou au code (puis la
+        vérification relance tous les contrôles) ; sinon il devient une remarque non résolue."""
+        dev = self._catalogue.pipelines["dev"]
+        controles = dev[dev.index("code") + 1 :]
         reprise = ctx.ex.mode == "reprise"
-        diff = await ctx.espace.diff(ctx.ex.depart_revue if reprise else ctx.ex.base_sha)
-        annexes = [_texte_tache(ctx.tache), "Diff de la tâche :\n\n" + (diff or "(vide)")]
-        if reprise:
-            annexes.append(await self._annexe_commentaires(ctx, {"tests", "code", "reponse"}))
-        consigne = "Relis ce diff et rends ton verdict en JSON."
-        texte, messages = await self._agent(
-            ctx, "revue", annexes, consigne, OutilsDepot(ctx.racine)
+        # au premier contrôle, les remarques sont celles du renvoi précédent, déjà traitées
+        remarques = list(ctx.ex.remarques) if ctx.ex.controle_courant else []
+        notes = list(ctx.ex.notes)
+        for i in range(ctx.ex.controle_courant, len(controles)):
+            nom = controles[i]
+            # recalculé à chaque contrôle : l'agent de doc peut avoir commité
+            diff = await ctx.espace.diff(ctx.ex.depart_revue if reprise else ctx.ex.base_sha)
+            annexes = [_texte_tache(ctx.tache), "Diff de la tâche :\n\n" + (diff or "(vide)")]
+            if self._catalogue.agents[nom].role == "doc":
+                await self._doc(ctx, nom, annexes)
+            else:
+                if reprise:
+                    categories = {"tests", "code", "doc", "reponse"}
+                    annexes.append(await self._annexe_commentaires(ctx, categories))
+                if nom == "challenger":
+                    faits = await self._faits(ctx, diff)
+                    notes += [
+                        n
+                        for n in (
+                            {"agent": "faits", "texte": f.texte} for f in faits if not f.bloquant
+                        )
+                        if n not in notes
+                    ]
+                    if bloquants := [f for f in faits if f.bloquant]:
+                        if ctx.ex.renvois < self._reglages.renvois_max:  # pas de challenger
+                            return await self._transition(
+                                ctx, bloquants[0].role, renvois=ctx.ex.renvois + 1,
+                                remarques=[f.texte for f in faits], controle_courant=0,
+                                notes=notes,
+                            )  # fmt: skip
+                        remarques += [f"faits : {f.texte}" for f in bloquants]
+                    annexes.append(
+                        _liste(
+                            "Faits vérifiés par le portail :", [f.texte for f in faits] or ["aucun"]
+                        )
+                    )
+                    annexes += await self._regles(ctx)
+                verdict = await self._verdict(ctx, nom, annexes)
+                # un contrôle rejoué après un renvoi ne répète pas ses notes
+                notes += [
+                    n for n in ({"agent": nom, "texte": t} for t in verdict.notes) if n not in notes
+                ]
+                if verdict.decision != "ok":
+                    if ctx.ex.renvois < self._reglages.renvois_max:
+                        suivante = "tests" if verdict.decision == "renvoyer_tests" else "code"
+                        return await self._transition(
+                            ctx, suivante, renvois=ctx.ex.renvois + 1,
+                            remarques=verdict.remarques, controle_courant=0, notes=notes,
+                        )  # fmt: skip
+                    remarques += [f"{nom} : {r}" for r in verdict.remarques] or [
+                        f"{nom} : {verdict.decision} après le dernier renvoi"
+                    ]
+            # écrit avant le contrôle suivant : une relance repart d'ici, sans rien rejouer
+            await self._transition(
+                ctx, "controles", controle_courant=i + 1, notes=notes, remarques=remarques
+            )
+        return await self._transition(ctx, "reponses" if reprise else "pr")
+
+    async def _faits(self, ctx: _Ctx, diff: str) -> list[Fait]:
+        """Faits vérifiés par du code (étape `faits`) ; le lint tourne en lecture seule."""
+        await self._etape(ctx, "portail", "faits")
+        lint = None
+        if "lint" in ctx.cfg.commandes:
+            lint = await self._commande(ctx, "lint", tout_lecture_seule=True)
+        faits = await verifier_faits(
+            self._sessions, ctx.pipeline_id, ctx.racine, ctx.cfg, diff, lint, ctx.ex.lint_base_ok
         )
+        await self._message(
+            ctx, "system", "\n".join(f"- {f.texte}" for f in faits) or "aucun fait à signaler"
+        )
+        async with self._sessions() as s:  # l'étape suivante est celle du challenger
+            await s.execute(
+                update(Etape).where(Etape.id == ctx.etape_id).values(etat=Etat.TERMINEE)
+            )
+            await s.commit()
+        return faits
+
+    async def _verdict(self, ctx: _Ctx, nom: str, annexes: list[str]) -> Verdict:
+        """Verdict d'un agent de contrôle ; illisible même après une relance : une note."""
+        agent = self._catalogue.agents[nom]
+        modele = modele_pour(agent, self._catalogue.agents["code"])
+        outils = OutilsEspace(ctx.racine, "revue", ctx.cfg, self._lancer_controle(ctx))
+        consigne = "Relis ce diff et rends ton verdict en JSON."
+        texte, messages = await self._agent(ctx, nom, annexes, consigne, outils, modele)
         verdict = _lire_verdict(texte)
         if verdict is None:  # une seule relance, avec le format imposé
             messages += [
@@ -828,26 +973,60 @@ class Orchestrateur:
                 {"role": "user", "content": "Réponse invalide : renvoie uniquement le JSON."},
             ]
             rep = await self._llm.completer(
-                agent.modele, messages, agent.temperature, response_format=FORMAT_VERDICT
+                modele, messages, agent.temperature, response_format=FORMAT_VERDICT
             )
             texte = retirer_reflexion(rep.get("content") or "").strip()
             await self._message(ctx, "assistant", texte or "(réponse vide)")
             verdict = _lire_verdict(texte)
         if verdict is None:
-            verdict, non_resolues = Verdict(decision="ok", remarques=[ILLISIBLE]), [ILLISIBLE]
-        elif verdict.decision == "ok":
-            non_resolues = []
-        elif ctx.ex.renvois < self._reglages.renvois_max:
-            await self._message(ctx, "system", _resume(verdict))
-            suivante = "tests" if verdict.decision == "renvoyer_tests" else "code"
-            return await self._transition(
-                ctx, suivante, renvois=ctx.ex.renvois + 1, remarques=verdict.remarques
-            )
-        else:
-            non_resolues = verdict.remarques or [f"{verdict.decision} après le dernier renvoi"]
+            verdict = Verdict(decision="ok", notes=[f"verdict illisible de {nom}"])
         await self._message(ctx, "system", _resume(verdict))
-        suivante = "reponses" if reprise else "pr"
-        return await self._transition(ctx, suivante, remarques=non_resolues)
+        return verdict
+
+    async def _doc(self, ctx: _Ctx, nom: str, annexes: list[str]) -> None:
+        """L'agent de doc écrit dans `chemins_doc` ; tout le reste est annulé. Jamais de renvoi."""
+        reprise = ctx.ex.mode == "reprise"
+        consigne = "Mets à jour la documentation de cette tâche."
+        if reprise and any(c.tri == "doc" for c in await self._commentaires(ctx)):
+            annexes.append(await self._annexe_commentaires(ctx, {"doc"}))
+            consigne = "Traite les commentaires de Nicolas sur la documentation."
+        outils = OutilsEspace(ctx.racine, "doc", ctx.cfg, self._lancer_controle(ctx))
+        await self._agent(ctx, nom, annexes, consigne, outils)
+        cfg = ctx.cfg
+        annules = await ctx.espace.restaurer(
+            lambda c: correspond(c, cfg.chemins_doc) and not correspond(c, cfg.protege)
+        )
+        if annules:
+            await self._message(
+                ctx, "system", _liste("Changements hors de la doc annulés :", annules)
+            )
+        titre = f"docs: {ctx.tache.titre}" + (" (reprise)" if reprise else "")
+        await ctx.espace.commiter(*AUTEUR_DOC, titre)  # vide : rien
+
+    async def _regles(self, ctx: _Ctx) -> list[str]:
+        """Règles du dépôt données au challenger : CLAUDE.md, AGENTS.md et `cfg.regles`, lues à
+        la base de la branche : un agent ne réécrit jamais les règles qui le jugent. En reprise,
+        `base_sha` est la pointe de la PR (commits des agents) : on lit la base fusionnée."""
+        rev = BASE_FUSIONNEE if ctx.ex.mode == "reprise" else ctx.ex.base_sha
+        if ctx.ex.mode == "reprise":
+            try:  # sans la base, le challenger jugerait sans règles : échec fermé
+                await ctx.espace._git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
+            except ErreurDepot:
+                raise _Blocage("base fusionnée absente : relancer la reprise") from None
+        blocs = []
+        for chemin in dict.fromkeys((*REGLES_DU_DEPOT, ctx.cfg.regles)):
+            if not chemin:
+                continue
+            parties = PurePosixPath(chemin).parts
+            if chemin.startswith(("/", ":")) or ".." in parties or _secret_chemin(parties):
+                continue  # jamais hors du dépôt, jamais un secret
+            try:
+                texte = await ctx.espace.fichier_a(rev, chemin)
+            except ErreurDepot:  # un dossier, un chemin refusé par git : pas de règles ici
+                texte = None
+            if texte is not None:
+                blocs.append(f"Règles du dépôt ({chemin}) :\n\n{texte[:_REGLES_MAX]}")
+        return blocs
 
     async def _pr(self, ctx: _Ctx) -> str:
         await self._etape(ctx, "portail", "pr")
@@ -925,6 +1104,14 @@ class Orchestrateur:
         ]
         if kanban:
             blocs.insert(0, f"Tâche du portail : [kanban]({kanban}) · [pipeline]({pipeline})")
+        if ctx.ex.notes:
+            par_agent: dict[str, list[str]] = {}
+            for n in ctx.ex.notes:
+                par_agent.setdefault(n["agent"], []).append(n["texte"])
+            blocs.append(
+                "## Notes des contrôles\n\n"
+                + "\n\n".join(_liste(f"**{a}**", t) for a, t in par_agent.items())
+            )
         if ctx.ex.remarques:
             blocs.append(_liste("## Remarques non résolues\n", ctx.ex.remarques))
         return "\n\n".join(blocs)
@@ -1095,12 +1282,11 @@ class Orchestrateur:
     async def _pousser_si_commits(
         self, espace: Espace, ex: ExecutionDev, config: str | None
     ) -> bool:
-        """Pousse la branche (sans PR) si un agent y a commité et qu'aucun commit de l'agent de
-        code ne touche aux tests ; toute erreur de vérification empêche le push (échoue fermé)."""
+        """Pousse la branche (sans PR) si un agent y a commité et qu'aucun commit des agents de
+        code et de doc ne viole sa protection ; toute erreur de vérification empêche le push."""
         if not ex.base_sha or not espace.racine.is_dir():
             return False
-        agents = {AUTEUR_TESTS[1], AUTEUR_CODE[1]}
-        if not any(a in agents for _, a, _ in await espace.commits(ex.base_sha)):
+        if not any(a in COURRIELS_AGENTS for _, a, _ in await espace.commits(ex.base_sha)):
             return False
         if violations := await verifier_commits_code(espace, ex.base_sha, lire_config(config)):
             logger.warning("branche %s non poussée : %s", ex.branche, ", ".join(violations))

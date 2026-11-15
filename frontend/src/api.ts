@@ -31,11 +31,21 @@ export interface Message {
   outil: string | null
   cree_le: string
 }
+export interface Avis {
+  id: number
+  agent: string
+  contenu: string
+  etat: string
+  version: number
+  ancienne: boolean
+}
 export interface Document {
   id: number
   contenu: string
   etat: string
+  version: number
   maj_le: string
+  avis: Avis[]
 }
 export interface Tache {
   id: number
@@ -114,7 +124,7 @@ export interface PipelineDetail {
   etat: string
   maj_le: string
   etapes: Etape[]
-  execution: { branche: string; phase: string; renvois: number; pr_url: string | null; mode: string } | null
+  execution: { branche: string; phase: string; renvois: number; pr_url: string | null; mode: string; notes: { agent: string; texte: string }[] } | null
   commandes: Commande[]
   commentaires: CommentairePris[]
 }
@@ -217,17 +227,22 @@ export const rediger = (etapeId: number) => appel<object>('POST', `/etapes/${eta
 export const reessayer = (etapeId: number) => appel<object>('POST', `/etapes/${etapeId}/reessayer`)
 export const enregistrerDocument = (etapeId: number, contenu: string) =>
   appel<Document>('PUT', `/etapes/${etapeId}/document`, { contenu })
+export const demanderAvis = (documentId: number) => appel<void>('POST', `/documents/${documentId}/avis`)
+export const changerEtatAvis = (id: number, etat: 'pris_en_compte' | 'ecarte' | 'ouvert') =>
+  appel<Avis>('PATCH', `/avis/${id}`, { etat })
 export const valider = (etapeId: number) =>
   appel<PipelineDetail>('POST', `/etapes/${etapeId}/valider`)
 
 export interface ConversationResume {
   id: number
+  agent: string
   titre: string
   etat: string
   maj_le: string
 }
 export interface ConversationDetail {
   id: number
+  agent: string
   titre: string
   etat: 'pret' | 'en_cours' | 'erreur'
   erreur: string | null
@@ -236,7 +251,8 @@ export interface ConversationDetail {
   actions: ActionConversation[]
 }
 export const listerConversations = () => appel<ConversationResume[]>('GET', '/conversations')
-export const creerConversation = () => appel<ConversationDetail>('POST', '/conversations')
+export const creerConversation = (agent = 'orchestrateur') =>
+  appel<ConversationDetail>('POST', '/conversations', { agent })
 export const lireConversation = (id: number) => appel<ConversationDetail>('GET', `/conversations/${id}`)
 export const renommerConversation = (id: number, titre: string) =>
   appel<ConversationDetail>('PATCH', `/conversations/${id}`, { titre })

@@ -11,7 +11,7 @@ from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine, text
 
-from portail.agents import OUTILS_PORTAIL, Agent, Catalogue
+from portail.agents import OUTILS_LECTURE_PORTAIL, OUTILS_PORTAIL, Agent, Catalogue
 from portail.api import create_app
 from portail.config import Reglages
 from portail.db import Base, creer_moteur, fabrique_sessions
@@ -100,6 +100,7 @@ CATALOGUE_TEST = Catalogue(
     agents={
         "spec": _agent("spec", consigne_redaction="Rédige la spec.", outils=OUTILS),
         "orchestrateur": _agent("orchestrateur", outils=list(OUTILS_PORTAIL)),
+        "pm": _agent("pm", outils=list(OUTILS_LECTURE_PORTAIL)),
         "a": _agent("a"),
         "b": _agent("b"),
         "petit": _agent("petit", contexte_max=50),
@@ -121,7 +122,7 @@ CATALOGUE_TEST = Catalogue(
 
 @pytest.fixture
 def reglages(schema, tmp_path):
-    return Reglages(database_url=URL, donnees_dir=tmp_path / "donnees")
+    return Reglages(database_url=URL, donnees_dir=tmp_path / "donnees", resume_heure="")
 
 
 @pytest.fixture
@@ -175,11 +176,14 @@ class FauxLanceur:
         self.delais: set[str] = set()  # commandes exactes qui dépassent leur délai
         self.appels: list[dict] = []
 
-    async def lancer(self, espace, image, commande, delai_s, lecture_seule) -> Resultat:
+    async def lancer(
+        self, espace, image, commande, delai_s, lecture_seule, tout_lecture_seule=False
+    ) -> Resultat:
         self.appels.append(
             {
                 "route": "lancer", "espace": espace, "image": image, "commande": commande,
                 "delai_s": delai_s, "lecture_seule": list(lecture_seule),
+                "tout_lecture_seule": tout_lecture_seule,
             }
         )  # fmt: skip
         if commande in self.effets:

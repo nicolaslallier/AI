@@ -10,6 +10,7 @@ from portail.espace import Espace
 from portail.execution import ConfigExecution, correspond
 
 COURRIEL_CODE = "agent-code@portail.local"
+COURRIEL_DOC = "agent-doc@portail.local"
 
 
 class _Illisible(Exception):
@@ -128,13 +129,19 @@ def section_de_test(nom: str, texte: str, ligne: int) -> bool:
 
 
 async def verifier_commits_code(espace: Espace, depuis: str, cfg: ConfigExecution) -> list[str]:
-    """Violations (texte lisible) dans les commits de l'agent de code depuis `depuis`."""
+    """Violations (texte lisible) dans les commits des agents de code et de doc depuis `depuis`."""
     violations: list[str] = []
     for sha, auteur, fichiers in await espace.commits(depuis):
-        if auteur != COURRIEL_CODE:
+        if auteur == COURRIEL_DOC:
+            violations += [
+                f"{f} (hors des chemins de doc)"
+                for f in fichiers
+                if not correspond(f, cfg.chemins_doc) or correspond(f, cfg.protege)
+            ]
+        if auteur not in (COURRIEL_CODE, COURRIEL_DOC):
             continue
         for f in fichiers:
-            if correspond(f, cfg.protege):
+            if auteur == COURRIEL_CODE and correspond(f, cfg.protege):
                 violations.append(f"{f} (fichier de tests)")
             nom = basename(f)
             if nom not in MANIFESTES:

@@ -4,13 +4,14 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+OUTILS_SUIVI = ("en_attente_de_nicolas", "activite")
 OUTILS_LECTURE_PORTAIL = (
     "lister_projets",
     "lire_projet",
     "lister_pipelines",
     "lire_pipeline",
     "lire_kanban",
-)
+) + OUTILS_SUIVI
 # n'enregistrent qu'une proposition : l'action ne s'exécute que sur confirmation de Nicolas
 OUTILS_ACTIONS_PORTAIL = (
     "creer_projet",
@@ -51,6 +52,8 @@ class Agent(BaseModel):
             "lister_pipelines",
             "lire_pipeline",
             "lire_kanban",
+            "en_attente_de_nicolas",
+            "activite",
             "creer_projet",
             "deposer_spec",
             "lancer_pipeline",
@@ -61,7 +64,9 @@ class Agent(BaseModel):
         ]
     ] = []
     tours_max: int = Field(default=20, gt=0)
-    role: Literal["tests", "code", "revue"] | None = None
+    role: Literal["tests", "code", "revue", "doc"] | None = None
+    modele_si_meme: str | None = None
+    consigne_avis: str | None = None
 
     @model_validator(mode="after")
     def _coherent(self):
@@ -72,21 +77,35 @@ class Agent(BaseModel):
             raise ValueError(f"l'agent « {self.nom} » mélange outils du portail et outils de dépôt")
         if self.produit == "taches" and self.outils:
             raise ValueError(f"l'agent « {self.nom} » produit des tâches : pas d'outils")
-        if self.produit == "travail" and (self.role is None or "lancer" not in self.outils):
-            raise ValueError(f"l'agent « {self.nom} » produit du travail : role et lancer requis")
+        if self.modele_si_meme == self.modele:
+            raise ValueError(f"l'agent « {self.nom} » : modele_si_meme doit différer de modele")
+        if self.produit == "travail":
+            if self.role is None or (self.role != "doc" and "lancer" not in self.outils):
+                raise ValueError(
+                    f"l'agent « {self.nom} » produit du travail : role et lancer requis"
+                )
+            if self.role == "doc" and "lancer" in self.outils:
+                raise ValueError(f"l'agent « {self.nom} » est doc : pas de lancer")
         if self.produit == "verdict" and (
-            self.role != "revue" or {"ecrire", "supprimer", "lancer"} & set(self.outils)
+            self.role != "revue" or {"ecrire", "supprimer"} & set(self.outils)
         ):
             raise ValueError(
-                f"l'agent « {self.nom} » produit un verdict : role revue, sans ecrire, "
-                "supprimer ni lancer"
+                f"l'agent « {self.nom} » produit un verdict : role revue, sans ecrire ni supprimer"
             )
         return self
+
+
+def modele_pour(agent: Agent, auteur: Agent) -> str:
+    """Le modèle de `agent` quand il conteste `auteur` : jamais le même que l'auteur, si possible."""
+    if agent.modele == auteur.modele and agent.modele_si_meme:
+        return agent.modele_si_meme
+    return agent.modele
 
 
 class Catalogue(BaseModel):
     agents: dict[str, Agent]
     pipelines: dict[str, list[str]]
+    avis: dict[Literal["spec", "plan"], list[str]] = {}
 
 
 def charger_catalogue(chemin: Path) -> Catalogue:
@@ -110,7 +129,9 @@ def charger_catalogue(chemin: Path) -> Catalogue:
         except ValidationError as e:
             raise CatalogueInvalide(f"agent « {nom} » invalide ({_details(e)})") from e
     try:
-        cat = Catalogue(agents=agents, pipelines=brut.get("pipelines") or {})
+        cat = Catalogue(
+            agents=agents, pipelines=brut.get("pipelines") or {}, avis=brut.get("avis") or {}
+        )
     except ValidationError as e:
         raise CatalogueInvalide(f"`pipelines` invalide ({_details(e)})") from e
     for p, etapes in cat.pipelines.items():
@@ -125,6 +146,17 @@ def charger_catalogue(chemin: Path) -> Catalogue:
                 raise CatalogueInvalide(
                     f"pipeline « {p} » : l'agent « {a} » a des outils du portail"
                 )
+    for etape, noms in cat.avis.items():
+        for a in noms:
+            if a not in cat.agents:
+                raise CatalogueInvalide(f"avis « {etape} » : agent inconnu « {a} »")
+            if not cat.agents[a].consigne_avis:
+                raise CatalogueInvalide(
+                    f"avis « {etape} » : l'agent « {a} » n'a pas de consigne_avis"
+                )
+    pm = cat.agents.get("pm")
+    if pm and set(pm.outils) & set(OUTILS_ACTIONS_PORTAIL):
+        raise CatalogueInvalide("l'agent « pm » a des outils d'action du portail")
     return cat
 
 

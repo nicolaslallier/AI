@@ -1,5 +1,7 @@
+import re
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,4 +30,12 @@ class Reglages(BaseSettings):
     ntfy_sujet: str = "portail"
     ntfy_jeton: str = ""
     url_publique: str = ""
+    resume_heure: str = "07:00"  # HH:MM à Toronto ; "" désactive le résumé du matin
     delai_commentaires_s: int = 600
+
+    @field_validator("resume_heure")
+    @classmethod
+    def _resume_heure(cls, v: str) -> str:
+        if v and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
+            raise ValueError(f"PORTAIL_RESUME_HEURE doit être vide ou au format HH:MM, reçu {v!r}")
+        return v

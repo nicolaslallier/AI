@@ -11,9 +11,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from portail.agents import Agent, Catalogue
+from portail.avis import ServiceAvis
 from portail.boucle import boucle_outils
 from portail.contexte import construire, jauge
 from portail.db import (
+    Avis,
     Document,
     Etape,
     Message,
@@ -108,6 +110,18 @@ async def annexes(s: AsyncSession, agent: Agent, etape: Etape, projet_id: int) -
             for t in taches
         ]
         sortie.append("Tâches existantes (JSON) :\n\n" + json.dumps(liste, ensure_ascii=False))
+    ouverts = (
+        await s.execute(
+            select(Avis.agent, Avis.contenu)
+            .join(Document, Document.id == Avis.document_id)
+            .where(Document.etape_id == etape.id, Avis.etat == "ouvert")
+            .order_by(Avis.id)
+        )
+    ).all()
+    if ouverts:
+        sortie.append(
+            "Avis ouverts à prendre en compte :\n\n" + "\n".join(f"- {a} : {c}" for a, c in ouverts)
+        )
     if etape.apercu:
         sortie.append(f"Aperçu du dépôt (SHA {etape.sha}) :\n\n" + etape.apercu)
     return sortie
@@ -125,12 +139,14 @@ class ServiceChat:
         llm: ClientLLM,
         diffuseur: Diffuseur,
         depots: Depots,
+        avis: ServiceAvis | None = None,
     ):
         self._sessions = sessions
         self._catalogue = catalogue
         self._llm = llm
         self.diffuseur = diffuseur
         self._depots = depots
+        self._avis = avis
         self.taches: dict[int, asyncio.Task] = {}
 
     async def _etape(self, s: AsyncSession, etape_id: int) -> Etape:
@@ -368,7 +384,7 @@ class ServiceChat:
                 cles = set(
                     (await s.scalars(select(Tache.id).where(Tache.projet_id == projet.id))).all()
                 )
-            limite, visible, suivante = False, "", None
+            limite, visible, suivante, a_relire = False, "", None, None
             if action == "taches":
                 lues = await self._proposer(agent, demande, cles)
             elif arbre is None:
@@ -401,12 +417,17 @@ class ServiceChat:
                     if action == "repondre":
                         s.add(Message(etape_id=etape_id, role="assistant", contenu=visible))
                     else:
-                        await self._ecrire_document(s, etape, agent, visible)
+                        a_relire = await self._ecrire_document(s, etape, agent, visible)
                     await changer_etat(s, etape, Etat.EN_ATTENTE)
                 await s.commit()
             if suivante:
                 self.lancer(suivante.id)
             d.publier(etape_id, {"type": "fin"})
+            if a_relire and self._avis:
+                try:
+                    await self._avis.lancer(a_relire)
+                except Exception:
+                    logger.exception("avis non lancés pour le document %s", a_relire)
         except Exception as exc:  # noqa: BLE001 - toute erreur doit finir en étape échouée
             try:
                 async with self._sessions() as s:
@@ -428,18 +449,22 @@ class ServiceChat:
 
     async def _ecrire_document(
         self, s: AsyncSession, etape: Etape, agent: Agent, contenu: str
-    ) -> None:
+    ) -> int:
         dernier = await s.scalar(select(func.max(Message.id)).where(Message.etape_id == etape.id))
         pipeline = await s.get(Pipeline, etape.pipeline_id)
         doc = await s.scalar(select(Document).where(Document.etape_id == etape.id))
         if doc is None:
             doc = Document(projet_id=pipeline.projet_id, pipeline_id=pipeline.id, etape_id=etape.id)
             s.add(doc)
+        else:
+            doc.version += 1
         doc.type = agent.produit
         doc.contenu = contenu
         doc.etat = "brouillon"
         doc.dernier_message_id = dernier
         doc.maj_le = datetime.now(UTC)
+        await s.flush()
+        return doc.id
 
     async def corriger(self, etape_id: int, contenu: str) -> Document:
         if not contenu.strip():
@@ -454,6 +479,7 @@ class ServiceChat:
             if etape.etat == Etat.EN_COURS:
                 raise Refus(409, "une réponse est en cours")
             doc.contenu = contenu
+            doc.version += 1
             doc.maj_le = datetime.now(UTC)
             await s.commit()
             await s.refresh(doc)
@@ -472,6 +498,11 @@ class ServiceChat:
             doc.maj_le = datetime.now(UTC)
             suivante = await terminer_etape(s, self._catalogue, etape)
             await s.commit()
+        if self._avis:
+            try:
+                await self._avis.abandonner(doc.id)
+            except Exception:
+                logger.exception("avis non abandonnés pour le document %s", doc.id)
         await self._depots.liberer(etape_id)
         if suivante:
             self.lancer(suivante.id)
@@ -504,6 +535,15 @@ class ServiceChat:
             )
             await annuler_pipeline(s, pipeline)
             await s.commit()
+            docs = (
+                await s.scalars(select(Document.id).where(Document.pipeline_id == pipeline_id))
+            ).all()
+        # avant de libérer : un avis en cours ne finit pas `ouvert` ni ne recrée l'arbre
+        for doc_id in docs if self._avis else ():
+            try:
+                await self._avis.abandonner(doc_id)
+            except Exception:
+                logger.exception("avis non abandonnés pour le document %s", doc_id)
         for i in ids:
             self.diffuseur.publier(i, {"type": "erreur", "message": "annulé"})
             await self._depots.liberer(i)

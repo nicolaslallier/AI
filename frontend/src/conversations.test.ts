@@ -2,7 +2,7 @@ import { expect, it } from 'vitest'
 import type { ActionConversation, ConversationResume, Message } from './api'
 import { fil, libelleAction, trier } from './conversations'
 
-const c = (id: number, maj_le: string): ConversationResume => ({ id, titre: `c${id}`, etat: 'pret', maj_le })
+const c = (id: number, maj_le: string): ConversationResume => ({ id, agent: 'orchestrateur', titre: `c${id}`, etat: 'pret', maj_le })
 
 it('trier met la plus récente en premier sans muter', () => {
   const liste = [c(1, '2026-01-01T10:00:00'), c(2, '2026-03-01T10:00:00'), c(3, '2026-02-01T10:00:00')]

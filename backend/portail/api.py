@@ -2,7 +2,8 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Annotated
+from datetime import UTC, datetime
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Request
@@ -13,14 +14,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from portail import resume
 from portail.agents import Catalogue, charger_catalogue
+from portail.arbitre import Arbitre, LLMArbitre
+from portail.avis import ServiceAvis
 from portail.chat import Diffuseur, ServiceChat, annexes
 from portail.config import Reglages
 from portail.contexte import construire, jauge
 from portail.conversations import ServiceConversation
 from portail.db import (
+    Avis,
     CommandeLancee,
     CommentairePris,
+    Document,
     Etape,
     ExecutionDev,
     Pipeline,
@@ -46,9 +52,11 @@ from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.schemas import (
     Acceptation,
+    AvisOut,
     CommandeVue,
     CommentaireVue,
     ConversationDetail,
+    ConversationIn,
     ConversationPatch,
     ConversationResume,
     Deplacement,
@@ -92,6 +100,19 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 
+async def _avis(session: AsyncSession, docs: list[Document]) -> dict[int, list[AvisOut]]:
+    """Avis visibles (hors abandonnés) de ces documents, par document."""
+    par_id = {d.id: d for d in docs}
+    sortie: dict[int, list[AvisOut]] = {}
+    for a in await session.scalars(
+        select(Avis).where(Avis.document_id.in_(par_id), Avis.etat != "abandonne").order_by(Avis.id)
+    ):
+        vue = AvisOut.model_validate(a, from_attributes=True)
+        vue.ancienne = a.version < par_id[a.document_id].version
+        sortie.setdefault(a.document_id, []).append(vue)
+    return sortie
+
+
 async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int) -> PipelineDetail:
     pipeline = await session.scalar(
         select(Pipeline)
@@ -105,6 +126,7 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
     if pipeline is None:
         raise Refus(404, "pipeline introuvable")
     projet = await session.get(Projet, pipeline.projet_id)
+    avis_par_doc = await _avis(session, [e.document for e in pipeline.etapes if e.document])
     etapes = []
     for e in pipeline.etapes:
         agent = catalogue.agents.get(e.agent)
@@ -121,7 +143,14 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
                     },
                     "produit": agent.produit if agent else None,
                     "messages": e.messages,
-                    "document": e.document,
+                    "document": e.document
+                    and {
+                        **{
+                            k: getattr(e.document, k)
+                            for k in ("id", "contenu", "etat", "version", "maj_le")
+                        },
+                        "avis": avis_par_doc.get(e.document.id, []),
+                    },
                     "jauge": j,
                 },
                 from_attributes=True,
@@ -341,10 +370,17 @@ def create_app(
             await depots.nettoyer(garder=en_attente)
         except ErreurDepot:
             logger.exception("nettoyage des arbres de travail incomplet")
+        arbitre = Arbitre()
+        interactif = LLMArbitre(app.state.llm, arbitre, "interactif")
         app.state.diffuseur = Diffuseur()
+        app.state.avis = ServiceAvis(app.state.sessions, app.state.catalogue, interactif, depots)
         app.state.chat = ServiceChat(
-            app.state.sessions, app.state.catalogue, app.state.llm, app.state.diffuseur, depots
-        )
+            app.state.sessions, app.state.catalogue, interactif, app.state.diffuseur, depots,
+            app.state.avis,
+        )  # fmt: skip
+        async with app.state.sessions() as s:
+            await app.state.avis.recuperer_interrompues(s)
+            await s.commit()
 
         async def annuler_tache(tache_id: int) -> None:
             async with app.state.sessions() as s:
@@ -353,7 +389,7 @@ def create_app(
         app.state.conversations = ServiceConversation(
             app.state.sessions,
             app.state.catalogue,
-            app.state.llm,
+            interactif,
             Diffuseur(),
             app.state.chat,
             annuler_tache,
@@ -362,10 +398,21 @@ def create_app(
         async with app.state.sessions() as s:
             await app.state.conversations.recuperer_interrompues(s)
             await s.commit()
+        boucles: list[asyncio.Task] = []
+        if "pm" in app.state.catalogue.agents and r.resume_heure:
+            boucles.append(
+                asyncio.create_task(
+                    resume.tourner(
+                        app.state.sessions, app.state.conversations,
+                        Notifieur(r.ntfy_url, r.ntfy_sujet, r.ntfy_jeton),
+                        r.resume_heure, r.url_publique, lambda: datetime.now(UTC),
+                    )
+                )
+            )  # fmt: skip
         orch = orchestrateur or _orchestrateur(
-            r, app.state.sessions, app.state.catalogue, app.state.llm
+            r, app.state.sessions, app.state.catalogue, LLMArbitre(app.state.llm, arbitre, "fond")
         )
-        app.state.orchestrateur, app.state.ordonnanceur, boucles = orch, None, []
+        app.state.orchestrateur, app.state.ordonnanceur = orch, None
         if orch:
             app.state.ordonnanceur = Ordonnanceur(app.state.sessions, orch, r.paralleles_max)
             await reprendre_interrompues(app.state.sessions, orch, app.state.ordonnanceur.lancer)
@@ -373,14 +420,19 @@ def create_app(
                 app.state.sessions, orch._github, orch, app.state.ordonnanceur,
                 proprietaire=r.github_proprietaire, delai_s=r.delai_commentaires_s,
             )  # fmt: skip
-            boucles = [
+            boucles += [
                 asyncio.create_task(app.state.ordonnanceur.tourner()),
                 asyncio.create_task(suivi.tourner()),
             ]
         yield
-        taches = [*app.state.chat.taches.values(), *app.state.conversations.taches.values()]
+        taches = [
+            *app.state.chat.taches.values(),
+            *app.state.conversations.taches.values(),
+            *app.state.avis.taches.values(),
+        ]
+        taches += boucles
         if orch:
-            taches += [*boucles, *orch.taches.values()]
+            taches += [*orch.taches.values()]
         for t in taches:
             t.cancel()
         await asyncio.gather(*taches, return_exceptions=True)
@@ -633,8 +685,37 @@ def create_app(
         contenu: str
 
     @app.put("/api/etapes/{etape_id}/document", response_model=DocumentOut)
-    async def corriger_document(etape_id: int, corps: DocumentIn, request: Request):
-        return await request.app.state.chat.corriger(etape_id, corps.contenu)
+    async def corriger_document(etape_id: int, corps: DocumentIn, request: Request, s: Session):
+        doc = await request.app.state.chat.corriger(etape_id, corps.contenu)
+        sortie = DocumentOut.model_validate(doc, from_attributes=True)
+        sortie.avis = (await _avis(s, [doc])).get(doc.id, [])
+        return sortie
+
+    @app.post("/api/documents/{document_id}/avis", status_code=202)
+    async def relancer_avis(document_id: int, request: Request, s: Session):
+        doc = await s.get(Document, document_id)
+        if doc is None:
+            raise Refus(404, "document introuvable")
+        if doc.etat != "brouillon":
+            raise Refus(409, "document déjà validé")
+        await request.app.state.avis.lancer(document_id)
+
+    class AvisPatch(BaseModel):
+        etat: Literal["pris_en_compte", "ecarte", "ouvert"]
+
+    @app.patch("/api/avis/{avis_id}", response_model=AvisOut)
+    async def trier_avis(avis_id: int, corps: AvisPatch, s: Session):
+        avis = await s.get(Avis, avis_id)
+        if avis is None:
+            raise Refus(404, "avis introuvable")
+        if avis.etat not in ("ouvert", "pris_en_compte", "ecarte"):
+            raise Refus(409, "avis non tranchable : encore en cours ou abandonné")
+        avis.etat = corps.etat
+        doc = await s.get(Document, avis.document_id)
+        await s.commit()
+        return AvisOut.model_validate(avis, from_attributes=True).model_copy(
+            update={"ancienne": avis.version < doc.version}
+        )
 
     @app.post("/api/etapes/{etape_id}/valider", response_model=PipelineDetail)
     async def valider(etape_id: int, request: Request, s: Session):
@@ -652,9 +733,9 @@ def create_app(
         return await request.app.state.conversations.lister()
 
     @app.post("/api/conversations", status_code=201, response_model=ConversationDetail)
-    async def creer_conversation(request: Request):
+    async def creer_conversation(request: Request, corps: ConversationIn | None = None):
         service = request.app.state.conversations
-        return await service.detail((await service.creer()).id)
+        return await service.detail((await service.creer((corps or ConversationIn()).agent)).id)
 
     @app.get("/api/conversations/{conversation_id}", response_model=ConversationDetail)
     async def lire_conversation(conversation_id: int, request: Request):

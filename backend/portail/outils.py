@@ -318,7 +318,7 @@ class OutilsEspace(OutilsDepot):
     def __init__(
         self,
         racine: Path,
-        role: Literal["tests", "code", "revue"],
+        role: Literal["tests", "code", "revue", "doc"],
         cfg: ConfigExecution,
         lancer: Callable[[str], Awaitable[str]],
     ):
@@ -326,20 +326,32 @@ class OutilsEspace(OutilsDepot):
         self.role = role
         self.cfg = cfg
         self._lancer = lancer
-        self._commandes = [n for n in cfg.commandes if n != "installer"]
+        self._commandes = {
+            "revue": [n for n in ("securite",) if n in cfg.commandes],
+            "doc": [],
+        }.get(role, [n for n in cfg.commandes if n != "installer"])
 
     def schemas(self) -> list[dict]:
         schemas = super().schemas()
-        if self.role == "revue":
-            return schemas
-        lancer = _fonction(
-            "lancer",
-            "Lance une commande nommée de la configuration du projet dans un conteneur jetable "
-            "et rend son code de sortie puis sa sortie.",
-            {"nom": {"type": "string", "enum": self._commandes, "description": "Commande."}},
-            ["nom"],
-        )
-        return [*schemas, *SCHEMAS_ECRITURE.values(), lancer]
+        if self.role in ("tests", "code", "doc"):
+            schemas += SCHEMAS_ECRITURE.values()
+        if self._commandes:
+            schemas.append(
+                _fonction(
+                    "lancer",
+                    "Lance une commande nommée de la configuration du projet dans un conteneur "
+                    "jetable et rend son code de sortie puis sa sortie.",
+                    {
+                        "nom": {
+                            "type": "string",
+                            "enum": self._commandes,
+                            "description": "Commande.",
+                        }
+                    },
+                    ["nom"],
+                )
+            )
+        return schemas
 
     async def _cible(self, chemin: str, lien: bool = False) -> tuple[Path, str] | str:
         """Chemin résolu et relatif, ou le message d'erreur si l'écriture est refusée.
@@ -378,7 +390,10 @@ class OutilsEspace(OutilsDepot):
             return "erreur : écriture interdite dans un chemin ignoré par git"
         # la règle de rôle porte sur le chemin résolu : un lien ne la contourne pas
         protege = correspond(rel.as_posix(), self.cfg.protege)
-        permis = protege if self.role == "tests" else self.role == "code" and not protege
+        if self.role == "doc":
+            permis = correspond(rel.as_posix(), self.cfg.chemins_doc) and not protege
+        else:
+            permis = protege if self.role == "tests" else self.role == "code" and not protege
         if not permis:
             return f"erreur : écriture interdite pour le rôle {self.role}"
         return cible, rel.as_posix()

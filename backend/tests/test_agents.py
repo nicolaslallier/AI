@@ -2,7 +2,15 @@ from pathlib import Path
 
 import pytest
 
-from portail.agents import OUTILS_PORTAIL, CatalogueInvalide, charger_catalogue
+from portail.agents import (
+    OUTILS_ACTIONS_PORTAIL,
+    OUTILS_PORTAIL,
+    OUTILS_SUIVI,
+    Agent,
+    CatalogueInvalide,
+    charger_catalogue,
+    modele_pour,
+)
 
 VALIDE = """
 agents:
@@ -56,7 +64,9 @@ def test_agents_yaml_du_depot_est_valide():
     cat = charger_catalogue(racine / "agents.yaml")
     assert "spec" in cat.pipelines
     assert cat.pipelines["planification"] == ["plan", "taches"]
-    assert cat.pipelines["dev"] == ["tests", "code", "revue"]
+    assert cat.pipelines["dev"] == ["tests", "code", "revue", "challenger", "securite", "doc"]
+    assert cat.avis == {"spec": ["challenger"], "plan": ["architecte", "challenger"]}
+    assert "pm" not in cat.pipelines
     a = cat.agents
     assert (a["tests"].produit, a["tests"].role, a["tests"].tours_max) == ("travail", "tests", 40)
     assert (a["code"].produit, a["code"].role, a["code"].tours_max) == ("travail", "code", 40)
@@ -70,6 +80,25 @@ def test_agents_yaml_du_depot_est_valide():
     assert a["tri"].outils == ["lister", "lire", "chercher"]
     assert a["tri"].modele == a["revue"].modele
     assert all("tri" not in etapes for etapes in cat.pipelines.values())
+    assert "notes" in a["revue"].prompt_systeme
+    assert (
+        a["architecte"].outils == ["lister", "lire", "chercher"] and a["architecte"].consigne_avis
+    )
+    c = a["challenger"]
+    assert (c.produit, c.role, c.modele) == ("verdict", "revue", "qwen3.8:27b-mlx")
+    assert c.modele_si_meme == "mlx-community/GLM-4.7-Flash-8bit"
+    assert c.outils == ["lister", "lire", "chercher"] and c.consigne_avis
+    s = a["securite"]
+    assert (s.produit, s.role) == ("verdict", "revue")
+    assert s.outils == ["lister", "lire", "chercher", "lancer"]
+    d = a["doc"]
+    assert (d.produit, d.role) == ("travail", "doc")
+    assert d.outils == ["lister", "lire", "chercher", "ecrire", "supprimer"]
+    pm = a["pm"]
+    assert (
+        set(pm.outils) == set(OUTILS_PORTAIL) - set(OUTILS_ACTIONS_PORTAIL) and pm.tours_max == 10
+    )
+    assert {"en_attente_de_nicolas", "activite"} <= set(pm.outils)
 
 
 def test_pipelines_mauvaise_forme(tmp_path):
@@ -146,9 +175,51 @@ def test_verdict_exige_revue_sans_ecriture(tmp_path):
     assert _avec(tmp_path, "    produit: verdict\n    role: revue\n    outils: [lire]")
     with pytest.raises(CatalogueInvalide, match="spec"):
         _avec(tmp_path, "    produit: verdict\n    role: code\n    outils: [lire]")
-    for outil in ("ecrire", "supprimer", "lancer"):
+    for outil in ("ecrire", "supprimer"):
         with pytest.raises(CatalogueInvalide, match="spec"):
             _avec(tmp_path, f"    produit: verdict\n    role: revue\n    outils: [lire, {outil}]")
+
+
+def test_verdict_avec_lancer_accepte(tmp_path):
+    assert _avec(tmp_path, "    produit: verdict\n    role: revue\n    outils: [lire, lancer]")
+
+
+def test_modele_si_meme_identique_refuse(tmp_path):
+    with pytest.raises(CatalogueInvalide, match="spec"):
+        _avec(tmp_path, "    modele_si_meme: m")
+
+
+def test_doc_avec_lancer_refuse(tmp_path):
+    with pytest.raises(CatalogueInvalide, match="spec"):
+        _avec(tmp_path, "    produit: travail\n    role: doc\n    outils: [lire, ecrire, lancer]")
+
+
+def test_doc_sans_lancer_accepte(tmp_path):
+    a = _avec(tmp_path, "    produit: travail\n    role: doc\n    outils: [lire, ecrire]")
+    assert a.agents["spec"].role == "doc"
+
+
+AVIS = VALIDE.replace("pipelines:", "avis:\n  plan: [spec]\npipelines:")
+
+
+def test_avis_agent_sans_consigne_refuse(tmp_path):
+    with pytest.raises(CatalogueInvalide, match="« spec »"):
+        charger_catalogue(ecrire(tmp_path, AVIS))
+    texte = AVIS.replace("    prompt_systeme: p", "    prompt_systeme: p\n    consigne_avis: c")
+    assert charger_catalogue(ecrire(tmp_path, texte)).avis == {"plan": ["spec"]}
+
+
+def test_avis_agent_inconnu_refuse(tmp_path):
+    with pytest.raises(CatalogueInvalide, match="« fantome »"):
+        charger_catalogue(ecrire(tmp_path, AVIS.replace("[spec]", "[fantome]", 1)))
+
+
+def test_pm_avec_outil_d_action_refuse(tmp_path):
+    texte = PORTAIL.replace("  x:", "  pm:").replace(
+        "[lister_projets, lire_kanban]", "[lire_kanban, creer_tache]"
+    )
+    with pytest.raises(CatalogueInvalide, match="« pm »"):
+        charger_catalogue(ecrire(tmp_path, texte))
 
 
 def test_role_inconnu_refuse(tmp_path):
@@ -182,5 +253,18 @@ def test_agent_portail_dans_un_pipeline_refuse(tmp_path):
 def test_agents_yaml_du_depot_a_l_orchestrateur():
     racine = Path(__file__).resolve().parents[2]
     a = charger_catalogue(racine / "agents.yaml").agents["orchestrateur"]
-    assert set(a.outils) == set(OUTILS_PORTAIL)
+    assert set(a.outils) == set(OUTILS_PORTAIL) - set(OUTILS_SUIVI)
     assert (a.temperature, a.tours_max) == (0.3, 10)
+
+
+def test_modele_pour():
+    def agent(nom, modele, si_meme=None):
+        return Agent(
+            nom=nom, description=nom, modele=modele, prompt_systeme="p", contexte_max=1000,
+            modele_si_meme=si_meme,
+        )  # fmt: skip
+
+    code = agent("code", "x")
+    assert modele_pour(agent("challenger", "x", "y"), code) == "y"
+    assert modele_pour(agent("challenger", "z", "y"), code) == "z"
+    assert modele_pour(agent("revue", "x"), code) == "x"

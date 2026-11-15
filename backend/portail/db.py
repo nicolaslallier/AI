@@ -1,9 +1,10 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -93,9 +94,23 @@ class Conversation(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     titre: Mapped[str] = mapped_column(String(200), default="", server_default="")
     etat: Mapped[str] = mapped_column(String, default="pret", server_default="pret")
+    agent: Mapped[str] = mapped_column(
+        String, default="orchestrateur", server_default="orchestrateur"
+    )
     erreur: Mapped[str | None] = mapped_column(Text)
     cree_le: Mapped[datetime] = _horodatage()
     maj_le: Mapped[datetime] = _horodatage(onupdate=func.now())
+
+
+class Resume(Base):
+    __tablename__ = "resume"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    jour: Mapped[date] = mapped_column(Date, unique=True)
+    conversation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("conversation.id", ondelete="SET NULL")
+    )
+    cree_le: Mapped[datetime] = _horodatage()
 
 
 class MessageConversation(Base):
@@ -141,9 +156,25 @@ class Document(Base):
     dernier_message_id: Mapped[int | None] = mapped_column(
         ForeignKey("message.id", ondelete="SET NULL")
     )
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     maj_le: Mapped[datetime] = _horodatage(onupdate=func.now())
 
     etape: Mapped[Etape] = relationship(back_populates="document")
+
+
+class Avis(Base):
+    __tablename__ = "avis"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("document.id", ondelete="CASCADE"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer)  # version du document lue par l'agent
+    agent: Mapped[str] = mapped_column(String)
+    contenu: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # en_cours | ouvert | pris_en_compte | ecarte | abandonne
+    etat: Mapped[str] = mapped_column(String, default="en_cours", server_default="en_cours")
+    cree_le: Mapped[datetime] = _horodatage()
 
 
 class Tache(Base):
@@ -221,8 +252,9 @@ class ExecutionDev(Base):
     espace: Mapped[str] = mapped_column(String)
     base: Mapped[str] = mapped_column(String)  # branche de référence résolue
     base_sha: Mapped[str] = mapped_column(String)
-    # preparation | tests | rouge | code | verification | revue | pr | fini
-    # (reprise : attente | preparation | tri | tests | code | verification | revue | reponses | fini)
+    # preparation | tests | rouge | code | verification | controles | pr | fini
+    # (reprise : attente | preparation | tri | tests | code | verification | controles | reponses
+    # | fini)
     phase: Mapped[str] = mapped_column(String)
     renvois: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     interruptions: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
@@ -233,6 +265,11 @@ class ExecutionDev(Base):
     pr_url: Mapped[str | None] = mapped_column(String)
     mode: Mapped[str] = mapped_column(String, default="normal", server_default="normal")
     depart_revue: Mapped[str | None] = mapped_column(String)  # HEAD après fusion de la base
+    # index, dans les contrôles de `pipelines.dev`, du prochain contrôle à faire tourner
+    controle_courant: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    notes: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")  # {agent, texte}
+    lint_base_ok: Mapped[bool | None] = mapped_column(Boolean)
+    fichiers_rouge: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
     debut: Mapped[datetime] = _horodatage()
 
 
@@ -253,7 +290,7 @@ class CommentairePris(Base):
     chemin: Mapped[str | None] = mapped_column(String)
     ligne: Mapped[int | None] = mapped_column(Integer)
     cree_le: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # date GitHub
-    tri: Mapped[str | None] = mapped_column(String)  # tests | code | reponse
+    tri: Mapped[str | None] = mapped_column(String)  # tests | code | doc | reponse
     consigne: Mapped[str | None] = mapped_column(Text)
     repondu_le: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

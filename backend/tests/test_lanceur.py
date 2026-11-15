@@ -38,6 +38,20 @@ async def test_client_lanceur_auth_et_erreurs():
     }  # fmt: skip
 
 
+async def test_client_lanceur_tout_lecture_seule():
+    vus = []
+
+    def gestionnaire(req: httpx.Request):
+        vus.append(json.loads(req.content))
+        return httpx.Response(200, json={"code": 0, "sortie": "", "delai_depasse": False})
+
+    c = _client(gestionnaire)
+    await c.lancer("tache-1-1", "img", "ruff check", 600, [], True)
+    await c.lancer("tache-1-1", "img", "ruff check", 600, [])
+    assert vus[0]["tout_lecture_seule"] is True
+    assert "tout_lecture_seule" not in vus[1]
+
+
 async def test_client_lanceur_routes_simples():
     vus = []
 

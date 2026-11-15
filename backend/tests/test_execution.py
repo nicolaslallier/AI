@@ -29,6 +29,12 @@ def test_config_valide():
     assert "pytest.ini" in cfg.protege and "backend/tests/**" in cfg.protege
 
 
+def test_config_chemins_doc_defaut():
+    cfg = lire_config(BASE)
+    assert cfg.chemins_doc == ["README.md", "docs/**", "CHANGELOG.md"]
+    assert cfg.regles is None
+
+
 def test_commandes_obligatoires_422():
     with pytest.raises(Refus) as e:
         lire_config(BASE.replace("  tests_cibles: uv run pytest {fichiers}\n", ""))

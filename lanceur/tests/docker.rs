@@ -27,12 +27,24 @@ struct Banc {
 
 impl Banc {
     async fn lancer(&self, commande: &str, delai_s: u64, lecture_seule: &[&str]) -> Resultat {
+        self.lancer_avec(commande, delai_s, lecture_seule, false)
+            .await
+    }
+
+    async fn lancer_avec(
+        &self,
+        commande: &str,
+        delai_s: u64,
+        lecture_seule: &[&str],
+        tout_lecture_seule: bool,
+    ) -> Resultat {
         let d = DemandeLancer {
             espace: self.espace.clone(),
             image: IMAGE.into(),
             commande: commande.into(),
             delai_s,
             lecture_seule: lecture_seule.iter().map(|c| c.to_string()).collect(),
+            tout_lecture_seule,
         };
         self.docker.lancer(&self.cfg, &d).await.unwrap()
     }
@@ -147,6 +159,18 @@ async fn ecriture_lecture_seule_echoue() {
         // Le reste de l'espace reste modifiable.
         let r = b.lancer("echo x > b.py && cat b.py", 30, &["tests"]).await;
         assert_eq!((r.code, r.sortie.trim()), (Some(0), "x"), "{r:?}");
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn tout_lecture_seule_ecriture_echoue() {
+    avec_banc("toutro", async |b: &Banc| {
+        let r = b.lancer_avec("touch x", 30, &[], true).await;
+        assert_ne!(r.code, Some(0), "{r:?}");
+        let r = b.lancer_avec("cat tests/a.py", 30, &[], true).await;
+        assert_eq!((r.code, r.sortie.trim()), (Some(0), "orig"), "{r:?}");
     })
     .await;
 }
@@ -350,6 +374,7 @@ async fn image_locale_sans_registre_servie() {
             commande: "echo ok".into(),
             delai_s: 30,
             lecture_seule: vec![],
+            tout_lecture_seule: false,
         };
         // le tirage échoue (image absente de tout registre) : la copie locale sert
         let r = b.docker.lancer(&cfg, &d).await;
