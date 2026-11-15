@@ -64,7 +64,10 @@ def _niveau(ratio: float) -> Literal["ok", "alerte", "plein"]:
     return "plein" if ratio >= 0.90 else "alerte" if ratio >= 0.75 else "ok"
 
 
+def jauge_jetons(utilises: int, maximum: int) -> Jauge:
+    ratio = utilises / maximum
+    return Jauge(utilises=utilises, max=maximum, ratio=ratio, niveau=_niveau(ratio))
+
+
 def jauge(agent: Agent, messages_llm: list[dict]) -> Jauge:
-    utilises = estimer_jetons(messages_llm)
-    ratio = utilises / agent.contexte_max
-    return Jauge(utilises=utilises, max=agent.contexte_max, ratio=ratio, niveau=_niveau(ratio))
+    return jauge_jetons(estimer_jetons(messages_llm), agent.contexte_max)

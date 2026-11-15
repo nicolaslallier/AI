@@ -4,6 +4,7 @@ from portail.agents import rangement
 from portail.bureau import debut_du_jour
 from portail.db import (
     ActionConversation,
+    AppelLLM,
     Avis,
     Conversation,
     Document,
@@ -245,3 +246,77 @@ async def test_etape_abandonnee_pas_une_erreur(client, sessions):
 
     await _etape(sessions, "double", "a", "echouee", REPRISE_ABANDONNEE, pipeline_etat="echouee")
     assert (await _bureau(client))["postes"]["a"]["etat"] == "libre"
+
+
+async def _appels(sessions, agent, mission, n=1, **kw):
+    async with sessions() as s, s.begin():
+        s.add_all(
+            AppelLLM(
+                agent=agent, modele="m", mission=mission, duree_ms=1, issue="ok",
+                **{k: (v[i] if isinstance(v, list) else v) for k, v in kw.items()},
+            )
+            for i in range(n)
+        )  # fmt: skip
+
+
+async def test_activite_du_jour(client, sessions):
+    hier = datetime.now(UTC) - timedelta(days=2)
+    await _appels(sessions, "a", "m", 2, jetons_entree=[10, None], jetons_sortie=[5, None])
+    await _appels(sessions, "a", "m0", jetons_entree=100, jetons_sortie=100, quand=hier)
+    await _appels(sessions, "zzz", "mz", jetons_entree=1, jetons_sortie=1)
+    b = await _bureau(client)
+    assert (b["postes"]["a"]["appels_jour"], b["postes"]["a"]["jetons_jour"]) == (2, 15)
+    assert b["postes"]["b"]["appels_jour"] == 0
+    assert "zzz" not in b["postes"]
+
+
+async def test_tour_de_la_mission_en_cours(client, sessions):
+    _, eid = await _etape(sessions, "double", "a", "en_cours")
+    await _appels(sessions, "a", "m1", 2, etape_id=eid)
+    await _appels(sessions, "a", "m2", 3, etape_id=eid)
+    assert (await _bureau(client))["postes"]["a"]["travaux"][0]["tour"] == 3
+
+
+async def test_jauge_des_vrais_jetons(client, sessions):
+    _, eid = await _etape(sessions, "double", "a", "en_cours")
+    await _appels(sessions, "a", "m2", 3, etape_id=eid, jetons_entree=[1_000, 25_000, None])
+    j = (await _bureau(client))["postes"]["a"]["travaux"][0]["jauge"]
+    assert (j["utilises"], j["max"], j["niveau"]) == (25_000, 32_768, "alerte")
+
+
+async def test_sans_usage_pas_de_jauge(client, sessions):
+    _, eid = await _etape(sessions, "double", "a", "en_cours")
+    await _appels(sessions, "a", "m", 2, etape_id=eid)
+    t = (await _bureau(client))["postes"]["a"]["travaux"][0]
+    assert t["jauge"] is None and t["tour"] == 2
+
+
+async def test_sans_appel_ni_tour_ni_jauge(client, sessions):
+    await _etape(sessions, "double", "a", "en_cours")
+    t = (await _bureau(client))["postes"]["a"]["travaux"][0]
+    assert t["jauge"] is None and t["tour"] is None
+
+
+async def test_tour_seulement_au_travail(client, sessions):
+    async with sessions() as s, s.begin():
+        c = Conversation(agent="orchestrateur", etat="pret")
+        s.add(c)
+        await s.flush()
+        s.add(ActionConversation(conversation_id=c.id, nom="x", etat="proposee"))
+        cid = c.id
+    await _appels(sessions, "orchestrateur", "m", 2, conversation_id=cid, jetons_entree=500)
+    t = (await _bureau(client))["postes"]["orchestrateur"]["travaux"][0]
+    assert t["etat"] == "en_attente" and t["tour"] is None
+    assert t["jauge"]["utilises"] == 500
+
+
+async def test_avis_tour_par_pipeline(client, sessions):
+    pid, eid = await _etape(sessions, "planification", "plan", "terminee")
+    async with sessions() as s, s.begin():
+        pl = await s.get(Pipeline, pid)
+        d = Document(projet_id=pl.projet_id, pipeline_id=pid, etape_id=eid, type="plan")
+        s.add(d)
+        await s.flush()
+        s.add(Avis(document_id=d.id, version=1, agent="a", etat="en_cours"))
+    await _appels(sessions, "a", "m", 2, pipeline_id=pid)
+    assert (await _bureau(client))["postes"]["a"]["travaux"][0]["tour"] == 2

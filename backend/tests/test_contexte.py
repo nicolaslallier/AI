@@ -1,7 +1,7 @@
 import pytest
 
 from portail.agents import Agent
-from portail.contexte import _niveau, construire, estimer_jetons, jauge
+from portail.contexte import _niveau, construire, estimer_jetons, jauge, jauge_jetons
 from portail.db import Document, Message
 
 
@@ -62,6 +62,13 @@ def test_niveaux_jauge(ratio, niveau):
 def test_jauge():
     j = jauge(_agent(100), [{"role": "user", "content": "x" * 280}])  # 74 jetons
     assert (j.utilises, j.max, j.ratio, j.niveau) == (74, 100, 0.74, "ok")
+
+
+def test_jauge_jetons():
+    assert jauge_jetons(25_000, 32_768).niveau == "alerte"
+    assert jauge_jetons(30_000, 32_768).niveau == "plein"
+    j = jauge_jetons(10, 100)
+    assert (j.utilises, j.max, j.ratio, j.niveau) == (10, 100, 0.1, "ok")
 
 
 def test_annexes_et_messages_tool_ignores():
