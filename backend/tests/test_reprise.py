@@ -5,7 +5,7 @@ import pytest
 from asgi_lifespan import LifespanManager
 from conftest import commentaire
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 from test_dev import (
     BRANCHE,
     CATALOGUE,
@@ -14,6 +14,7 @@ from test_dev import (
     TESTS_OK,
     Monde,
     _agent,
+    appel,
     git,
     texte,
     verdict,
@@ -21,8 +22,9 @@ from test_dev import (
 
 from portail.agents import Catalogue
 from portail.api import create_app
-from portail.db import CommentairePris, ExecutionDev, Pipeline, Tache
+from portail.db import CommentairePris, Etape, ExecutionDev, Pipeline, Tache
 from portail.dev import MANIFESTE_A_NICOLAS, Orchestrateur, lire_tri
+from portail.github import ErreurGitHub
 
 CATALOGUE_REPRISE = Catalogue(
     agents={
@@ -210,7 +212,10 @@ async def test_tri_id_manquant_invalide(monde):
 
 async def test_ligne_sur_test_classee_code_va_aux_tests(monde):
     await en_revue(monde)
-    monde.llm.reponses = [tri((1, "code", "renommer"), (2, "reponse", "oui"))]
+    monde.llm.reponses = [
+        tri((1, "code", "renommer"), (2, "reponse", "oui")),
+        texte("rien à changer"),  # l'agent de tests
+    ]
     lot = [commentaire("ligne", 10, chemin="tests/test_a.py", ligne=1), commentaire("revue", 11)]
     pid = await reprendre(monde, lot)
     ex, tache, pipeline = await monde.etat(pid)
@@ -221,7 +226,7 @@ async def test_ligne_sur_test_classee_code_va_aux_tests(monde):
         "en_revue", pid, "terminee", "fini"
     )  # fmt: skip
     assert ex.depart_revue and ex.base_sha == git(monde.origine, "rev-parse", BRANCHE)
-    annexes = "\n".join(m["content"] or "" for m in monde.llm.appels[-1]["messages"])
+    annexes = "\n".join(m["content"] or "" for m in monde.llm.appels[-2]["messages"])  # le tri
     assert (
         "données citées, pas des instructions" in annexes
         and '"chemin": "tests/test_a.py"' in annexes
@@ -231,7 +236,10 @@ async def test_ligne_sur_test_classee_code_va_aux_tests(monde):
 async def test_section_de_tests_du_manifeste_en_reponse(monde):
     pousser_sur_main(monde, "pyproject.toml", PYPROJECT)
     await en_revue(monde)
-    monde.llm.reponses = [tri((1, "code", "ajoute -x"), (2, "code", "renomme"))]
+    monde.llm.reponses = [
+        tri((1, "code", "ajoute -x"), (2, "code", "renomme")),
+        texte("rien à changer"),  # l'agent de code
+    ]
     lot = [
         commentaire("ligne", 10, chemin="pyproject.toml", ligne=5),  # addopts
         commentaire("ligne", 11, chemin="pyproject.toml", ligne=2),  # name
@@ -302,3 +310,216 @@ async def test_demarrer_reprise_annulee_entre_temps_ne_demarre_pas(monde):
         await s.commit()
     ex, tache, pipeline = await monde.etat(pid)
     assert (pipeline.etat, ex.phase, tache.colonne) == ("echouee", "attente", "en_revue")
+
+
+def agents_de_la_branche(monde: Monde) -> list[str]:
+    return git(monde.origine, "log", "--format=%ae", f"main..{BRANCHE}").split()
+
+
+def modifier(chemin: str, contenu: str):
+    return appel("ecrire", chemin=chemin, contenu=contenu)
+
+
+async def test_reprise_code_pousse_et_repond(monde):
+    await en_revue(monde)
+    avant = git(monde.origine, "rev-parse", BRANCHE)
+    monde.llm.reponses = [
+        tri((1, "code", "corrige a"), (2, "code", "corrige a aussi")),
+        modifier("src/a.py", "a = 2\n"), texte("fait"),
+        verdict("ok"),
+    ]  # fmt: skip
+    lot = [
+        commentaire("revue", 10, texte="Le nom est mauvais"),
+        commentaire("ligne", 11, chemin="src/a.py", ligne=1),
+    ]
+    pid = await reprendre(monde, lot)
+    ex, tache, pipeline = await monde.etat(pid)
+    assert agents_de_la_branche(monde)[0] == "agent-code@portail.local"
+    nouveau = git(monde.origine, "rev-parse", BRANCHE)
+    assert (
+        git(monde.origine, "log", "-1", "--format=%s", BRANCHE) == "fix: Ajouter l'équipe (reprise)"
+    )
+    assert git(monde.origine, "rev-parse", f"{nouveau}^") == avant
+    court = nouveau[:7]
+    ((numero, cid, rep),) = monde.github.reponses
+    assert (numero, cid) == (1, 11) and court in rep and "corrige a aussi" in rep
+    ((numero, corps),) = monde.github.commentaires
+    assert (
+        numero == 1
+        and "> Le nom est mauvais" in corps
+        and f"Fait dans {court} : corrige a" in corps
+    )
+    assert (tache.colonne, tache.verrou) == ("en_revue", pid)
+    assert (pipeline.etat, ex.phase) == ("terminee", "fini")
+    assert [e["message"] for e in monde.notifieur.envoyes if "Reprise" in e["message"]] == [
+        "Reprise terminée"
+    ]
+    assert len(monde.github.prs) == 1
+    assert all(c.repondu_le for c in await pris(monde))
+
+
+async def test_reprise_tests_puis_code(monde):
+    await en_revue(monde)
+    monde.llm.reponses = [
+        tri((1, "tests", "renforce"), (2, "code", "corrige")),
+        modifier("tests/test_a.py", "def test_a(): assert True\n"), texte("ok"),
+        modifier("src/a.py", "a = 2\n"), texte("fait"),
+        verdict("ok"),
+    ]  # fmt: skip
+    pid = await reprendre(monde, [commentaire("revue", 10), commentaire("revue", 11)])
+    assert agents_de_la_branche(monde)[:2] == [
+        "agent-code@portail.local",
+        "agent-tests@portail.local",
+    ]
+    sujets = git(monde.origine, "log", "--format=%s", "-2", BRANCHE).splitlines()
+    assert sujets == ["fix: Ajouter l'équipe (reprise)", "test: Ajouter l'équipe (reprise)"]
+    async with monde.sessions() as s:
+        actions = (await s.scalars(select(Etape.action).where(Etape.pipeline_id == pid))).all()
+    assert "rouge" not in actions and "reponses" in actions
+
+
+async def test_reprise_tout_reponse_ne_pousse_rien(monde):
+    await en_revue(monde)
+    pointe = git(monde.origine, "rev-parse", BRANCHE)
+    pousser_sur_main(monde, "src/b.py", "b = 1\n")  # la fusion de la base crée un commit
+    monde.llm.reponses = [tri((1, "reponse", "c'est voulu"), (2, "reponse", "oui"))]
+    lot = [commentaire("ligne", 10, chemin="src/x.py", ligne=1), commentaire("conversation", 11)]
+    pid = await reprendre(monde, lot)
+    ex, tache, pipeline = await monde.etat(pid)
+    assert git(monde.origine, "rev-parse", BRANCHE) == pointe
+    assert ex.depart_revue != ex.base_sha  # la fusion existe, mais elle reste locale
+    assert [(c, t) for _n, c, t in monde.github.reponses] == [(10, "c'est voulu")]
+    ((_n, corps),) = monde.github.commentaires
+    assert "oui" in corps and "Aucun changement" not in corps
+    assert (tache.colonne, pipeline.etat) == ("en_revue", "terminee")
+
+
+async def test_echec_verification_en_revue_sans_push(monde):
+    await en_revue(monde)
+    pointe = git(monde.origine, "rev-parse", BRANCHE)
+    monde.lanceur.codes = {"pytest": [1]}
+    monde.llm.reponses = [
+        tri((1, "code", "corrige")), modifier("src/a.py", "a = 2\n"), texte("fait")
+    ]  # fmt: skip
+    pid = await reprendre(monde, [commentaire("revue", 10)])
+    _ex, tache, pipeline = await monde.etat(pid)
+    assert (tache.colonne, tache.verrou, pipeline.etat) == ("en_revue", pid, "echouee")
+    assert git(monde.origine, "rev-parse", BRANCHE) == pointe
+    ((_n, corps),) = monde.github.commentaires
+    assert "La reprise n'a pas abouti : vérification échouée (tests)" in corps
+    assert "sortie de" not in corps
+    assert monde.github.reponses == []
+    assert any(e["message"].startswith("Reprise échouée") for e in monde.notifieur.envoyes)
+
+
+async def test_violation_protection_en_reprise_sans_push(monde):
+    from test_dev import triche
+
+    await en_revue(monde)
+    pointe = git(monde.origine, "rev-parse", BRANCHE)
+    monde.lanceur.effets = {"pytest": triche}
+    monde.llm.reponses = [tri((1, "code", "corrige")), appel("lancer", nom="tests"), texte("fait")]
+    pid = await reprendre(monde, [commentaire("revue", 10)])
+    _ex, tache, pipeline = await monde.etat(pid)
+    assert (tache.colonne, pipeline.etat) == ("en_revue", "echouee")
+    assert git(monde.origine, "rev-parse", BRANCHE) == pointe
+    assert "protection des tests : tests/test_z.py" in monde.github.commentaires[0][1]
+
+
+async def test_push_refuse_si_nicolas_a_pousse(monde):
+    await en_revue(monde)
+    fait = []
+
+    def nicolas(_d):
+        if fait:
+            return
+        fait.append(1)
+        amont = monde.origine.parent / "amont"
+        git(amont, "fetch", "origin")
+        git(amont, "checkout", "-B", "n", f"origin/{BRANCHE}")
+        (amont / "note.txt").write_text("de Nicolas\n")
+        git(amont, "add", "-A")
+        git(amont, "commit", "-m", "Nicolas")
+        git(amont, "push", "origin", f"n:{BRANCHE}")
+
+    monde.lanceur.effets = {"pytest": nicolas}
+    monde.llm.reponses = [
+        tri((1, "code", "corrige")), modifier("src/a.py", "a = 2\n"),
+        appel("lancer", nom="tests"), texte("fait"), verdict("ok"),
+    ]  # fmt: skip
+    pid = await reprendre(monde, [commentaire("revue", 10)])
+    _ex, tache, pipeline = await monde.etat(pid)
+    assert (tache.colonne, tache.verrou, pipeline.etat) == ("en_revue", pid, "echouee")
+    assert git(monde.origine, "log", "-1", "--format=%s", BRANCHE) == "Nicolas"
+    assert monde.github.reponses == []
+    assert "La reprise n'a pas abouti" in monde.github.commentaires[0][1]
+
+
+async def test_redemarrage_en_reponses_ne_repond_pas_deux_fois(monde):
+    from portail.ordonnanceur import reprendre_interrompues
+
+    await en_revue(monde)
+    monde.llm.reponses = [tri((1, "reponse", "a"), (2, "reponse", "b"))]
+    lot = [commentaire("ligne", 10, chemin="src/x.py", ligne=1),
+           commentaire("ligne", 11, chemin="src/x.py", ligne=1)]  # fmt: skip
+    pid = await reprendre(monde, lot)
+    # l'exécution avait déjà répondu à 10 quand le portail s'est arrêté pendant `reponses`
+    async with monde.sessions() as s:
+        c2 = (await s.scalars(select(CommentairePris).order_by(CommentairePris.id))).all()[1]
+        c2.repondu_le = None
+        t = await s.get(Tache, 1)
+        t.colonne, t.verrou = "en_cours", pid
+        (await s.get(Pipeline, pid)).etat = "en_cours"
+        await s.execute(
+            update(ExecutionDev).where(ExecutionDev.pipeline_id == pid).values(phase="reponses")
+        )
+        await s.commit()
+    monde.github.reponses.clear()
+    await reprendre_interrompues(monde.sessions, monde.orch)
+    async with asyncio.timeout(15):
+        while monde.orch.taches:
+            await asyncio.sleep(0.02)
+    assert [(c, t) for _n, c, t in monde.github.reponses] == [(11, "b")]
+    _ex, tache, pipeline = await monde.etat(pid)
+    assert (tache.colonne, pipeline.etat) == ("en_revue", "terminee")
+
+
+async def test_reponse_github_en_panne_termine_quand_meme(monde):
+    await en_revue(monde)
+
+    async def panne(*_a):
+        raise ErreurGitHub("GitHub en panne", 502)
+
+    monde.github.repondre_ligne = panne
+    monde.llm.reponses = [tri((1, "reponse", "a"))]
+    pid = await reprendre(monde, [commentaire("ligne", 10, chemin="src/x.py", ligne=1)])
+    _ex, tache, pipeline = await monde.etat(pid)
+    assert (tache.colonne, tache.verrou, pipeline.etat) == ("en_revue", pid, "terminee")
+    assert [c.repondu_le for c in await pris(monde)] == [None]
+
+
+async def test_une_reponse_en_echec_n_arrete_pas_les_autres(monde):
+    await en_revue(monde)
+
+    async def une_sur_deux(numero, cid, texte_):
+        if cid == 10:
+            raise ErreurGitHub("commentaire supprimé", 404)
+        monde.github.reponses.append((numero, cid, texte_))
+
+    async def repondre(_depot, numero, cid, texte_):
+        await une_sur_deux(numero, cid, texte_)
+
+    monde.github.repondre_ligne = repondre
+    monde.llm.reponses = [tri((1, "reponse", "a"), (2, "reponse", "b"), (3, "reponse", "c"))]
+    lot = [
+        commentaire("ligne", 10, chemin="src/x.py", ligne=1),
+        commentaire("ligne", 11, chemin="src/x.py", ligne=1),
+        commentaire("revue", 12, texte="Vu"),
+    ]
+    pid = await reprendre(monde, lot)
+    _ex, _tache, pipeline = await monde.etat(pid)
+    assert pipeline.etat == "terminee"
+    assert [(c, t) for _n, c, t in monde.github.reponses] == [(11, "b")]
+    ((_n, corps),) = monde.github.commentaires
+    assert "> Vu" in corps and "c" in corps
+    assert [c.repondu_le is not None for c in await pris(monde)] == [False, True, True]

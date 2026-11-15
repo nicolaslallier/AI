@@ -163,6 +163,20 @@ class ExecutionVue(BaseModel):
     phase: str
     renvois: int
     pr_url: str | None
+    mode: str
+
+
+class CommentaireVue(BaseModel):
+    id: int
+    type: str
+    auteur: str
+    texte: str
+    url: str
+    chemin: str | None
+    ligne: int | None
+    tri: str | None
+    consigne: str | None
+    repondu_le: datetime | None
 
 
 class CommandeVue(BaseModel):
@@ -184,6 +198,7 @@ class PipelineDetail(BaseModel):
     etapes: list[EtapeOut]
     execution: ExecutionVue | None = None
     commandes: list[CommandeVue] = []
+    commentaires: list[CommentaireVue] = []
 
 
 COLONNES = ("a_faire", "prete", "en_cours", "en_revue", "terminee", "bloquee")
@@ -245,6 +260,7 @@ class TacheVue(BaseModel):
     dependances_non_terminees: list[int] = []
     pr_url: str | None = None
     resume_blocage: str | None = None
+    reprise: bool = False
 
 
 class PropositionVue(BaseModel):

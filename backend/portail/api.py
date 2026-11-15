@@ -20,6 +20,7 @@ from portail.contexte import construire, jauge
 from portail.conversations import ServiceConversation
 from portail.db import (
     CommandeLancee,
+    CommentairePris,
     Etape,
     ExecutionDev,
     Pipeline,
@@ -46,6 +47,7 @@ from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.schemas import (
     Acceptation,
     CommandeVue,
+    CommentaireVue,
     ConversationDetail,
     ConversationPatch,
     ConversationResume,
@@ -133,7 +135,19 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
             .order_by(CommandeLancee.id)
         )
     ).all()
+    commentaires = (
+        (
+            await session.scalars(
+                select(CommentairePris)
+                .where(CommentairePris.execution_id == ex.id)
+                .order_by(CommentairePris.cree_le, CommentairePris.id)
+            )
+        ).all()
+        if ex
+        else []
+    )
     return PipelineDetail(
+        commentaires=[CommentaireVue.model_validate(c, from_attributes=True) for c in commentaires],
         execution=ExecutionVue.model_validate(ex, from_attributes=True) if ex else None,
         commandes=[CommandeVue.model_validate(c, from_attributes=True) for c in commandes],
         id=pipeline.id,
@@ -166,18 +180,21 @@ async def _vues(session: AsyncSession, taches: list[Tache]) -> list[TacheVue]:
         ).all()
     )
     prs: dict[int, str | None] = {}  # la plus récente exécution de chaque tâche gagne
-    for tid, url in (
+    modes: dict[int, str] = {}
+    for tid, url, mode in (
         await session.execute(
-            select(ExecutionDev.tache_id, ExecutionDev.pr_url)
+            select(ExecutionDev.tache_id, ExecutionDev.pr_url, ExecutionDev.mode)
             .where(ExecutionDev.tache_id.in_(ids))
             .order_by(ExecutionDev.n, ExecutionDev.id)
         )
     ).all():
         prs[tid] = url
+        modes[tid] = mode
     return [
         TacheVue.model_validate(t, from_attributes=True).model_copy(
             update={
                 "pr_url": prs.get(t.id),
+                "reprise": t.colonne == "en_cours" and modes.get(t.id) == "reprise",
                 "depend_de": deps.get(t.id, []),
                 "dependances_non_terminees": [
                     d for d in deps.get(t.id, []) if colonnes[d] != "terminee"
@@ -352,7 +369,10 @@ def create_app(
         if orch:
             app.state.ordonnanceur = Ordonnanceur(app.state.sessions, orch, r.paralleles_max)
             await reprendre_interrompues(app.state.sessions, orch, app.state.ordonnanceur.lancer)
-            suivi = SuiviPR(app.state.sessions, orch._github, orch, app.state.ordonnanceur)
+            suivi = SuiviPR(
+                app.state.sessions, orch._github, orch, app.state.ordonnanceur,
+                proprietaire=r.github_proprietaire, delai_s=r.delai_commentaires_s,
+            )  # fmt: skip
             boucles = [
                 asyncio.create_task(app.state.ordonnanceur.tourner()),
                 asyncio.create_task(suivi.tourner()),
