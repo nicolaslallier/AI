@@ -22,3 +22,16 @@ VERT : correctif réappliqué, voir ci-dessous.
 ## Réserves
 - Étape 4 du brief (vérification dans l'image Docker) non exécutée ; la config est un `dictConfig` standard chargé par uvicorn, et `COPY backend/ ./` embarque `journal.json`.
 - `# noqa: B039` sur le `ContextVar` à défaut `{}` : le dict n'est jamais muté (documenté).
+
+## Fix round 1
+
+Changements : (1) `avis.py` : `journal.commencer()` en première ligne de `_tache`, `commencer(pipeline=…)` de `_rediger` remplacé par `journal.lier(pipeline=…)` ; (2) test qui applique `journal.json` par `dictConfig` (état des journaux restauré en `finally`) ; (3) `dev._etape` retire aussi `contexte_max` ; (4) `chat._tache` : `lier(pipeline=…)` avant `self._agent(etape)` ; (5) `httpx` et `httpcore` à WARNING dans `journal.json` ; (6) `FormatJSON` : `json.dumps(..., default=str)`.
+
+Tests ajoutés : `test_avis.py::test_avis_n_herite_pas_du_contexte_du_redacteur` (un espion sur `_rediger` relève le contexte à l'entrée, avant toute lecture en base : `{}` attendu), `test_journal.py::test_journal_json_charge_par_dictconfig`, `test_journal.py::test_identifiant_non_serialisable_ne_casse_pas_le_formateur`. Les points 3, 4 et 5 sont de simples déplacements/valeurs de configuration sans test dédié ; le point 5 est couvert indirectement par le chargement de `journal.json`.
+
+ROUGE : `uv run pytest -q tests/test_avis.py::test_avis_n_herite_pas_du_contexte_du_redacteur tests/test_journal.py::test_identifiant_non_serialisable_ne_casse_pas_le_formateur`
+- avis : `AssertionError: assert [{'etape': 99..., 'tache': 5}] == [{}, {}]` (la tâche d'avis recevait le contexte du rédacteur) ;
+- formateur : `TypeError: Object of type object is not JSON serializable`.
+(Le test dictConfig passe aussi avant correction : le fichier est valide, il verrouille le chargement.)
+
+VERT : même commande, puis `uv run ruff check . && uv run ruff format --check . && uv run pytest -q` : `All checks passed!`, `87 files already formatted`, `771 passed in 250.30s`.

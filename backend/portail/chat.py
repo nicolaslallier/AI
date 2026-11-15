@@ -373,8 +373,8 @@ class ServiceChat:
         try:
             async with self._sessions() as s:
                 etape = await s.get(Etape, etape_id)
-                agent = self._agent(etape)
                 journal.lier(pipeline=etape.pipeline_id)
+                agent = self._agent(etape)
                 journal.nouvelle_mission(agent.nom, agent.contexte_max)
                 projet = await s.get(Projet, (await s.get(Pipeline, etape.pipeline_id)).projet_id)
             arbre = None

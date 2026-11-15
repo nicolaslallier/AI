@@ -144,3 +144,39 @@ async def test_tache_enfant_sans_identifiants_perimes():
     assert await asyncio.create_task(enfant()) == {"etape": 2}
     assert journal.contexte.get() == {"conversation": 1}
     journal.commencer()
+
+
+def test_journal_json_charge_par_dictconfig(capsys):
+    import logging.config
+    from pathlib import Path
+
+    config = json.loads((Path(__file__).parent.parent / "journal.json").read_text())
+    racine = logging.getLogger()
+    avant = (racine.level, racine.handlers[:])
+    try:
+        logging.config.dictConfig(config)
+        journal.commencer(pipeline=8)
+        logging.getLogger("portail.test_json").info("bonjour %s", "toi")
+        sortie = capsys.readouterr().out.strip().splitlines()
+        assert len(sortie) == 1
+        ligne = json.loads(sortie[0])
+        assert (ligne["niveau"], ligne["module"], ligne["message"], ligne["pipeline"]) == (
+            "INFO", "portail.test_json", "bonjour toi", 8
+        )  # fmt: skip
+    finally:
+        journal.commencer()
+        racine.handlers[:] = avant[1]
+        racine.setLevel(avant[0])
+        for nom in ("httpx", "httpcore", "uvicorn", "uvicorn.error", "uvicorn.access"):
+            lg = logging.getLogger(nom)
+            lg.handlers.clear()
+            lg.setLevel(logging.NOTSET)
+            lg.propagate = True
+
+
+def test_identifiant_non_serialisable_ne_casse_pas_le_formateur():
+    journal.commencer(pipeline=object())
+    try:
+        assert "object" in _formater()["pipeline"]
+    finally:
+        journal.commencer()

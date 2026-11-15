@@ -7,6 +7,8 @@
   },
   "root": {"level": "INFO", "handlers": ["sortie"]},
   "loggers": {
+    "httpx": {"level": "WARNING"},
+    "httpcore": {"level": "WARNING"},
     "uvicorn": {"handlers": [], "propagate": true},
     "uvicorn.error": {"handlers": [], "propagate": true},
     "uvicorn.access": {"handlers": [], "propagate": true}

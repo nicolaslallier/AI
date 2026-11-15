@@ -467,7 +467,7 @@ class Orchestrateur:
             s.add(etape)
             await s.commit()
         ctx.etape_id = etape.id
-        journal.lier(etape=etape.id, agent=agent, mission=None)
+        journal.lier(etape=etape.id, agent=agent, mission=None, contexte_max=None)
 
     async def _transition(self, ctx: _Ctx, suivante: str, erreur: str | None = None, **champs):
         """Termine l'étape en cours et écrit la phase suivante avec `champs`, en une transaction :

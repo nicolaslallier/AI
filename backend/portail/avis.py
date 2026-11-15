@@ -97,6 +97,7 @@ class ServiceAvis:
         await s.execute(update(Avis).where(Avis.etat == "en_cours").values(etat="abandonne"))
 
     async def _tache(self, avis_id: int, document_id: int, contenu: str, version: int) -> None:
+        journal.commencer()  # la tâche hérite d'une copie du contexte du rédacteur : on repart à vide
         try:
             texte = await self._rediger(avis_id, document_id, contenu, version)
             async with self._sessions() as s:
@@ -141,7 +142,7 @@ class ServiceAvis:
         if etape.apercu:
             annexes.append(f"Aperçu du dépôt (SHA {etape.sha}) :\n\n" + etape.apercu)
         agent = self._catalogue.agents[avis.agent]
-        journal.commencer(pipeline=etape.pipeline_id)
+        journal.lier(pipeline=etape.pipeline_id)
         journal.nouvelle_mission(agent.nom, agent.contexte_max)
         auteur = self._catalogue.agents[etape.agent]
         agent = agent.model_copy(update={"modele": modele_pour(agent, auteur)})

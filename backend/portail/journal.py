@@ -49,7 +49,7 @@ class FormatJSON(logging.Formatter):
         if record.exc_info and record.exc_info[1]:
             ligne["exception"] = type(record.exc_info[1]).__name__
             ligne["pile"] = "".join(traceback.format_tb(record.exc_info[2]))
-        return json.dumps(ligne, ensure_ascii=False)
+        return json.dumps(ligne, ensure_ascii=False, default=str)
 
 
 def erreur(logger: logging.Logger, message: str, *args: object) -> None:
