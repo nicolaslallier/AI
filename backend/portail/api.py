@@ -381,9 +381,11 @@ def create_app(
         app.state.reglages = r
         metriques.initialiser(r)
         app.state.catalogue = catalogue or charger_catalogue(r.agents_fichier)
-        app.state.llm = llm or ClientLLM(r.litellm_url, r.litellm_cle)
         moteur = creer_moteur(r.database_url)
         app.state.sessions = fabrique_sessions(moteur)
+        app.state.llm = llm or ClientLLM(
+            r.litellm_url, r.litellm_cle, sessions=app.state.sessions, version=r.version
+        )
         async with app.state.sessions() as s:
             await recuperer_interrompues(s)
             await s.commit()

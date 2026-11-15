@@ -322,6 +322,30 @@ class Audit(Base):
     objet_id: Mapped[int] = mapped_column(Integer)
 
 
+class AppelLLM(Base):
+    """Un appel au modèle : identifiants, compteurs, durée. Jamais de contenu. Sans clé étrangère :
+    la ligne survit à l'objet qu'elle désigne."""
+
+    __tablename__ = "appel_llm"
+    __table_args__ = (Index("ix_appel_llm_agent_quand", "agent", "quand"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    quand: Mapped[datetime] = _horodatage()
+    agent: Mapped[str] = mapped_column(String)
+    modele: Mapped[str] = mapped_column(String)
+    lieu: Mapped[str] = mapped_column(String, default="portail", server_default="portail")
+    version_image: Mapped[str | None] = mapped_column(String)
+    mission: Mapped[str | None] = mapped_column(String, index=True)
+    pipeline_id: Mapped[int | None] = mapped_column(Integer)
+    etape_id: Mapped[int | None] = mapped_column(Integer)
+    tache_id: Mapped[int | None] = mapped_column(Integer)
+    conversation_id: Mapped[int | None] = mapped_column(Integer)
+    jetons_entree: Mapped[int | None] = mapped_column(Integer)
+    jetons_sortie: Mapped[int | None] = mapped_column(Integer)
+    duree_ms: Mapped[int] = mapped_column(Integer)
+    issue: Mapped[str] = mapped_column(String)  # ok | erreur | delai
+
+
 def creer_moteur(url: str) -> AsyncEngine:
     return create_async_engine(url)
 
