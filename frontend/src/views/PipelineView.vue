@@ -197,7 +197,7 @@ onBeforeUnmount(() => {
           :propositions="e.produit === 'taches' ? propositions.filter((x) => x.etape_id === e.id && x.etat === 'ouverte').length : undefined"
           :projet-id="pipeline.projet.id"
           :message="e.document ? '' : message"
-          @envoyer="(c, vider) => action(() => envoyerMessage(e.id, c)).then((ok) => ok && vider())"
+          @envoyer="(c, vider, m) => action(() => envoyerMessage(e.id, c, m)).then((ok) => ok && vider())"
           @rediger="action(() => rediger(e.id))"
           @reessayer="action(() => reessayer(e.id))"
         />

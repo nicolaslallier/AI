@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 
 from portail.agents import Catalogue
 from portail.api import create_app
-from portail.db import Avis, Document
+from portail.db import Avis, Document, Etape
 from tests.conftest import OUTILS, FauxLLM, _agent
 
 CATALOGUE_AVIS = Catalogue(
@@ -24,6 +24,7 @@ CATALOGUE_AVIS = Catalogue(
     },
     pipelines={"spec": ["spec"], "planification": ["plan"]},
     avis={"plan": ["architecte", "challenger"]},
+    modeles_permis=["m", "m2"],
 )  # fmt: skip
 
 
@@ -178,6 +179,19 @@ async def test_annuler_abandonne_les_avis_en_cours(client, faux_llm, sessions):
 async def test_challenger_change_de_modele_si_meme_que_le_redacteur(client, faux_llm):
     await _plan(client, faux_llm)
     assert sorted(a["modele"] for a in _avis_appels(faux_llm)) == ["m", "m2"]
+
+
+async def test_auteur_effectif(client, faux_llm, sessions):
+    pid, eid = await _plan(client, faux_llm)
+    did = (await _document(client, pid))["id"]
+    async with sessions() as s:  # l'auteur tourne sur m2 : le challenger (m) n'a plus à changer
+        (await s.get(Etape, eid)).modele = "m2"
+        await s.commit()
+    faux_llm.appels.clear()
+    faux_llm.reponses = [_reponse("avis A2"), _reponse("avis C2")]
+    assert (await client.post(f"/api/documents/{did}/avis")).status_code == 202
+    await _attendre(client)
+    assert sorted(a["modele"] for a in _avis_appels(faux_llm)) == ["m", "m"]
 
 
 async def test_demande_manuelle(client, faux_llm):

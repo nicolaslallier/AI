@@ -157,6 +157,7 @@ CATALOGUE_TEST = Catalogue(
         "planification": ["plan", "taches"],
         "architecture": ["vision", "volet", "synthese"],
     },
+    modeles_permis=["m", "g"],
 )
 
 
