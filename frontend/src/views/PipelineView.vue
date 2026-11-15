@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import {
   annulerPipeline, enregistrerDocument, lireKanban, envoyerMessage, ErreurApi, lirePipeline, reessayer, rediger, valider,
   type PipelineDetail, type Proposition,
@@ -9,6 +9,7 @@ import { duree, emplacement, extrait, lienPrSur, numeroPr } from '../dev'
 import EtatBadge from '../components/EtatBadge.vue'
 import ChatEtape from '../components/ChatEtape.vue'
 import EditeurDocument from '../components/EditeurDocument.vue'
+import PanneauAvis from '../components/PanneauAvis.vue'
 
 const props = defineProps<{ id: string }>()
 const pipeline = ref<PipelineDetail | null>(null)
@@ -86,9 +87,21 @@ async function annuler() {
   await action(() => annulerPipeline(Number(props.id)), false)
 }
 
+const notesParAgent = computed(() => {
+  const m = new Map<string, string[]>()
+  for (const n of pipeline.value?.execution?.notes ?? []) m.set(n.agent, [...(m.get(n.agent) ?? []), n.texte])
+  return [...m]
+})
+
+// Un avis tourne en arrière-plan, sans flux : on relit le pipeline tant qu'il est en cours.
+const avisEnCours = () =>
+  pipeline.value?.etapes.some((e) => e.document?.avis.some((a) => a.etat === 'en_cours')) ?? false
+const minuteur = setInterval(() => avisEnCours() && charger(false), 3000)
+
 onMounted(charger)
 onBeforeUnmount(() => {
   demonte = true
+  clearInterval(minuteur)
   ;[...abonnements.keys()].forEach(desabonner)
 })
 </script>
@@ -117,6 +130,13 @@ onBeforeUnmount(() => {
         numeroPr(pipeline.execution.pr_url)
       }}</a>
     </p>
+    <section v-if="notesParAgent.length" class="carte pile">
+      <h2>Notes des contrôles</h2>
+      <div v-for="[agent, textes] in notesParAgent" :key="agent">
+        <strong>{{ agent }}</strong>
+        <ul><li v-for="(t, k) in textes" :key="k">{{ t }}</li></ul>
+      </div>
+    </section>
     <section v-if="pipeline.execution?.mode === 'reprise'" class="carte pile">
       <h2>Commentaires pris en charge</h2>
       <article v-for="c in pipeline.commentaires" :key="c.id" class="pile">
@@ -151,6 +171,11 @@ onBeforeUnmount(() => {
           :message="message"
           @enregistrer="(c) => action(() => enregistrerDocument(e.id, c), false)"
           @valider="action(() => valider(e.id), false)"
+        />
+        <PanneauAvis
+          v-if="e.document && (e.produit === 'spec' || e.produit === 'plan')"
+          :document="e.document"
+          @change="charger(false)"
         />
         <ChatEtape
           v-if="e.etat !== 'terminee'"

@@ -84,10 +84,10 @@ async function action(f: () => Promise<unknown>): Promise<boolean> {
   return !demonte
 }
 
-async function nouvelle() {
+async function nouvelle(agent = 'orchestrateur') {
   message.value = ''
   try {
-    const c = await creerConversation()
+    const c = await creerConversation(agent)
     await rafraichirListe()
     router.push({ name: 'conversation', params: { id: c.id } })
   } catch (e) {
@@ -154,13 +154,17 @@ onBeforeUnmount(() => {
 <template>
   <div class="chat">
     <aside class="pile">
-      <button class="primaire" @click="nouvelle">+ Nouvelle</button>
+      <div class="rangee">
+        <button class="primaire" @click="nouvelle()">+ Nouvelle</button>
+        <button @click="nouvelle('pm')">+ PM</button>
+      </div>
       <RouterLink
         v-for="c in liste"
         :key="c.id"
         :to="{ name: 'conversation', params: { id: c.id } }"
         :class="['carte', { actif: String(c.id) === id }]"
       >
+        <span v-if="c.agent === 'pm'" class="badge">PM</span>
         {{ c.titre || `Conversation n°${c.id}` }}
       </RouterLink>
     </aside>
@@ -169,7 +173,7 @@ onBeforeUnmount(() => {
       <p v-if="!id" class="discret">Choisis une conversation ou crée-en une nouvelle.</p>
       <template v-else-if="conv">
         <div class="rangee">
-          <h1>{{ conv.titre || `Conversation n°${conv.id}` }}</h1>
+          <h1><span v-if="conv.agent === 'pm'" class="badge">PM</span> {{ conv.titre || `Conversation n°${conv.id}` }}</h1>
           <button class="danger pousse" :disabled="conv.etat === 'en_cours'" @click="supprimer">Supprimer</button>
         </div>
         <JaugeContexte v-if="conv.jauge" :jauge="conv.jauge" />
