@@ -16,7 +16,7 @@ use bollard::query_parameters::{
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use crate::config::Config;
+use crate::config::{Config, epinglee};
 
 pub const DELAI_MAX_S: u64 = 1800;
 
@@ -106,7 +106,7 @@ pub fn valider_services(cfg: &Config, d: &DemandeServices) -> Result<(), String>
         if !nom_valide(&s.nom, 32) {
             return Err(format!("nom de service invalide : {}", s.nom));
         }
-        if !cfg.images_services.contains(&s.image) {
+        if epinglee(&cfg.images_services, &s.image).is_none() {
             return Err(format!("image de service non permise : {}", s.image));
         }
         if s.env.keys().any(|k| k.is_empty() || k.contains('=')) {
@@ -144,9 +144,8 @@ pub fn specification(
     if !espace_valide(espace) {
         return Err(format!("espace invalide : {espace}"));
     }
-    if !cfg.images.iter().any(|i| i == image) {
-        return Err(format!("image non permise : {image}"));
-    }
+    let image =
+        epinglee(&cfg.images, image).ok_or_else(|| format!("image non permise : {image}"))?;
     if let Some(c) = lecture_seule.iter().find(|c| !chemin_relatif_sur(c)) {
         return Err(format!("chemin en lecture seule refusé : {c}"));
     }
@@ -395,7 +394,8 @@ impl Moteur for Docker {
             &services,
         )
         .map_err(Erreur::Refus)?;
-        assurer_image(self, &d.image, true).await?;
+        let image = corps.image.clone().unwrap_or_default();
+        assurer_image(self, &image, true).await?;
         let id = self.create_container(None, corps).await?.id;
         let resultat = executer(self, &id, d.delai_s).await;
         // Supprimé dans tous les cas.
@@ -405,7 +405,7 @@ impl Moteur for Docker {
         Ok(resultat)
     }
 
-    async fn services(&self, _cfg: &Config, d: &DemandeServices) -> Result<(), Erreur> {
+    async fn services(&self, cfg: &Config, d: &DemandeServices) -> Result<(), Erreur> {
         let reseau = reseau_services(&d.espace);
         if self.inspect_network(&reseau, None).await.is_err() {
             self.create_network(NetworkCreateRequest {
@@ -417,7 +417,11 @@ impl Moteur for Docker {
             .await?;
         }
         for s in &d.services {
-            assurer_image(self, &s.image, false).await?;
+            // Toujours la référence épinglée de la liste, jamais celle de la demande.
+            let image = epinglee(&cfg.images_services, &s.image).ok_or_else(|| {
+                Erreur::Refus(format!("image de service non permise : {}", s.image))
+            })?;
+            assurer_image(self, image, false).await?;
             let nom = nom_service(&d.espace, &s.nom);
             match self.inspect_container(&nom, None).await {
                 Ok(existant) => {
@@ -439,7 +443,7 @@ impl Moteur for Docker {
                 Err(e) => return Err(e.into()),
             }
             let corps = ContainerCreateBody {
-                image: Some(s.image.clone()),
+                image: Some(image.into()),
                 env: Some(s.env.iter().map(|(k, v)| format!("{k}={v}")).collect()),
                 labels: Some(libelle(&d.espace)),
                 host_config: Some(hote_service(&reseau)),
@@ -548,6 +552,41 @@ mod tests {
             &[],
         );
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn image_demarree_epinglee() {
+        let mut cfg = config_test();
+        cfg.images = vec![format!("{IMAGE}@sha256:aaa")];
+        cfg.images_services = vec!["postgres:16-alpine@sha256:bbb".into()];
+        let c = specification(&cfg, ESPACE, IMAGE, "x", &[], false, None, &[]).unwrap();
+        assert_eq!(c.image, Some(format!("{IMAGE}@sha256:aaa")));
+        // Un autre digest, ou le seul digest sans nom:tag demandé, reste refusé.
+        assert!(
+            specification(
+                &cfg,
+                ESPACE,
+                &format!("{IMAGE}@sha256:zzz"),
+                "x",
+                &[],
+                false,
+                None,
+                &[]
+            )
+            .is_err()
+        );
+        let d = DemandeServices {
+            espace: ESPACE.into(),
+            services: vec![Service {
+                nom: "db".into(),
+                image: "postgres:16-alpine".into(),
+                env: HashMap::new(),
+            }],
+        };
+        assert!(valider_services(&cfg, &d).is_ok());
+        let mut autre = d;
+        autre.services[0].image = "postgres:16-alpine@sha256:ccc".into();
+        assert!(valider_services(&cfg, &autre).is_err());
     }
 
     #[test]

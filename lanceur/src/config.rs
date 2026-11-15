@@ -40,6 +40,15 @@ impl Config {
     }
 }
 
+/// Référence à démarrer pour l'image demandée : l'entrée de la liste égale à la
+/// demande, ou dont la partie avant `@` l'est (demande `nom:tag`, liste `nom:tag@sha256:…`).
+pub fn epinglee<'a>(liste: &'a [String], demandee: &str) -> Option<&'a str> {
+    liste
+        .iter()
+        .map(String::as_str)
+        .find(|e| *e == demandee || e.split_once('@').is_some_and(|(nom, _)| nom == demandee))
+}
+
 #[cfg(test)]
 pub fn config_test() -> Config {
     Config {
@@ -89,5 +98,25 @@ mod tests {
         assert_eq!(c.reseau, "run-net");
         assert_eq!(c.images, ["a:1", "b:2"]);
         assert!(c.images_services.is_empty());
+    }
+
+    #[test]
+    fn image_epinglee() {
+        let l = vec![
+            "postgres:16-alpine@sha256:aaa".to_string(),
+            "busybox:1.36".to_string(),
+        ];
+        assert_eq!(
+            epinglee(&l, "postgres:16-alpine"),
+            Some("postgres:16-alpine@sha256:aaa")
+        );
+        assert_eq!(
+            epinglee(&l, "postgres:16-alpine@sha256:aaa"),
+            Some("postgres:16-alpine@sha256:aaa")
+        );
+        assert_eq!(epinglee(&l, "busybox:1.36"), Some("busybox:1.36"));
+        assert_eq!(epinglee(&l, "postgres:16"), None); // préfixe : refusé
+        assert_eq!(epinglee(&l, "postgres:16-alpine@sha256:bbb"), None); // autre digest : refusé
+        assert_eq!(epinglee(&l, "busybox:1.36@sha256:ccc"), None);
     }
 }

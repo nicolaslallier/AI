@@ -41,8 +41,11 @@ services:
       LANCEUR_SECRET: ${PORTAIL_LANCEUR_SECRET:?}
       LANCEUR_VOLUME: portail-espaces
       LANCEUR_RESEAU: run-net
-      LANCEUR_IMAGES: ghcr.io/nicolaslallier/ai-execution:latest
-      LANCEUR_IMAGES_SERVICES: pgvector/pgvector:pg16,postgres:16-alpine,minio/minio:latest
+      # Le lanceur démarre la référence épinglée de cette liste ; les demandes nomment nom:tag.
+      LANCEUR_IMAGES: ghcr.io/nicolaslallier/ai-execution:latest@${EXECUTION_DIGEST:?}
+      # TODO digest : minio/minio n'a pas pu être résolu (Docker Hub refuse l'accès anonyme) ;
+      # remplacer par minio/minio:<tag RELEASE daté>@sha256:… (voir README).
+      LANCEUR_IMAGES_SERVICES: pgvector/pgvector:pg16@sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f,postgres:16-alpine@sha256:f377d590e5474681d4d7838635031a2b50647923b7abfa803ce9b5ff35d5c663,minio/minio:latest
       LANCEUR_PROXY: http://run-egress:3128
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

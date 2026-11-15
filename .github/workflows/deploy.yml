@@ -172,9 +172,10 @@ jobs:
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
           BAO_TOKEN: ${{ secrets.BAO_TOKEN }}
           GITHUB_SHA_FULL: ${{ github.sha }}
+          EXECUTION_DIGEST: ${{ needs.image.outputs.execution_digest }}
         run: |
           set -euo pipefail
-          for v in PORTAINER_API_KEY BAO_TOKEN PORTAINER_ENDPOINT_ID; do
+          for v in PORTAINER_API_KEY BAO_TOKEN PORTAINER_ENDPOINT_ID EXECUTION_DIGEST; do
             [ -n "${!v}" ] || { echo "::error::$v absent (secret ou variable du dépôt)"; exit 1; }
           done
           umask 077
@@ -184,4 +185,6 @@ jobs:
           PORTAINER_API_KEY= scripts/vault-render-env.sh
           # Le tag que le job image vient de pousser (metadata-action : sha-<7 car.>).
           printf 'IMAGE_TAG=sha-%s\n' "${GITHUB_SHA_FULL::7}" >> "$PORTAIL_STACK_ENV"
+          # Digest de l'image d'exécution que le job image vient de pousser.
+          printf 'EXECUTION_DIGEST=%s\n' "$EXECUTION_DIGEST" >> "$PORTAIL_STACK_ENV"
           BAO_TOKEN= scripts/portainer-stack.sh up
