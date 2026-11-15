@@ -25,6 +25,17 @@ describe('sansBlocModele', () => {
   it('rend le texte tel quel sans bloc', () => {
     expect(sansBlocModele('Texte')).toBe('Texte')
   })
+  it('ignore une mention en ligne qui n’est pas une clôture', () => {
+    const md = 'Écris un bloc ```json puis du texte.\n\n```\ncode\n```\n'
+    expect(sansBlocModele(md)).toBe(md)
+  })
+  it('retire le bloc avec des fins de ligne Windows', () => {
+    expect(sansBlocModele('Texte\r\n\r\n```json\r\n{"a":1}\r\n```\r\n')).toBe('Texte')
+  })
+  it('laisse tel quel un bloc json non refermé', () => {
+    const md = 'Texte\n\n```json\n{"a":1}\n'
+    expect(sansBlocModele(md)).toBe(md)
+  })
 })
 
 describe('liens du document d’architecture', () => {

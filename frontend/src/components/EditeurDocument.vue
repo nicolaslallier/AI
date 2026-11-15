@@ -10,6 +10,9 @@ const texte = ref(doc.value.contenu)
 watch(() => doc.value.contenu, (c) => (texte.value = c))
 const modifie = computed(() => texte.value !== doc.value.contenu)
 const validee = computed(() => doc.value.etat === 'validee')
+// Le bloc du modèle ArchiMate n'existe que dans les documents de la vision et des volets.
+const masquerModele = computed(() => props.etape.produit === 'vision' || props.etape.produit === 'volet')
+const afficher = (md: string) => rendreMarkdown(masquerModele.value ? sansBlocModele(md) : md)
 const automatique = computed(() => props.etape.produit === 'volet') // validé sans action de l'utilisateur
 const titres: Record<string, string> = { plan: 'Plan', vision: 'Vision', volet: 'Volet', architecture: 'Synthèse de l’architecture' }
 </script>
@@ -19,7 +22,7 @@ const titres: Record<string, string> = { plan: 'Plan', vision: 'Vision', volet: 
     <h3>{{ titres[etape.produit ?? ''] ?? 'Spec' }} <span v-if="validee" class="badge terminee">Validée</span></h3>
     <div class="cote">
       <textarea v-if="!validee" v-model="texte" rows="20"></textarea>
-      <div v-if="!sansApercu" class="apercu markdown" v-html="rendreMarkdown(sansBlocModele(validee ? doc.contenu : texte))"></div>
+      <div v-if="!sansApercu" class="apercu markdown" v-html="afficher(validee ? doc.contenu : texte)"></div>
     </div>
     <p v-if="message" class="erreur">{{ message }}</p>
     <template v-if="!validee">
