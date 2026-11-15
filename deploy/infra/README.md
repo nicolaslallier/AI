@@ -29,3 +29,24 @@ Ces éléments vivent côté Infra ; ce dossier en garde la source.
    Keycloak) : `form-action 'self'` s'applique aux redirections qui suivent un
    formulaire, donc au bouton de `/oauth2/sign_in`. S'il est bloqué, activer
    `skip_provider_button` ou ajouter l'hôte Keycloak à `form-action`.
+
+# PR Infra du lot G (monitoring)
+
+Sans cette PR, `/metrics` répond sur `infra-net` sans être lu : rien ne casse. Elle recopie :
+
+1. `monitoring/prometheus/prometheus.yml` : un job `portail` avec `metrics_path: /metrics` et
+   `static_configs: [{targets: ["portail:8000"]}]` (le service `portail` est sur `infra-net`,
+   comme pour le vhost).
+2. Les quatre `deploy/grafana/portail-*.json` vers `monitoring/grafana/provisioning/dashboards/json/`.
+3. `deploy/grafana/alertes-portail.yml` vers `monitoring/grafana/provisioning/alerting/portail.yml`
+   (la politique par défaut de l'Infra les envoie au point de contact `ntfy`). Le portail
+   injoignable est déjà couvert par la règle `infra-target-down`.
+4. `deploy/nginx/portail.conf` vers `nginx/conf.d/` (bloc `location ^~ /metrics`).
+5. **Vérifications après déploiement** :
+   - la cible `portail` est `UP` dans Prometheus ;
+   - `curl -sk -o /dev/null -w '%{http_code}' https://<hôte du portail>/metrics` rend `404` ;
+   - les quatre tableaux s'affichent dans le dossier Infra, sans erreur de requête ;
+   - les quatre règles sont visibles dans Alerting ;
+   - Loki rend des lignes JSON avec `{container=~"portail-portail.*"} | json | agent != ""` ;
+   - cAdvisor expose bien `name=~"portail-.*"` ; sinon corriger le filtre des panneaux mémoire et
+     CPU du tableau `portail-sante`.
