@@ -58,7 +58,6 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}-portail
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
             type=sha
 
       - id: meta-lanceur
@@ -66,7 +65,6 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}-lanceur
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
             type=sha
 
       - id: meta-execution
@@ -74,7 +72,6 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}-execution
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
             type=sha
 
       # ponytail: amd64 seul (hôte de déploiement) ; ajouter arm64 comme DarkAngel si la pile doit tourner sur le Mac mini.
@@ -90,9 +87,6 @@ jobs:
           cache-to: type=gha,mode=max
 
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         with:
           image-ref: ${{ steps.nom.outputs.base }}-portail@${{ steps.construire.outputs.digest }}
           severity: CRITICAL,HIGH
@@ -112,9 +106,6 @@ jobs:
           cache-to: type=gha,mode=max,scope=lanceur
 
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         with:
           image-ref: ${{ steps.nom.outputs.base }}-lanceur@${{ steps.construire-lanceur.outputs.digest }}
           severity: CRITICAL,HIGH
@@ -134,14 +125,26 @@ jobs:
           cache-to: type=gha,mode=max,scope=execution
 
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         with:
           image-ref: ${{ steps.nom.outputs.base }}-execution@${{ steps.construire-execution.outputs.digest }}
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: 1
+
+      # `latest` n'est posé qu'après les trois analyses : une image refusée par Trivy
+      # n'existe que sous son tag immuable sha-<7>, que rien ne déploie.
+      - name: Publier latest
+        if: github.ref == 'refs/heads/main'
+        env:
+          BASE: ${{ steps.nom.outputs.base }}
+          DIGEST_PORTAIL: ${{ steps.construire.outputs.digest }}
+          DIGEST_LANCEUR: ${{ steps.construire-lanceur.outputs.digest }}
+          DIGEST_EXECUTION: ${{ steps.construire-execution.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create -t "$BASE-portail:latest" "$BASE-portail@$DIGEST_PORTAIL"
+          docker buildx imagetools create -t "$BASE-lanceur:latest" "$BASE-lanceur@$DIGEST_LANCEUR"
+          docker buildx imagetools create -t "$BASE-execution:latest" "$BASE-execution@$DIGEST_EXECUTION"
 
   deploy:
     needs: image

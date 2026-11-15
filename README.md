@@ -14,7 +14,7 @@ uv run pytest
 
 ## Déploiement
 
-Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolaslallier/ai-portail`, `ai-lanceur` et `ai-execution` (amd64) à chaque push sur `main` et la publie avec les tags `latest` et `sha-<7 premiers caractères du commit>`. Le job `deploy` enchaîne alors le redéploiement de la pile `portail` dans Portainer (voir « Redéploiement automatique »).
+Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolaslallier/ai-portail`, `ai-lanceur` et `ai-execution` (amd64) à chaque push sur `main` et les publie avec le tag `sha-<7 premiers caractères du commit>` ; `latest` n'est posé sur ces mêmes digests qu'une fois les trois analyses Trivy réussies. Le job `deploy` enchaîne alors le redéploiement de la pile `portail` dans Portainer (voir « Redéploiement automatique »).
 
 - **Pile Portainer** : `deploy/portainer-stack.yml`, sur le réseau externe `infra-net`, sans port publié. Variables à renseigner dans la pile : `PORTAIL_DB_PASSWORD` (mot de passe du rôle `portail` de Postgres, sans `@ : / %` ni autre caractère spécial d'URL, ou alors encodé en pourcentage : il est inséré tel quel dans l'URL de la base), `PORTAIL_LITELLM_CLE` (clé LiteLLM), `EXECUTION_DIGEST` (digest `sha256:…` de l'image d'exécution, imposé par le déploiement automatique ; le lanceur ne démarre que cette référence épinglée) et `IMAGE_TAG` (le déploiement automatique l'impose à `sha-<7>` ; `latest` n'est que le défaut quand il est absent, par exemple pour une pile créée à la main).
 - **NGINX** : `deploy/nginx/portail.conf` est le vhost `portail.infra.famillelallier.net`. Il se copie dans `Infra/nginx/conf.d/` par une PR séparée sur le dépôt Infra.
