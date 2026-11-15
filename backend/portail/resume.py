@@ -6,6 +6,7 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from portail.conversations import ServiceConversation
 from portail.db import MessageConversation, Resume
@@ -14,6 +15,7 @@ from portail.outils_portail import activite_depuis
 
 logger = logging.getLogger(__name__)
 
+ERREUR_PAUSE_S = 60.0  # attente avant de réessayer après une erreur
 TORONTO = ZoneInfo("America/Toronto")
 CONSIGNE = (
     "Ce qui s'est passé depuis le dernier résumé, ce qui est bloqué, ce qui attend Nicolas. "
@@ -49,7 +51,11 @@ async def resumer_si_du(
         dernier = await s.scalar(select(Resume.cree_le).order_by(Resume.cree_le.desc()).limit(1))
         actif = bool(await activite_depuis(s, dernier or maintenant - timedelta(hours=24), 1))
         s.add(Resume(jour=jour, cree_le=maintenant))
-        await s.commit()
+        try:
+            await s.commit()
+        except IntegrityError:  # un autre appel a pris ce jour entre-temps
+            logger.info("résumé du %s déjà pris par un autre appel", jour.isoformat())
+            return False
     if not actif:
         return False
     c = await conversations.creer("pm")
@@ -83,8 +89,9 @@ async def tourner(
     while True:
         try:
             await resumer_si_du(sessions, conversations, notifieur, horloge(), heure, url_publique)
+            maintenant = horloge()
+            pause = max((prochaine_echeance(maintenant, heure) - maintenant).total_seconds(), 1)
         except Exception:
             logger.exception("résumé du matin impossible")
-        await asyncio.sleep(
-            max((prochaine_echeance(horloge(), heure) - horloge()).total_seconds(), 1)
-        )
+            pause = ERREUR_PAUSE_S
+        await asyncio.sleep(pause)

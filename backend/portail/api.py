@@ -399,7 +399,7 @@ def create_app(
             await app.state.conversations.recuperer_interrompues(s)
             await s.commit()
         boucles: list[asyncio.Task] = []
-        if "pm" in app.state.catalogue.agents:
+        if "pm" in app.state.catalogue.agents and r.resume_heure:
             boucles.append(
                 asyncio.create_task(
                     resume.tourner(

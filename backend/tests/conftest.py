@@ -122,7 +122,7 @@ CATALOGUE_TEST = Catalogue(
 
 @pytest.fixture
 def reglages(schema, tmp_path):
-    return Reglages(database_url=URL, donnees_dir=tmp_path / "donnees")
+    return Reglages(database_url=URL, donnees_dir=tmp_path / "donnees", resume_heure="")
 
 
 @pytest.fixture
