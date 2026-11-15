@@ -214,16 +214,17 @@ class ServiceChat:
             contenu = contenu.strip()
             if not contenu:
                 raise Refus(422, "le message est vide")
+            if modele and modele not in self._catalogue.modeles_permis:
+                raise Refus(422, f"modèle non permis : {modele}")
             if (
                 spec
-                and modele
                 and not etape.modele
                 and not await s.scalar(select(Message.id).where(Message.etape_id == etape_id))
-            ):
-                if modele not in self._catalogue.modeles_permis:  # figé dès le premier message
-                    raise Refus(422, f"modèle non permis : {modele}")
-                etape.modele = modele
+            ):  # figé dès le premier message (choisi, sinon celui de l'agent)
+                etape.modele = modele or self._agent(etape).modele
             agent = self._agent(etape)
+            if modele and modele != agent.modele:
+                raise Refus(409, f"modèle déjà figé : {agent.modele}")
             avec = await self._demande(s, etape, agent) + [{"role": "user", "content": contenu}]
             if jauge(agent, avec).niveau == "plein":
                 raise Refus(
@@ -248,7 +249,7 @@ class ServiceChat:
                 )
             if not agent.consigne_redaction:
                 raise Refus(409, "cet agent ne rédige pas de document")
-            if not etape.modele:  # le modèle auteur du brouillon est figé
+            if agent.produit == "spec" and not etape.modele:  # le modèle auteur est figé
                 etape.modele = agent.modele
             etape.action = "rediger"
             await changer_etat(s, etape, Etat.EN_COURS)

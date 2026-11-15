@@ -189,7 +189,10 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
                     },
                     "produit": agent.produit if agent else None,
                     "modele": agent.modele if agent else None,
-                    "modeles": catalogue.modeles_permis,
+                    "modele_fige": e.modele is not None,
+                    "modeles": catalogue.modeles_permis
+                    if agent and agent.produit == "spec"
+                    else [],
                     "messages": e.messages,
                     "document": e.document
                     and {

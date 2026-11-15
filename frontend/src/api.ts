@@ -114,6 +114,7 @@ export interface Etape {
   sha: string | null
   produit: string | null
   modele: string | null
+  modele_fige: boolean
   modeles: string[]
   messages: Message[]
   document: Document | null

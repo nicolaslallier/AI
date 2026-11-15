@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import type { Etape } from '../api'
 import { rendreMarkdown } from '../markdown'
 import JaugeContexte from './JaugeContexte.vue'
@@ -15,7 +15,9 @@ const props = defineProps<{
 const emit = defineEmits<{ envoyer: [contenu: string, vider: () => void, modele?: string]; rediger: []; reessayer: [] }>()
 const saisie = ref('')
 const modele = ref(props.etape.modele ?? '')
-const choixModele = () => props.etape.produit === 'spec' && props.etape.messages.length === 0 && !props.etape.document
+watch(() => props.etape.modele, (m) => (modele.value = m ?? ''))
+// même règle que le serveur : spec, modèle pas encore figé, aucun message
+const choixModele = () => props.etape.produit === 'spec' && !props.etape.modele_fige && props.etape.messages.length === 0
 
 function envoyer() {
   const t = saisie.value.trim()
