@@ -188,7 +188,7 @@ async def test_flux_interrompu_par_la_fermeture(interne):
     r = await asyncio.wait_for(tache, 5)
     lignes = [json.loads(ligne) for ligne in r.text.splitlines()]
     assert lignes[-1] == {"type": "erreur", "erreur": "mission arrêtée"}
-    assert not m.verrou.locked()
+    assert not m.occupee
 
 
 async def test_corps_illisible_422(interne):
@@ -321,7 +321,7 @@ async def test_huit_par_tour(interne, espace):
         "arret": False,
     }
     assert len(vus) == 8
-    await interne.post("modele", m, MSG)
+    await interne.post("modele", m, {**MSG, "outils": True})
     r = await interne.post("outils", m, _outil("lire", chemin="README.md"))
     assert "Projet" in r.json()["resultat"]
 
@@ -418,3 +418,279 @@ async def test_arret_apres_proposition(interne, sessions):
     interne.llm.reponses = [_reponse()]
     await interne.post("modele", m, {**MSG, "outils": True})
     assert interne.llm.appels[-1]["outils"] is None
+
+
+# --- revue de sécurité : échéance, outils liés au modèle, simultanéité, format ---------------
+
+
+async def _corps_lent(avant, apres):
+    """Un corps de requête en deux morceaux ; `avant` s'exécute entre les deux."""
+    yield b'{"messages": [{"role": "user", '
+    await avant()
+    yield apres
+
+
+async def test_echeance_depassee_pendant_la_lecture_du_corps(interne, espace):
+    m = interne.ouvrir(_agent("revue", outils=["lire"]), espace)
+    entetes = {"Authorization": f"Bearer {m.jeton}"}
+
+    async def passe_l_echeance():
+        interne.horloge.t = 100
+
+    r = await interne.client.post(
+        "/interne/modele",
+        content=_corps_lent(passe_l_echeance, b'"content": "x"}]}'),
+        headers=entetes,
+    )
+    assert r.status_code == 409 and interne.llm.appels == []
+    m = interne.ouvrir(_agent("revue", outils=["lire"]), espace)
+    entetes = {"Authorization": f"Bearer {m.jeton}"}
+    interne.horloge.t = 0
+
+    async def passe_encore():
+        interne.horloge.t = 200
+
+    async def corps():
+        yield b'{"nom": "lire", '
+        await passe_encore()
+        yield b'"arguments": "{}"}'
+
+    r = await interne.client.post("/interne/outils", content=corps(), headers=entetes)
+    assert r.status_code == 409
+
+
+async def test_outils_refuses_sans_appel_modele_qui_les_offre(interne, espace):
+    m = interne.ouvrir(_agent("revue", outils=["lire"]), espace)
+    m.outils_ouverts = False
+    r = await interne.post("outils", m, _outil("lire", chemin="README.md"))
+    assert r.status_code == 409
+    interne.llm.reponses = [_reponse(), _reponse()]
+    await interne.post("modele", m, {**MSG, "outils": False})
+    assert (await interne.post("outils", m, _outil("lire", chemin="README.md"))).status_code == 409
+    await interne.post("modele", m, {**MSG, "outils": True})
+    assert (await interne.post("outils", m, _outil("lire", chemin="README.md"))).status_code == 200
+    interne.llm.reponses = [_reponse()]
+    await interne.post("modele", m, {**MSG, "outils": False})  # tout autre appel retire le droit
+    assert (await interne.post("outils", m, _outil("lire", chemin="README.md"))).status_code == 409
+
+
+async def test_tours_max_borne_les_executions_d_outils(interne, espace):
+    vus = []
+
+    async def sur_appel(libelle, resultat):
+        vus.append(libelle)
+
+    m = interne.ouvrir(_agent("revue", outils=["lire"], tours_max=1), espace, sur_appel=sur_appel)
+    m.outils_ouverts = False
+    interne.llm.reponses = [_reponse(), _reponse()]
+    codes = []
+    for _ in range(3):  # l'agent enchaîne appels au modèle et rafales d'outils
+        r = await interne.post("modele", m, {**MSG, "outils": True})
+        codes.append(r.status_code)
+        for _ in range(12):
+            await interne.post("outils", m, _outil("lire", chemin="README.md"))
+    assert codes == [200, 200, 429]
+    assert len(vus) <= 8  # `_MAX_APPELS_PAR_TOUR`, comme dans boucle.py
+    assert interne.llm.appels[0]["outils"] == m.schemas
+    assert interne.llm.appels[1]["outils"] is None  # appel tours_max + 1 : plus d'outils
+    assert m.limite_atteinte
+
+
+async def test_demande_simultanee_refusee_429(interne):
+    m = interne.ouvrir()
+    bloque = asyncio.Event()
+    interne.llm.reponses = [bloque, _reponse(), _reponse()]
+    premiere = asyncio.create_task(interne.post("modele", m, MSG))
+    while not interne.llm.appels:
+        await asyncio.sleep(0)
+    r = await interne.post("modele", m, MSG)
+    assert (r.status_code, r.json()) == (429, {"erreur": "une demande est déjà en cours"})
+    r = await interne.post("outils", m, _outil("lire"))
+    assert r.status_code == 429
+    bloque.set()
+    assert (await premiere).status_code == 200
+    assert not m.occupee
+    assert (await interne.post("modele", m, MSG)).status_code == 200
+
+
+async def test_corps_lent_interrompu_par_la_fermeture(interne):
+    m = interne.ouvrir()
+    lu = asyncio.Event()
+
+    async def corps():
+        yield b'{"messages": ['
+        lu.set()
+        await asyncio.Event().wait()
+        yield b"]}"
+
+    tache = asyncio.create_task(
+        interne.client.post(
+            "/interne/modele", content=corps(), headers={"Authorization": f"Bearer {m.jeton}"}
+        )
+    )
+    await lu.wait()
+    await asyncio.sleep(0.02)
+    assert m.occupee
+    await interne.missions.fermer(m)
+    r = await asyncio.wait_for(tache, 5)
+    assert r.status_code == 409 and not m.occupee
+
+
+async def test_lecteur_bloque_puis_fermer_libere_le_verrou(interne):
+    from portail import missions as mod
+
+    m = interne.ouvrir()
+    interne.llm.morceaux = [f"m{i}" for i in range(500)]  # plus que la file bornée
+    m.occupee = True  # pris par la route, rendu par le flux
+    flux = mod._flux_modele(interne.missions, m, [{"role": "user", "content": "x"}])
+    premiere = await anext(flux)  # puis l'agent cesse de lire
+    assert json.loads(premiere)["type"] == "texte"
+    await asyncio.sleep(0.05)
+    assert m.en_vol and not m.tache  # le producteur est bloqué sur la file pleine
+    await interne.missions.fermer(m)
+    assert not m.occupee and not m.en_vol
+    lignes = [json.loads(x) async for x in flux]
+    assert lignes[-1] == {"type": "erreur", "erreur": "mission arrêtée"}
+
+
+async def test_corps_en_morceaux_sans_content_length_borne(interne, monkeypatch):
+    from portail import missions as mod
+
+    monkeypatch.setattr(mod, "CORPS_MAX", 1000)
+    m = interne.ouvrir()
+
+    async def corps():
+        for _ in range(100):
+            yield b" " * 100
+
+    r = await interne.client.post(
+        "/interne/modele", content=corps(), headers={"Authorization": f"Bearer {m.jeton}"}
+    )
+    assert r.status_code == 413 and interne.llm.appels == []
+
+
+@pytest.mark.parametrize(
+    "format_",
+    [
+        {"type": "zzz"},
+        {"type": "json_object", "extra": 1},
+        {"type": "json_schema"},
+        {"type": "json_schema", "json_schema": "x"},
+        {"type": "json_schema", "json_schema": {"x": "y" * 40_000}},
+        "json",
+    ],
+)
+async def test_response_format_strict_et_borne(interne, format_):
+    m = interne.ouvrir()
+    r = await interne.post("modele", m, {**MSG, "response_format": format_})
+    assert (r.status_code, r.json()) == (422, {"erreur": "demande invalide"})
+    assert interne.llm.appels == []
+
+
+async def test_response_format_permis_et_compte_dans_le_contexte(interne):
+    m = interne.ouvrir(_agent("revue", contexte_max=200))
+    interne.llm.reponses = [_reponse()]
+    permis = {"type": "json_schema", "json_schema": {"name": "n", "schema": {"type": "object"}}}
+    assert (await interne.post("modele", m, {**MSG, "response_format": permis})).status_code == 200
+    assert interne.llm.appels[-1]["response_format"] == permis
+    gros = {"type": "json_schema", "json_schema": {"name": "n", "schema": {"x": "y" * 2000}}}
+    r = await interne.post("modele", m, {**MSG, "response_format": gros})
+    assert r.status_code == 413
+    assert len(interne.llm.appels) == 1
+
+
+async def test_contexte_deja_porteur_de_lieu(interne):
+    journal.commencer(lieu="portail", version_image="v-ancienne")
+    m = interne.ouvrir()
+    journal.commencer()
+    interne.llm.reponses = [_reponse()]
+    assert (await interne.post("modele", m, MSG)).status_code == 200
+    assert interne.llm.appels[-1]["contexte"]["lieu"] == "conteneur"
+
+
+async def test_exception_inattendue_du_modele(interne):
+    m = interne.ouvrir()
+    m.tache = asyncio.create_task(asyncio.Event().wait())
+    interne.llm.exception = RuntimeError("ZZ-secret-7731")
+    r = await interne.post("modele", m, MSG)
+    assert (r.status_code, r.json()) == (502, {"erreur": "modèle indisponible"})
+    assert isinstance(m.erreur, ErreurLLM) and "ZZ-secret" not in str(m.erreur)
+    await asyncio.sleep(0)
+    assert m.tache.cancelled()  # M4 : le flux vers l'agent est coupé aussi
+
+
+async def test_exception_inattendue_du_flux(interne):
+    m = interne.ouvrir()
+    interne.llm.exception = RuntimeError("ZZ-secret-7731")
+    r = await interne.post("modele", m, {**MSG, "flux": True})
+    assert json.loads(r.text.splitlines()[-1]) == {
+        "type": "erreur",
+        "erreur": "modèle indisponible",
+    }
+    assert "ZZ-secret" not in r.text
+    assert isinstance(m.erreur, ErreurLLM) and not m.occupee
+
+
+async def test_erreur_llm_coupe_le_flux_vers_l_agent(interne):
+    m = interne.ouvrir()
+    m.tache = asyncio.create_task(asyncio.Event().wait())
+    interne.llm.exception = ErreurLLM("x")
+    assert (await interne.post("modele", m, MSG)).status_code == 502
+    await asyncio.sleep(0)
+    assert m.tache.cancelled()
+
+
+async def test_sur_appel_ne_survit_pas_a_la_fermeture(interne, espace):
+    ecrits, bloque = [], asyncio.Event()
+
+    async def sur_appel(libelle, resultat):
+        await bloque.wait()
+        ecrits.append(libelle)
+
+    m = interne.ouvrir(_agent("revue", outils=["lire"]), espace, sur_appel=sur_appel)
+    tache = asyncio.create_task(interne.post("outils", m, _outil("lire", chemin="README.md")))
+    await asyncio.sleep(0.05)
+    await interne.missions.fermer(m)
+    r = await asyncio.wait_for(tache, 5)
+    bloque.set()
+    await asyncio.sleep(0.02)
+    assert r.status_code == 409 and ecrits == []
+
+
+async def test_jeton_d_une_mission_n_agit_pas_sur_une_autre(interne, espace):
+    vus_a, vus_b = [], []
+
+    async def sur_a(libelle, resultat):
+        vus_a.append(libelle)
+
+    async def sur_b(libelle, resultat):
+        vus_b.append(libelle)
+
+    a = interne.ouvrir(_agent("revue", outils=["lire"]), espace, sur_appel=sur_a)
+    b = interne.ouvrir(_agent("code", outils=["lire"]), espace, sur_appel=sur_b)
+    interne.llm.reponses = [_reponse()]
+    await interne.post("modele", a, {**MSG, "outils": True})
+    await interne.post("outils", a, _outil("lire", chemin="README.md"))
+    assert (a.appels_modele, a.appels_tour, len(vus_a)) == (1, 1, 1)
+    assert (b.appels_modele, b.appels_tour, vus_b) == (0, 0, [])
+    await interne.missions.fermer(a)
+    assert (await interne.post("outils", a, _outil("lire", chemin="README.md"))).status_code == 401
+    assert (await interne.post("outils", b, _outil("lire", chemin="README.md"))).status_code == 200
+    assert vus_b == ["lire(README.md)"] and len(vus_a) == 1
+
+
+async def test_message_rendu_normalise_les_tool_calls(interne):
+    m = interne.ouvrir()
+    interne.llm.reponses = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "z", "index": 0, "function": {"name": "lire", "arguments": {"a": 1}}}
+            ],
+        }
+    ]
+    message = (await interne.post("modele", m, MSG)).json()["message"]
+    assert message["tool_calls"] == [
+        {"id": "z", "type": "function", "function": {"name": "lire", "arguments": '{"a": 1}'}}
+    ]

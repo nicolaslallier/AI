@@ -156,12 +156,23 @@ async def client(moteur, reglages, faux_llm):
 # --- routes /interne/ ----------------------------------------------------
 
 
+class Horloge:
+    """Horloge des tests : `t` avance quand le test le décide."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
 class Interne:
     """Une `FastAPI` nue avec les routes `/interne/`, sans base ni lifespan."""
 
     def __init__(self, faux_llm):
         self.llm = faux_llm
-        self.missions = Missions({}, 60)
+        self.horloge = Horloge()
+        self.missions = Missions({}, 60, horloge=self.horloge)
         app = FastAPI()
         app.state.missions = self.missions
         app.include_router(ROUTEUR_INTERNE)
@@ -171,9 +182,11 @@ class Interne:
         async def rien(libelle, resultat):
             return None
 
-        return self.missions.ouvrir(
+        m = self.missions.ouvrir(
             llm or self.llm, agent or _agent("revue"), outils, sur_appel or rien, version
         )
+        m.outils_ouverts = bool(outils)  # comme si un appel au modèle avait offert les outils
+        return m
 
     async def post(self, chemin, m, corps, **kw):
         return await self.client.post(

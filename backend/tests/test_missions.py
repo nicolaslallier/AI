@@ -2,6 +2,7 @@ import asyncio
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
@@ -64,8 +65,29 @@ def test_faute_de_frappe_dans_un_exemple_echoue():
 def test_message_refuse_les_champs_inventes():
     with pytest.raises(ValidationError):
         MessageLLM.model_validate({"role": "user", "content": "x", "inventé": "y" * 10})
-    MessageLLM.model_validate({"role": "assistant", "content": None, "tool_calls": [{"id": "a"}]})
+    MessageLLM.model_validate(
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "a", "type": "function", "function": {"name": "lire", "arguments": "{}"}}
+        ]}
+    )  # fmt: skip
     MessageLLM.model_validate({"role": "tool", "content": "r", "tool_call_id": "a", "name": "lire"})
+
+
+@pytest.mark.parametrize(
+    "appel",
+    [
+        {"id": "a"},
+        {"id": "a", "type": "function", "function": {"name": "lire", "arguments": {}}},
+        {"id": "a", "type": "function", "function": {"name": "lire", "arguments": "{}", "z": 1}},
+        {"id": "a", "type": "autre", "function": {"name": "lire", "arguments": "{}"}},
+        {"id": "a", "type": "function", "function": {"name": "n" * 200, "arguments": "{}"}},
+        {"id": "a", "type": "function", "function": {"name": "lire", "arguments": "x" * 300_000}},
+        {"id": "a", "type": "function", "function": {"name": "lire", "arguments": "{}"}, "z": 1},
+    ],
+)
+def test_tool_calls_stricts(appel):
+    with pytest.raises(ValidationError):
+        MessageLLM.model_validate({"role": "assistant", "content": None, "tool_calls": [appel]})
 
 
 def test_bornes_des_demandes():
@@ -238,6 +260,21 @@ def test_jeton_absent_du_repr():
     assert m.jeton not in repr(m)
     corps = {**EXEMPLES["mission"], "jeton": "JETON-SECRET-ZZ"}
     assert "JETON-SECRET-ZZ" not in repr(DemandeMission.model_validate(corps))
+
+
+async def test_purge_ferme_vraiment_les_expirees():
+    horloge = Horloge()
+    missions = _missions(horloge)
+    vieille = _ouvrir(missions)
+    vieille.tache = asyncio.ensure_future(asyncio.Event().wait())
+    en_vol = asyncio.ensure_future(asyncio.Event().wait())
+    vieille.en_vol.add(en_vol)
+    vieille.occupee = True
+    horloge.t = 100
+    _ouvrir(missions)
+    await asyncio.sleep(0)
+    assert vieille.fermee and not vieille.occupee
+    assert vieille.tache.cancelled() and en_vol.cancelled()
 
 
 def test_ouvrir_purge_les_expirees():
@@ -498,6 +535,82 @@ async def test_erreur_d_outil_du_portail_relevee_et_flux_coupe(faux_agent, faux_
     _morte(faux_agent)
 
 
+async def test_limite_de_l_agent_jamais_crue(faux_agent, faux_llm):
+    async def jouer(demande, portail):
+        yield _fin(limite_atteinte=True)
+
+    faux_agent.jouer = jouer
+    r, _ = await _tourner(faux_agent, faux_llm)
+    assert r.limite_atteinte is False  # seuls les compteurs du portail comptent
+
+
+async def test_total_du_flux_borne(faux_agent, faux_llm, monkeypatch):
+    monkeypatch.setattr(mod_missions, "TOTAL_MAX", 300)
+
+    async def jouer(demande, portail):
+        for _ in range(20):
+            yield {"type": "texte", "texte": "x" * 40}
+        yield _fin()
+
+    faux_agent.jouer = jouer
+    with pytest.raises(ErreurMission) as e:
+        await _tourner(faux_agent, faux_llm)
+    assert str(e.value) == "agent « revue » : mission interrompue"
+    assert faux_agent.deconnecte.is_set()
+    _morte(faux_agent)
+
+
+async def test_lecture_lineaire_de_milliers_de_lignes(faux_agent, faux_llm):
+    async def jouer(demande, portail):
+        yield "".join('{"type": "texte", "texte": "a"}\n' for _ in range(20_000))
+        yield _fin(texte="ok")
+
+    faux_agent.jouer = jouer
+    recus = []
+
+    async def sur_texte(t):
+        recus.append(t)
+
+    r, _ = await asyncio.wait_for(_tourner(faux_agent, faux_llm, sur_texte=sur_texte), 10)
+    assert r.texte == "ok" and len(recus) == 20_000
+
+
+async def test_longue_ligne_par_petits_morceaux(faux_agent, faux_llm, monkeypatch):
+    monkeypatch.setattr(mod_missions, "LIGNE_MAX", 5000)
+
+    async def jouer(demande, portail):
+        for _ in range(100):
+            yield "x" * 100  # jamais de saut de ligne
+
+    faux_agent.jouer = jouer
+    with pytest.raises(ErreurMission, match="mission interrompue"):
+        await _tourner(faux_agent, faux_llm)
+
+
+class _Goutte(httpx.AsyncByteStream):
+    def __init__(self, n, pause):
+        self.n, self.pause = n, pause
+
+    async def __aiter__(self):
+        for _ in range(self.n):
+            await asyncio.sleep(self.pause)
+            yield b"x"
+
+
+async def test_sante_delai_total_et_taille_bornee():
+    def lent(request):
+        return httpx.Response(200, stream=_Goutte(200, 0.02))
+
+    def gros(request):
+        return httpx.Response(200, content=b"x" * 10_000)
+
+    for h in (lent, gros):
+        missions = Missions({"revue": "s" * 32}, 60, transport=httpx.MockTransport(h))
+        debut = asyncio.get_running_loop().time()
+        assert await missions.sante(_agent(), delai_s=0.2) is None
+        assert asyncio.get_running_loop().time() - debut < 1
+
+
 async def test_la_limite_du_portail_n_est_pas_masquee(faux_agent, faux_llm):
     faux_llm.reponses = [{"role": "assistant", "content": "ok"}] * 3
 
@@ -583,8 +696,8 @@ async def test_completer_ouvre_une_mission_sans_outils(faux_agent, faux_llm):
 async def test_completer_refuse_tout_outil(faux_agent, faux_llm):
     async def jouer(demande, portail):
         r = await portail("outils", {"nom": "ecrire", "arguments": "{}"})
-        yield _fin(texte=r.json()["resultat"])
+        yield _fin(texte=str(r.status_code))
 
     faux_agent.jouer = jouer
     texte = await completer(faux_llm, faux_agent.registre, _agent(), _messages(), {"type": "x"})
-    assert texte.startswith("erreur : outil non autorisé")
+    assert texte == "409"  # aucun appel au modèle n'a offert d'outil à cette mission
