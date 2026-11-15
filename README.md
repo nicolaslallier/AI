@@ -31,6 +31,28 @@ Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolas
     - installer l'application Renovate sur le dépôt.
     - remplacer `PORTAIL_LITELLM_CLE` dans OpenBao par une clé LiteLLM limitée aux modèles de `modeles_permis` (`agents.yaml`), jamais la clé maîtresse.
 
+## Sécurité
+
+Le dépôt est public : rien de secret n'y entre, tout passe par OpenBao.
+
+- **Ce que la CI bloque** : audits de dépendances (`pip-audit`, `npm audit`, `cargo audit`), secrets (`gitleaks`) et images avec une faille CRITICAL/HIGH corrigeable (Trivy, sur les trois images). `latest` n'est posé qu'après les trois analyses ; avant, une image ne porte que `sha-<7>`.
+- **Épinglage** : actions et images de base par SHA ou digest, mises à jour proposées par Renovate. Un projet nomme une image par `nom:tag` ; le lanceur la résout vers le digest de `LANCEUR_IMAGES` / `LANCEUR_IMAGES_SERVICES` et refuse le reste. Le lanceur et l'image d'exécution tournent avec `cap_drop: ALL` et `read_only`.
+- **Modèles** : `modeles_permis` (`agents.yaml`) liste les seuls modèles admis, `modele_si_meme` compris ; la clé LiteLLM du portail est limitée à cette liste.
+- **Journal d'audit** : table `audit` (auteur, action, objet, identifiant, date), lisible par `GET /api/audit` (`limite`, `avant`), sans écriture par l'API. Hors développement local, l'auteur est l'adresse e-mail transmise par oauth2-proxy.
+- **Aucun contenu dans les journaux ni les notifications** : ni message, ni document, ni sortie de commande, ni secret. Les erreurs passent par `portail.journal.erreur` (classe de l'exception et pile, jamais son message) ; ntfy ne porte que des libellés génériques, le résumé du matin envoie seulement « Résumé prêt » et le lien.
+
+### Étapes manuelles (hors dépôt)
+
+1. Protéger `main` : exiger les contrôles `backend`, `frontend`, `lanceur` et `securite` avant fusion.
+2. Installer l'application Renovate sur le dépôt.
+3. Émettre la clé LiteLLM limitée aux modèles de `modeles_permis` et la ranger dans OpenBao (`PORTAIL_LITELLM_CLE`), jamais la clé maîtresse.
+4. Vérifier que la base `portail` et le volume `portail-donnees-2` sont dans les sauvegardes chiffrées de l'Infra, sinon les y ajouter.
+5. Ouvrir la PR Infra décrite dans `deploy/infra/README.md` (règle Alloy, vhost, vérifications) ; le détail y reste.
+6. Décider si le dépôt devient privé (question ouverte de la spec).
+7. Épingler MinIO : `minio/minio:latest` est resté sans digest dans `deploy/portainer-stack.yml` (Docker Hub refuse l'accès anonyme à ce dépôt). Choisir un tag `RELEASE` daté, relever son digest avec un accès authentifié, le remplacer, puis nommer ce tag dans les projets.
+8. Lancer `actionlint` sur `.github/workflows` avant la fusion : il n'a pas pu tourner pendant le lot, et une erreur dans `deploy.yml` ne se verrait qu'après la fusion dans `main`.
+9. Au premier déploiement, vérifier que le lanceur durci (`cap_drop: ALL`, `read_only`) répond et démarre une exécution, et que Trivy lit bien GHCR.
+
 ### Jeton GitHub (lecture seule)
 
 Le portail lit les dépôts GitHub avec un jeton à grain fin (fine-grained), limité aux dépôts choisis, avec les permissions **Contents : Read** et **Metadata : Read** seulement, et sans aucune permission d'écriture. Il est rangé dans OpenBao (clé `PORTAIL_GITHUB_JETON` du secret `infra/portail`), que le déploiement automatique recopie dans la pile, et ne va jamais dans le dépôt. Les données du portail vivent dans le volume `portail-donnees-2`, monté sur `/donnees` (l'ancien `portail-donnees` appartient à l'ancien uid et reste orphelin : à supprimer à la main).
