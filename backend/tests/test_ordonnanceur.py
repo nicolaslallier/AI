@@ -174,8 +174,9 @@ async def test_demarrage_impossible_bloque_et_passe_a_la_suivante(tmp_path, sess
             ).all()
         assert types == ["deplacement"]
         (envoi,) = m.notifieur.envoyes
-        assert envoi["titre"] == t1.titre
-        assert envoi["message"] == "Bloquée : démarrage impossible : App non installée"
+        assert envoi["titre"] == f"Portail — tâche T{t1.id}"
+        assert envoi["message"] == "Bloquée"
+        assert "App non installée" not in envoi["titre"] + envoi["message"]
         assert envoi["lien"] == f"https://portail.x/projets/{t1.projet_id}/kanban"
     finally:
         await _arreter(m)

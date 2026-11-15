@@ -78,7 +78,7 @@ async def resumer_si_du(
     if not texte:  # la conversation finit en erreur : rien à envoyer
         return False
     await notifieur.envoyer(
-        "Résumé du matin", texte[:4000], lien_absolu(url_publique, f"/chat/{c.id}")
+        "Portail — résumé du matin", "Résumé prêt", lien_absolu(url_publique, f"/chat/{c.id}")
     )
     return True
 

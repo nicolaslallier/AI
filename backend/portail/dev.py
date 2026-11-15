@@ -53,7 +53,7 @@ from portail.github import CommentaireGitHub, ErreurGitHub, depot_depuis_url
 from portail.lanceur import ErreurLanceur, Resultat
 from portail.llm import ErreurLLM, retirer_reflexion
 from portail.moteur import Refus
-from portail.notifications import Notifieur, lien_absolu, raison_courte
+from portail.notifications import Notifieur, lien_absolu
 from portail.outils import OutilsDepot, OutilsEspace, _secret_chemin, apercu, empreinte
 from portail.protections import (
     COURRIEL_CODE,
@@ -185,6 +185,11 @@ class _Ctx:
         return self.espace.racine
 
 
+def _premiere_ligne(raison: str) -> str:
+    """Pour le commentaire de PR : première ligne non vide, jamais la sortie d'une commande."""
+    return next((ligne.strip() for ligne in raison.splitlines() if ligne.strip()), "")[:200]
+
+
 class Orchestrateur:
     def __init__(
         self,
@@ -212,9 +217,10 @@ class Orchestrateur:
     def lien(self, chemin: str) -> str | None:
         return lien_absolu(self._reglages.url_publique, chemin)
 
-    async def notifier(self, titre: str, message: str, lien: str | None) -> None:
+    async def notifier(self, tache_id: int, message: str, lien: str | None) -> None:
+        """Jamais de titre de tâche ni de raison : le dépôt et ntfy sont publics."""
         if self._notifieur:
-            await self._notifieur.envoyer(titre, message, lien)
+            await self._notifieur.envoyer(f"Portail — tâche T{tache_id}", message, lien)
 
     # --- cycle de vie ---------------------------------------------------
 
@@ -734,7 +740,7 @@ class Orchestrateur:
                 )
         await self._terminer(ctx)
         await self._au_mieux(
-            "notifier", self.notifier(ctx.tache.titre, "Reprise terminée", ctx.ex.pr_url)
+            "notifier", self.notifier(ctx.tache.id, "Reprise terminée", ctx.ex.pr_url)
         )
         return "fini"
 
@@ -1064,7 +1070,7 @@ class Orchestrateur:
                 ctx.depot, ctx.ex.branche, ctx.ex.base, ctx.tache.titre, self._corps(ctx, resume)
             )
             await self._maj(ctx, pr_numero=numero, pr_url=url)
-            await self.notifier(ctx.tache.titre, "PR ouverte", url)
+            await self.notifier(ctx.tache.id, "PR ouverte", url)
         await self._terminer(ctx)
         for p in precedentes:  # au mieux : la nouvelle PR est ouverte, quoi qu'il arrive ici
             try:
@@ -1133,7 +1139,7 @@ class Orchestrateur:
 
     async def bloquer(self, pipeline_id: int, raison: str) -> None:
         logger.warning("pipeline dev %s bloqué", pipeline_id)  # la raison reste en base
-        ex = projet = titre = None
+        ex = projet = None
         try:
             async with self._sessions() as s:
                 pipeline = await s.get(Pipeline, pipeline_id)
@@ -1143,8 +1149,6 @@ class Orchestrateur:
                     select(ExecutionDev).where(ExecutionDev.pipeline_id == pipeline_id)
                 )
                 projet = await s.get(Projet, pipeline.projet_id)
-                if ex is not None:
-                    titre = await s.scalar(select(Tache.titre).where(Tache.id == ex.tache_id))
         except Exception:  # noqa: BLE001
             journal.erreur(logger, "blocage du pipeline %s : lecture impossible", pipeline_id)
         reprise = ex is not None and ex.mode == "reprise"
@@ -1158,21 +1162,19 @@ class Orchestrateur:
             await self._au_mieux("nettoyer", self._lanceur.nettoyer(ex.espace))
             await self._au_mieux("supprimer", espace.supprimer())
         if reprise:
-            await self._echouer_reprise(pipeline_id, raison, ex, projet, titre)
+            await self._echouer_reprise(pipeline_id, raison, ex, projet)
             return
         try:
             await self._enregistrer_blocage(pipeline_id, raison, branche)
         except Exception:  # noqa: BLE001
             journal.erreur(logger, "blocage du pipeline %s : état non enregistré", pipeline_id)
             await self._au_mieux("blocage minimal", self._blocage_minimal(pipeline_id, raison))
-        if titre and projet is not None:
+        if ex is not None and projet is not None:
             lien = self.lien(f"/projets/{projet.id}/kanban")
-            await self._au_mieux(
-                "notifier", self.notifier(titre, "Bloquée : " + raison_courte(raison), lien)
-            )
+            await self._au_mieux("notifier", self.notifier(ex.tache_id, "Bloquée", lien))
 
     async def _echouer_reprise(
-        self, pipeline_id: int, raison: str, ex: ExecutionDev, projet: Projet | None, titre
+        self, pipeline_id: int, raison: str, ex: ExecutionDev, projet: Projet | None
     ) -> None:
         """La tâche revient *En revue*, verrou gardé sur la reprise ; explication sur la PR.
         Les commentaires restent pris en charge : Nicolas recommente pour relancer."""
@@ -1209,9 +1211,8 @@ class Orchestrateur:
             journal.erreur(logger, "échec de la reprise %s : état non enregistré", pipeline_id)
             minimal = self._blocage_minimal(pipeline_id, raison, reprise=True)
             await self._au_mieux("blocage minimal", minimal)
-        courte = raison_courte(raison)
         if projet is not None and ex.pr_numero is not None:
-            texte = f"La reprise n'a pas abouti : {courte}. Commentez à nouveau pour la relancer."
+            texte = f"La reprise n'a pas abouti : {_premiere_ligne(raison)}. Commentez à nouveau pour la relancer."
             try:
                 await self._github.commenter(
                     self._depot_de(projet.depot_url or ""), ex.pr_numero, texte
@@ -1220,13 +1221,12 @@ class Orchestrateur:
                 logger.warning(
                     "reprise %s : commentaire impossible (%s)", pipeline_id, type(e).__name__
                 )
-        if titre:
-            try:
-                await self.notifier(titre, "Reprise échouée : " + courte, ex.pr_url)
-            except Exception as e:  # noqa: BLE001 — jamais str(e) : pas de fuite
-                logger.warning(
-                    "reprise %s : notification impossible (%s)", pipeline_id, type(e).__name__
-                )
+        try:
+            await self.notifier(ex.tache_id, "Reprise échouée", ex.pr_url)
+        except Exception as e:  # noqa: BLE001 — jamais str(e) : pas de fuite
+            logger.warning(
+                "reprise %s : notification impossible (%s)", pipeline_id, type(e).__name__
+            )
 
     async def _enregistrer_blocage(self, pipeline_id: int, raison: str, branche: str | None):
         async with self._sessions() as s:

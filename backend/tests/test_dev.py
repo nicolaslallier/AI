@@ -663,18 +663,29 @@ async def test_pr_ouverte_notifie(monde):
     monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok", "propre")]
     await monde.lancer()
     (envoi,) = monde.notifieur.envoyes
-    assert envoi["titre"] == "Ajouter l'équipe" and envoi["message"] == "PR ouverte"
+    assert envoi["titre"] == "Portail — tâche T1" and envoi["message"] == "PR ouverte"
     assert envoi["lien"] == monde.github.prs[1]["url"]
 
 
-async def test_blocage_notifie_raison_courte(monde):
+async def test_blocage_notifie_sans_raison(monde):
     monde.lanceur.codes = {CIBLES: [1], "pytest": [1]}
     monde.llm.reponses = [*TESTS_OK, *CODE_OK]
     await monde.lancer()
     (envoi,) = monde.notifieur.envoyes
-    assert envoi["message"].startswith("Bloquée : ")
-    assert "sortie de" not in envoi["message"]
+    assert envoi["titre"] == "Portail — tâche T1" and envoi["message"] == "Bloquée"
     assert envoi["lien"] == "https://portail.x/projets/1/kanban"
+
+
+async def test_notification_sans_contenu(monde):
+    async with monde.sessions() as s:
+        (await s.get(Tache, 1)).titre = "MARQUEUR"
+        await s.commit()
+    monde.lanceur.codes = {CIBLES: [1], "pytest": [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+    await monde.lancer()
+    (envoi,) = monde.notifieur.envoyes
+    assert "MARQUEUR" not in envoi["titre"] + envoi["message"]
+    assert envoi["message"] == "Bloquée"
 
 
 async def test_corps_pr_liens_absolus(monde):

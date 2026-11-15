@@ -168,7 +168,7 @@ async def test_conflit_ramene_en_revue_avec_commentaire(monde):
     ((numero, corps),) = monde.github.commentaires
     assert numero == 1 and "conflit avec main" in corps and "Commentez à nouveau" in corps
     (envoi,) = [e for e in monde.notifieur.envoyes if e["message"] != "PR ouverte"]
-    assert envoi["message"].startswith("Reprise échouée : conflit")
+    assert envoi["titre"] == "Portail — tâche T1" and envoi["message"] == "Reprise échouée"
     assert envoi["lien"] == monde.github.prs[1]["url"]
     assert git(monde.origine, "rev-parse", BRANCHE) == pointe
     assert not (monde.reglages.espaces_dir / "tache-1-2").exists()
@@ -414,7 +414,7 @@ async def test_echec_verification_en_revue_sans_push(monde):
     assert "La reprise n'a pas abouti : vérification échouée (tests)" in corps
     assert "sortie de" not in corps
     assert monde.github.reponses == []
-    assert any(e["message"].startswith("Reprise échouée") for e in monde.notifieur.envoyes)
+    assert any(e["message"] == "Reprise échouée" for e in monde.notifieur.envoyes)
 
 
 async def test_violation_protection_en_reprise_sans_push(monde):

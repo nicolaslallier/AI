@@ -75,7 +75,7 @@ async def test_envoi_avec_activite_et_une_seule_fois_par_jour(client, sessions, 
     assert not await _appeler(client, sessions, n, _h(9, 30))
     assert len(n.envoyes) == 1
     e = n.envoyes[0]
-    assert e["titre"] == "Résumé du matin" and e["message"] == "- rien de bloqué"
+    assert e["titre"] == "Portail — résumé du matin" and e["message"] == "Résumé prêt"
     async with sessions() as s:
         c = (await s.scalars(select(Conversation))).one()
         assert c.agent == "pm" and c.titre == f"Résumé du {JOUR.isoformat()}"
@@ -91,14 +91,6 @@ async def test_avant_l_heure_rien(client, sessions):
     assert n.envoyes == []
     async with sessions() as s:
         assert (await s.scalars(select(Resume))).all() == []
-
-
-async def test_texte_coupe_a_4000(client, sessions, faux_llm):
-    await _activite(sessions, _h(5).astimezone(UTC))
-    faux_llm.reponses = [{"content": "x" * 5000}]
-    n = FauxNotifieur()
-    assert await _appeler(client, sessions, n, _h(9))
-    assert len(n.envoyes[0]["message"]) == 4000
 
 
 async def test_erreur_rien_envoye(client, sessions, faux_llm):

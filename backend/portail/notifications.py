@@ -11,12 +11,6 @@ def lien_absolu(base: str, chemin: str) -> str | None:
     return base.rstrip("/") + chemin if base else None
 
 
-def raison_courte(raison: str) -> str:
-    """Première ligne non vide, 200 caractères au plus (jamais la sortie d'une commande)."""
-    ligne = next((ligne.strip() for ligne in raison.splitlines() if ligne.strip()), "")
-    return ligne[:200]
-
-
 class Notifieur:
     def __init__(
         self, url: str, sujet: str, jeton: str, transport: httpx.AsyncBaseTransport | None = None

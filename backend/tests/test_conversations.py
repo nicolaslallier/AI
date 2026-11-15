@@ -4,13 +4,20 @@ import json
 from asgi_lifespan import LifespanManager
 from conftest import CATALOGUE_TEST, FauxLLM, _agent
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from portail import conversations
 from portail.actions import ACTIONS
 from portail.agents import OUTILS_ACTIONS_PORTAIL, Catalogue
 from portail.api import create_app
-from portail.db import ActionConversation, Conversation, Etape, Pipeline, Tache
+from portail.db import (
+    ActionConversation,
+    Conversation,
+    Etape,
+    MessageConversation,
+    Pipeline,
+    Tache,
+)
 from portail.llm import ErreurLLM
 from portail.outils_portail import OutilsPortail
 
@@ -360,6 +367,20 @@ async def _tache_verrouillee(client, sessions) -> tuple[int, int, int]:
 
 def test_noms_d_actions_alignes():
     assert set(OUTILS_ACTIONS_PORTAIL) == set(ACTIONS)
+
+
+async def test_suppression_efface_messages_et_actions(client, sessions, faux_llm):
+    cid, _ = await _proposer(client, faux_llm, "creer_projet", {"nom": "Beta"})
+
+    async def compter(modele):
+        async with sessions() as s:
+            return await s.scalar(
+                select(func.count()).select_from(modele).where(modele.conversation_id == cid)
+            )
+
+    assert await compter(MessageConversation) >= 2 and await compter(ActionConversation) == 1
+    assert (await client.delete(f"/api/conversations/{cid}")).status_code == 204
+    assert await compter(MessageConversation) == 0 and await compter(ActionConversation) == 0
 
 
 async def test_proposition_cree_une_carte(client, faux_llm):
