@@ -23,8 +23,9 @@ pub enum ErreurPortail {
     Reseau,
 }
 
-/// Délai entre deux lectures (le portail tient le modèle au plus 300 s) ; vaut aussi pour le flux.
-const DELAI_LECTURE: Duration = Duration::from_secs(300);
+/// Délai entre deux lectures ; vaut aussi pour le flux. Le portail peut tenir un appel d'outil
+/// `lancer` 600 s (`delai_commande_s`) + 60 s dans le lanceur : on attend plus que cela.
+const DELAI_LECTURE: Duration = Duration::from_secs(900);
 
 #[derive(Default)]
 struct Compteurs {

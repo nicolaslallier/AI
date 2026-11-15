@@ -13,6 +13,9 @@ use crate::serveur::{Fin, Sortie};
 const LIMITE: &str =
     "Limite d'outils atteinte : conclus maintenant avec ce que tu as, sans appeler d'outil.";
 const IGNORE: &str = "ignoré : une action attend la confirmation de Nicolas";
+/// Bornes du portail (`missions.AppelOutil`) : au-delà, le rejeu serait refusé en 422.
+const ID_MAX: usize = 200;
+const NOM_MAX: usize = 128;
 const RESULTAT_RETIRE: &str = "[résultat retiré : relire si besoin]";
 
 pub fn par_defaut(m: Mission, p: Portail, s: Sortie) -> BoxFuture<'static, Result<Fin, String>> {
@@ -89,7 +92,7 @@ async fn executer(m: Mission, p: Portail, s: Sortie) -> Result<Fin, String> {
         for appel in &appels {
             let mut id = appel["id"]
                 .as_str()
-                .filter(|i| !i.is_empty())
+                .filter(|i| !i.is_empty() && i.chars().count() <= ID_MAX)
                 .map(String::from);
             if id.as_ref().is_none_or(|i| ids.contains(i)) {
                 let mut neuf = format!("appel_{}", ids.len());
@@ -100,7 +103,9 @@ async fn executer(m: Mission, p: Portail, s: Sortie) -> Result<Fin, String> {
             }
             let id = id.expect("id fixé ci-dessus");
             ids.push(id.clone());
-            let nom = appel["function"]["name"].as_str().map(String::from);
+            let nom = appel["function"]["name"]
+                .as_str()
+                .map(|n| n.chars().take(NOM_MAX).collect::<String>());
             let arguments = match &appel["function"]["arguments"] {
                 Value::String(a) => Some(a.clone()),
                 Value::Object(_) => Some(appel["function"]["arguments"].to_string()),
@@ -172,16 +177,21 @@ async fn conclure(p: &Portail, mut messages: Vec<MessageLlm>, limite: bool) -> R
     })
 }
 
+/// Même estimation que `missions._jetons` : le message entier (`tool_calls` compris), pas
+/// `content` seul — un agent qui écrit de gros fichiers remplit son contexte par les arguments.
 fn estimer(messages: &[MessageLlm]) -> u64 {
-    // `content` peut être null (message assistant qui n'a fait qu'appeler des outils)
     messages
         .iter()
-        .map(|m| m.content.as_deref().map_or(0, |c| c.chars().count() as u64) / 4 + 4)
+        .map(|m| {
+            let json = serde_json::to_string(m).unwrap_or_default();
+            json.chars().count() as u64 / 4 + 4
+        })
         .sum()
 }
 
-/// Remplace les résultats d'outils, du plus ancien au plus récent, de 0,90 à 0,75 du contexte
-/// (même règle que `contexte.elaguer_resultats_outils`). Rend le nombre de résultats retirés.
+/// Remplace les résultats d'outils et les arguments des appels, du plus ancien au plus récent,
+/// de 0,90 à 0,75 du contexte (même règle que `contexte.elaguer_resultats_outils`, étendue aux
+/// arguments, que le portail compte aussi). Rend le nombre de messages allégés.
 pub fn elaguer(messages: &mut [MessageLlm], contexte_max: u64) -> usize {
     let max = contexte_max as f64;
     if (estimer(messages) as f64) < 0.90 * max {
@@ -196,6 +206,14 @@ pub fn elaguer(messages: &mut [MessageLlm], contexte_max: u64) -> usize {
             messages[i].content = Some(RESULTAT_RETIRE.into());
             n += 1;
         }
+        let mut allege = false;
+        for appel in messages[i].tool_calls.iter_mut().flatten() {
+            if appel["function"]["arguments"] != "{}" {
+                appel["function"]["arguments"] = "{}".into(); // JSON valide, id et nom conservés
+                allege = true;
+            }
+        }
+        n += usize::from(allege);
     }
     n
 }
@@ -494,15 +512,48 @@ mod tests {
     }
 
     #[test]
-    fn elaguer_ignore_le_contenu_nul() {
-        let mut messages = vec![
-            MessageLlm {
-                role: "assistant".into(),
-                ..MessageLlm::default()
-            },
-            outil_msg("y"),
-        ];
-        assert_eq!(estimer(&messages), 4 + 4);
-        assert_eq!(elaguer(&mut messages, 1000), 0);
+    fn estimer_compte_le_message_entier() {
+        // comme `missions._jetons` : le JSON du message, `tool_calls` compris
+        let m = MessageLlm {
+            role: "assistant".into(),
+            tool_calls: Some(vec![appel(Some("a"), json!("x".repeat(4000)))]),
+            ..MessageLlm::default()
+        };
+        assert!(estimer(&[m]) >= 1000);
+    }
+
+    #[test]
+    fn elaguer_retire_aussi_les_arguments_des_anciens_appels() {
+        let ecrire = |id: &str| MessageLlm {
+            role: "assistant".into(),
+            tool_calls: Some(vec![appel(Some(id), json!("x".repeat(2000)))]),
+            ..MessageLlm::default()
+        };
+        let mut messages = vec![ecrire("a"), outil_msg("ok"), ecrire("b")];
+        assert_eq!(elaguer(&mut messages, 1000), 1);
+        let args =
+            |m: &MessageLlm| m.tool_calls.as_ref().unwrap()[0]["function"]["arguments"].clone();
+        assert_eq!(args(&messages[0]), "{}"); // JSON valide, id conservé
+        assert_eq!(messages[0].tool_calls.as_ref().unwrap()[0]["id"], "a");
+        assert_eq!(args(&messages[2]).as_str().unwrap().len(), 2000);
+    }
+
+    #[tokio::test]
+    async fn nom_et_id_trop_longs_sont_bornes_a_la_relecture() {
+        let mut a = appel(Some(&"i".repeat(201)), json!({}));
+        a["function"]["name"] = "n".repeat(129).into();
+        let (p, _) = demarrer(vec![avec_appels(vec![a]), texte("fini")], false).await;
+        let (s, _rx) = canal();
+        let fin = par_defaut(mission(true, 5, false), p, s).await.unwrap();
+        let call = &fin.messages[1].tool_calls.as_ref().unwrap()[0];
+        assert_eq!(call["id"], "appel_0");
+        assert_eq!(call["function"]["name"].as_str().unwrap().len(), 128);
+        assert!(
+            fin.messages[2]
+                .content
+                .as_deref()
+                .unwrap()
+                .starts_with("erreur : outil non autorisé")
+        );
     }
 }

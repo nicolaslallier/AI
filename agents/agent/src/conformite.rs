@@ -32,7 +32,13 @@ enum Mode {
     Arret,
     /// Le modèle demande un outil, l'outil répond 409.
     ArretOutil,
+    /// Le modèle fait écrire de gros fichiers à répétition ; garde 413 comme le portail.
+    Gros,
 }
+
+/// Contexte de la mission « gros fichiers » (en jetons) et taille d'un fichier écrit.
+const CONTEXTE_GROS: usize = 8000;
+const FICHIER_GROS: usize = 14_000;
 
 struct Faux {
     mode: Mode,
@@ -112,6 +118,21 @@ async fn modele(State(f): State<Arc<Faux>>, h: HeaderMap, Json(d): Json<Value>) 
         }
         Mode::Lent => tokio::time::sleep(DELAI_LENT).await,
         Mode::Normal | Mode::ArretOutil => {}
+        Mode::Gros => {
+            // même estimation que `missions._jetons` : le message entier, `tool_calls` compris
+            let jetons: usize = d["messages"].as_array().map_or(0, |m| {
+                m.iter()
+                    .map(|m| m.to_string().chars().count() / 4 + 4)
+                    .sum()
+            });
+            if jetons > CONTEXTE_GROS {
+                return (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    Json(json!({"erreur": "contexte dépassé"})),
+                )
+                    .into_response();
+            }
+        }
     }
     if d["flux"] == true {
         let corps = concat!(
@@ -125,7 +146,17 @@ async fn modele(State(f): State<Arc<Faux>>, h: HeaderMap, Json(d): Json<Value>) 
     let deja_un_resultat = d["messages"]
         .as_array()
         .is_some_and(|m| m.iter().any(|m| m["role"] == "tool"));
-    let message = if d["outils"] == true && !deja_un_resultat {
+    let resultats = d["messages"]
+        .as_array()
+        .map_or(0, |m| m.iter().filter(|m| m["role"] == "tool").count());
+    let message = if f.mode == Mode::Gros && d["outils"] == true && resultats < 8 {
+        let contenu = "x".repeat(FICHIER_GROS);
+        let args = json!({"chemin": "f.txt", "contenu": contenu}).to_string();
+        json!({"role": "assistant", "content": null, "tool_calls": [
+            {"id": format!("c{resultats}"), "type": "function",
+             "function": {"name": "lire", "arguments": args}}
+        ]})
+    } else if d["outils"] == true && !deja_un_resultat {
         json!({"role": "assistant", "content": null, "tool_calls": [
             {"id": "c1", "type": "function",
              "function": {"name": "lire", "arguments": "{\"chemin\": \"README.md\"}"}}
@@ -337,6 +368,19 @@ async fn cas_annulation(b: Banc) {
     );
 }
 
+/// Un agent qui écrit de gros fichiers à répétition doit élaguer, pas recevoir un 413.
+async fn cas_gros_fichiers(b: Banc) {
+    let mut m = mission(b.nom, true, false);
+    m["parametres"]["contexte_max"] = CONTEXTE_GROS.into();
+    m["parametres"]["tours_max"] = 12.into();
+    let lignes = b.lignes(&m).await;
+    assert_eq!(
+        lignes.last().expect("une ligne")["type"],
+        "fin",
+        "l'agent a reçu un refus du portail au lieu d'élaguer son contexte"
+    );
+}
+
 async fn cas_flux(b: Banc) {
     let lignes = b.lignes(&mission(b.nom, false, true)).await;
     assert!(lignes.len() >= 2, "au moins une ligne texte avant la fin");
@@ -382,7 +426,7 @@ async fn cas_arret_outil(b: Banc) {
 
 /// Fait passer la suite à un agent ; panique avec le nom du cas en échec.
 pub async fn verifier(nom: &'static str, tourner: Tourner) {
-    use Mode::{Arret, ArretOutil, Lent, Normal, Refus};
+    use Mode::{Arret, ArretOutil, Gros, Lent, Normal, Refus};
     jouer(nom, tourner, Arret, "cas_arret_modele", cas_arret_modele).await;
     jouer(nom, tourner, ArretOutil, "cas_arret_outil", cas_arret_outil).await;
     jouer(nom, tourner, Normal, "cas_sante", cas_sante).await;
@@ -415,6 +459,7 @@ pub async fn verifier(nom: &'static str, tourner: Tourner) {
     .await;
     jouer(nom, tourner, Lent, "cas_annulation", cas_annulation).await;
     jouer(nom, tourner, Normal, "cas_flux", cas_flux).await;
+    jouer(nom, tourner, Gros, "cas_gros_fichiers", cas_gros_fichiers).await;
 }
 
 #[cfg(test)]
