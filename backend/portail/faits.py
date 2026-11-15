@@ -183,8 +183,10 @@ async def verifier_faits(
     la dernière `verification` comptent aussi comme preuve), et `lint` (le résultat de la
     commande, ou None si non déclaré)."""
     faits = verifier_references(racine, references_ajoutees(diff), cfg)
-    # le lint du portail tranche : réussi, l'affirmation est prouvée ; échoué, le fait `lint`
-    a_prouver = set(cfg.commandes) - ({"lint"} if lint is not None else set())
+    # le lint du portail tranche : réussi, l'affirmation est prouvée ; échoué et bloquant (il
+    # passait sur la base), le fait `lint` bloque déjà ; échoué sur une dette, l'affirmation reste
+    tranche = lint is not None and (lint.code == 0 or bool(lint_base_ok))
+    a_prouver = set(cfg.commandes) - ({"lint"} if tranche else set())
     async with sessions() as s:
         verif = await s.scalar(
             select(Etape.id)
