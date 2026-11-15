@@ -259,7 +259,6 @@ agents:
     modele: cloud-anthropic
     contexte_max: 200000
     sortie_max: 16000
-    temperature: 0.3
     produit: vision
     prefixe: mot-
     outils: [lister, lire, chercher]
@@ -432,7 +431,6 @@ agents:
     modele: cloud-anthropic
     contexte_max: 200000
     sortie_max: 16000
-    temperature: 0.2
     produit: volet
     auto: true
     sans_validation: true
@@ -633,7 +631,6 @@ agents:
     modele: cloud-anthropic
     contexte_max: 200000
     sortie_max: 16000
-    temperature: 0.2
     produit: volet
     auto: true
     sans_validation: true
@@ -706,7 +703,6 @@ agents:
     modele: cloud-anthropic
     contexte_max: 200000
     sortie_max: 16000
-    temperature: 0.2
     produit: architecture
     auto: true
     prefixe: ent-

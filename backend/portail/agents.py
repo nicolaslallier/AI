@@ -153,10 +153,13 @@ class Catalogue(BaseModel):
 
 
 def agent_effectif(cat: Catalogue, nom: str, modele: str | None) -> Agent | None:
-    """L'agent du catalogue, avec le modèle choisi pour l'étape s'il est encore permis (le catalogue reste intact)."""
+    """L'agent du catalogue, avec le modèle choisi pour l'étape s'il est encore permis (le catalogue reste intact).
+
+    La température de l'agent est réglée pour son propre modèle : un autre modèle ne la reçoit pas
+    (cloud-anthropic et cloud-openai la refusent)."""
     agent = cat.agents.get(nom)
-    if agent and modele in cat.modeles_permis:
-        return agent.model_copy(update={"modele": modele})
+    if agent and modele in cat.modeles_permis and modele != agent.modele:
+        return agent.model_copy(update={"modele": modele, "temperature": None})
     return agent
 
 
