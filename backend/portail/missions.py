@@ -4,9 +4,20 @@ Les demandes venues d'un agent sont en `extra="forbid"` : le portail n'y lit que
 autorise (messages, drapeau `outils`, `response_format`, `flux`, nom et arguments d'un outil).
 """
 
+import asyncio
+import secrets
+import time
+import uuid
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Annotated, Literal
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field
+
+from portail import journal
+from portail.agents import Agent, Catalogue, CatalogueInvalide
+from portail.boucle import ErreurOutils
 
 CONTRAT = "v1"
 
@@ -87,3 +98,112 @@ class Sante(BaseModel):
     contrat: str
     agent: str
     version: str
+
+
+class ErreurMission(ErreurOutils):
+    """Mission qui ne se termine pas proprement (agent injoignable, contrat, flux coupé, durée)."""
+
+
+@dataclass
+class Mission:
+    id: str
+    jeton: str
+    agent: Agent
+    llm: object
+    outils: object | None
+    schemas: list[dict]
+    sur_appel: Callable[[str, str], Awaitable[None]]
+    echeance: float
+    version: str
+    contexte: dict
+    appels_modele: int = 0
+    appels_tour: int = 0
+    mal_formes: int = 0
+    limite_atteinte: bool = False
+    erreur: Exception | None = None
+    tache: asyncio.Task | None = None  # lecture du flux de l'agent
+    verrou: asyncio.Lock = field(default_factory=asyncio.Lock)  # une demande /interne/ à la fois
+    en_vol: set[asyncio.Task] = field(default_factory=set)
+
+    @property
+    def noms(self) -> set[str]:
+        return {s["function"]["name"] for s in self.schemas}
+
+
+class Missions:
+    """Registre en mémoire des missions en cours, retrouvées par leur jeton."""
+
+    def __init__(
+        self,
+        secrets: dict[str, str],
+        duree_s: int,
+        transport: httpx.AsyncBaseTransport | None = None,
+        horloge: Callable[[], float] = time.monotonic,
+    ):
+        self.secrets, self.duree_s, self.transport, self.horloge = (
+            secrets,
+            duree_s,
+            transport,
+            horloge,
+        )
+        self._en_cours: list[Mission] = []
+
+    def ouvrir(self, llm, agent: Agent, outils, sur_appel, version: str) -> Mission:
+        contexte = dict(journal.contexte.get())
+        offerts = {s["function"]["name"]: s for s in outils.schemas()} if outils else {}
+        m = Mission(
+            id=contexte.get("mission") or uuid.uuid4().hex[:12],
+            jeton=secrets.token_urlsafe(32),
+            agent=agent,
+            llm=llm,
+            outils=outils,
+            schemas=[offerts[n] for n in agent.outils if n in offerts],
+            sur_appel=sur_appel,
+            echeance=self.horloge() + self.duree_s,
+            version=version,
+            contexte=contexte,
+        )
+        self._en_cours.append(m)
+        return m
+
+    def trouver(self, autorisation: str | None) -> Mission | None:
+        schema, _, jeton = (autorisation or "").partition(" ")
+        if schema != "Bearer" or not jeton:
+            return None
+        trouvee = None
+        for m in self._en_cours:  # pas de sortie anticipée : temps indépendant du rang
+            if secrets.compare_digest(m.jeton.encode(), jeton.encode()):
+                trouvee = m
+        if trouvee is None or self.horloge() > trouvee.echeance:
+            return None
+        return trouvee
+
+    async def fermer(self, m: Mission) -> None:
+        if m in self._en_cours:
+            self._en_cours.remove(m)
+        taches = list(m.en_vol)
+        for t in taches:
+            t.cancel()
+        await asyncio.gather(*taches, return_exceptions=True)
+
+    async def en_vol[T](self, m: Mission, attente: Awaitable[T]) -> T:
+        tache = asyncio.ensure_future(attente)
+        m.en_vol.add(tache)
+        tache.add_done_callback(m.en_vol.discard)
+        return await tache
+
+
+def lire_secrets(catalogue: Catalogue, environ: Mapping[str, str]) -> dict[str, str]:
+    """Le secret de chaque agent à `service:` ; le message nomme la variable, jamais la valeur."""
+    resultat = {}
+    for nom, agent in catalogue.agents.items():
+        if agent.service is None:
+            continue
+        variable = "PORTAIL_AGENT_SECRET_" + nom.upper().replace("-", "_")
+        valeur = environ.get(variable, "")
+        if len(valeur) < 32:
+            raise CatalogueInvalide(
+                f"agent « {nom} » : {variable} doit faire au moins 32 caractères"
+            )
+        resultat[nom] = valeur
+    return resultat
