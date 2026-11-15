@@ -9,6 +9,11 @@ class Etat(StrEnum):
     ECHOUEE = "echouee"
 
 
+# Erreurs d'étape d'un arrêt voulu : le pipeline échoue sans que le code ait raté (hors alerte).
+ANNULE = "annulé"
+REPRISE_ABANDONNEE = "tâche déplacée avant la reprise"
+
+
 def etat_pipeline(etats: list[Etat]) -> Etat:
     if Etat.ECHOUEE in etats:
         return Etat.ECHOUEE

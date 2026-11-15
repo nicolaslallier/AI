@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from portail import journal
 from portail.conversations import ServiceConversation
 from portail.db import MessageConversation, Resume
 from portail.notifications import lien_absolu
@@ -77,7 +78,7 @@ async def resumer_si_du(
     if not texte:  # la conversation finit en erreur : rien à envoyer
         return False
     await notifieur.envoyer(
-        "Résumé du matin", texte[:4000], lien_absolu(url_publique, f"/chat/{c.id}")
+        "Portail — résumé du matin", "Résumé prêt", lien_absolu(url_publique, f"/chat/{c.id}")
     )
     return True
 
@@ -91,7 +92,7 @@ async def tourner(
             await resumer_si_du(sessions, conversations, notifieur, horloge(), heure, url_publique)
             maintenant = horloge()
             pause = max((prochaine_echeance(maintenant, heure) - maintenant).total_seconds(), 1)
-        except Exception:
-            logger.exception("résumé du matin impossible")
+        except Exception:  # noqa: BLE001
+            journal.erreur(logger, "résumé du matin impossible")
             pause = ERREUR_PAUSE_S
         await asyncio.sleep(pause)

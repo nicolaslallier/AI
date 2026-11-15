@@ -39,6 +39,7 @@ small, .discret { color: var(--discret); }
 /* Mise en page */
 .entete { display: flex; gap: 0.25rem; align-items: center; padding: 0.6rem 1.5rem; background: var(--surface); border-bottom: 1px solid var(--bord); position: sticky; top: 0; z-index: 5; }
 .entete .marque { font-weight: 700; font-size: 1.1rem; margin-right: 1rem; color: var(--texte); text-decoration: none; }
+.entete nav { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .entete nav a { padding: 0.35rem 0.8rem; border-radius: 999px; color: var(--discret); text-decoration: none; }
 .entete nav a:hover { background: var(--creux); color: var(--texte); }
 .entete nav a.router-link-active { background: var(--creux); color: var(--texte); font-weight: 600; }

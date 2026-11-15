@@ -1,0 +1,63 @@
+{
+  "mission": {
+    "contrat": "v1",
+    "mission": "m-0001",
+    "agent": "revue",
+    "jeton": "jeton-de-mission-exemple",
+    "messages": [
+      {"role": "system", "content": "Tu relis le code."},
+      {"role": "user", "content": "Relis la PR."}
+    ],
+    "outils": [
+      {
+        "type": "function",
+        "function": {
+          "name": "lire",
+          "description": "Lit un fichier du dépôt.",
+          "parameters": {
+            "type": "object",
+            "properties": {"chemin": {"type": "string"}},
+            "required": ["chemin"]
+          }
+        }
+      }
+    ],
+    "parametres": {
+      "modele": "modele-exemple",
+      "temperature": 0.2,
+      "contexte_max": 32000,
+      "tours_max": 20,
+      "produit": "verdict",
+      "role": "revue"
+    },
+    "response_format": null,
+    "flux": false
+  },
+  "ligne_texte": {"type": "texte", "texte": "Je regarde le fichier."},
+  "ligne_fin": {
+    "type": "fin",
+    "texte": "Verdict : conforme.",
+    "messages": [
+      {"role": "user", "content": "Relis la PR."},
+      {"role": "assistant", "content": "Verdict : conforme."}
+    ],
+    "limite_atteinte": false
+  },
+  "ligne_erreur": {"type": "erreur", "erreur": "mission interrompue"},
+  "demande_modele": {
+    "messages": [{"role": "user", "content": "Relis la PR."}],
+    "outils": true,
+    "response_format": null,
+    "flux": false
+  },
+  "reponse_modele": {"message": {"role": "assistant", "content": "Verdict : conforme."}},
+  "demande_modele_flux_lignes": [
+    {"type": "texte", "texte": "Verdict"},
+    {"type": "texte", "texte": " : conforme."},
+    {"type": "fin", "message": {"role": "assistant", "content": "Verdict : conforme."}}
+  ],
+  "demande_outil": {"nom": "lire", "arguments": "{\"chemin\": \"README.md\"}"},
+  "reponse_outil": {"resultat": "contenu du fichier", "arret": false},
+  "sante": {"contrat": "v1", "agent": "revue", "version": "0.1.0"},
+  "erreur": {"erreur": "mission arrêtée"}
+}

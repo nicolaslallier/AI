@@ -23,8 +23,9 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from portail import journal, metriques
 from portail.agents import Catalogue, modele_pour
-from portail.boucle import ErreurOutils, boucle_outils
+from portail.boucle import ErreurOutils
 from portail.config import Reglages
 from portail.contexte import construire
 from portail.db import (
@@ -39,7 +40,7 @@ from portail.db import (
 )
 from portail.depots import ErreurDepot, git
 from portail.espace import BASE_FUSIONNEE, Espace
-from portail.etats import Etat
+from portail.etats import ANNULE, REPRISE_ABANDONNEE, Etat
 from portail.execution import (
     ConfigExecution,
     commande,
@@ -50,9 +51,10 @@ from portail.execution import (
 from portail.faits import Fait, verifier_faits
 from portail.github import CommentaireGitHub, ErreurGitHub, depot_depuis_url
 from portail.lanceur import ErreurLanceur, Resultat
-from portail.llm import ErreurLLM, retirer_reflexion
+from portail.llm import ErreurLLM
+from portail.missions import Missions, completer, tourner
 from portail.moteur import Refus
-from portail.notifications import Notifieur, lien_absolu, raison_courte
+from portail.notifications import Notifieur, lien_absolu
 from portail.outils import OutilsDepot, OutilsEspace, _secret_chemin, apercu, empreinte
 from portail.protections import (
     COURRIEL_CODE,
@@ -79,6 +81,13 @@ MANIFESTE_A_NICOLAS = (
 _TEXTE_MAX = 20_000
 _FIN_SORTIE = 3000
 _REGLES_MAX = 50_000  # par fichier de règles donné au challenger
+
+
+# cause de blocage par classe d'erreur : liste fixe, jamais le message
+_CAUSES = {
+    ErreurLanceur: "lanceur", ErreurGitHub: "github", ErreurDepot: "depot",
+    ErreurLLM: "llm", ErreurOutils: "outils",
+}  # fmt: skip
 
 
 class _Blocage(Exception):
@@ -184,6 +193,11 @@ class _Ctx:
         return self.espace.racine
 
 
+def _premiere_ligne(raison: str) -> str:
+    """Pour le commentaire de PR : première ligne non vide, jamais la sortie d'une commande."""
+    return next((ligne.strip() for ligne in raison.splitlines() if ligne.strip()), "")[:200]
+
+
 class Orchestrateur:
     def __init__(
         self,
@@ -196,10 +210,12 @@ class Orchestrateur:
         horloge: Callable[[], datetime] = lambda: datetime.now(UTC),
         depot_de: Callable[[str], str] = depot_depuis_url,
         notifieur: Notifieur | None = None,
+        missions: Missions | None = None,
     ):
         self._sessions = sessions
         self._catalogue = catalogue
         self._llm = llm
+        self._missions = missions
         self._lanceur = lanceur
         self._github = github
         self._reglages = reglages
@@ -211,9 +227,10 @@ class Orchestrateur:
     def lien(self, chemin: str) -> str | None:
         return lien_absolu(self._reglages.url_publique, chemin)
 
-    async def notifier(self, titre: str, message: str, lien: str | None) -> None:
+    async def notifier(self, tache_id: int, message: str, lien: str | None) -> None:
+        """Jamais de titre de tâche ni de raison : le dépôt et ntfy sont publics."""
         if self._notifieur:
-            await self._notifieur.envoyer(titre, message, lien)
+            await self._notifieur.envoyer(f"Portail — tâche T{tache_id}", message, lien)
 
     # --- cycle de vie ---------------------------------------------------
 
@@ -265,6 +282,7 @@ class Orchestrateur:
         )  # fmt: skip
         session.add(ex)
         await session.flush()
+        metriques.REPRISES.inc()
         for c in lot:
             session.add(
                 CommentairePris(
@@ -304,7 +322,7 @@ class Orchestrateur:
             session.add(
                 Etape(
                     pipeline_id=pipeline.id, ordre=0, agent="portail", action="preparation",
-                    etat=Etat.ECHOUEE, erreur="tâche déplacée avant la reprise",
+                    etat=Etat.ECHOUEE, erreur=REPRISE_ABANDONNEE,
                 )
             )  # fmt: skip
             pipeline.etat, pipeline.maj_le = Etat.ECHOUEE, self._horloge()
@@ -360,7 +378,7 @@ class Orchestrateur:
             await s.execute(
                 update(Etape)
                 .where(Etape.pipeline_id == pipeline_id, Etape.etat == Etat.EN_COURS)
-                .values(etat=Etat.ECHOUEE, erreur="annulé")
+                .values(etat=Etat.ECHOUEE, erreur=ANNULE)
             )
             await s.execute(
                 update(Pipeline)
@@ -370,26 +388,27 @@ class Orchestrateur:
             await s.commit()
 
     async def executer(self, pipeline_id: int) -> None:
+        journal.commencer(pipeline=pipeline_id)
         delai = asyncio.timeout(self._reglages.duree_max_tache_s)
         try:
             async with delai:
                 await self._derouler(pipeline_id)
             return
         except _Blocage as e:
-            raison = e.raison
+            raison, cause = e.raison, "blocage"
         except TimeoutError:
-            raison = "durée maximale dépassée"
+            raison, cause = "durée maximale dépassée", "delai"
             if not delai.expired():  # un délai interne, pas celui de la tâche
-                logger.exception("pipeline dev %s : erreur inattendue", pipeline_id)
-                raison = "erreur inattendue : TimeoutError"
+                journal.erreur(logger, "pipeline dev %s : erreur inattendue", pipeline_id)
+                raison, cause = "erreur inattendue : TimeoutError", "inattendue"
         except Refus as e:  # config stockée qui ne passe plus la validation
-            raison = e.message
-        except (ErreurLanceur, ErreurGitHub, ErreurDepot, ErreurLLM, ErreurOutils) as e:
-            raison = str(e)
-        except Exception as e:  # dernier recours : une tâche ne reste jamais verrouillée en cours
-            logger.exception("pipeline dev %s : erreur inattendue", pipeline_id)
-            raison = f"erreur inattendue : {type(e).__name__}"
-        await self.bloquer(pipeline_id, raison)
+            raison, cause = e.message, "config"
+        except tuple(_CAUSES) as e:
+            raison, cause = str(e), next(c for t, c in _CAUSES.items() if isinstance(e, t))
+        except Exception as e:  # dernier recours : une tâche ne reste jamais verrouillée en cours  # noqa: BLE001
+            journal.erreur(logger, "pipeline dev %s : erreur inattendue", pipeline_id)
+            raison, cause = f"erreur inattendue : {type(e).__name__}", "inattendue"
+        await self.bloquer(pipeline_id, raison, cause=cause)
 
     async def _derouler(self, pipeline_id: int) -> None:
         ctx = await self._charger(pipeline_id)
@@ -427,6 +446,7 @@ class Orchestrateur:
             ex = await s.scalar(select(ExecutionDev).where(ExecutionDev.pipeline_id == pipeline_id))
             tache = await s.get(Tache, ex.tache_id)
             projet = await s.get(Projet, tache.projet_id)
+        journal.lier(tache=ex.tache_id)
         if not projet.depot_url or not projet.config_execution:
             raise _Blocage("projet sans dépôt ou sans configuration d'exécution")
         return _Ctx(
@@ -458,11 +478,14 @@ class Orchestrateur:
             s.add(etape)
             await s.commit()
         ctx.etape_id = etape.id
+        journal.lier(etape=etape.id, agent=agent, mission=None, contexte_max=None)
 
     async def _transition(self, ctx: _Ctx, suivante: str, erreur: str | None = None, **champs):
         """Termine l'étape en cours et écrit la phase suivante avec `champs`, en une transaction :
         une reprise après un arrêt ne rejoue ni ne perd la décision (renvoi, retour aux tests)."""
         etat = Etat.ECHOUEE if erreur else Etat.TERMINEE
+        issue = "echec" if erreur else "ok"
+        metriques.PHASES_DEV.labels(phase=ctx.phase or "reprise", issue=issue).inc()
         champs["phase"] = suivante
         async with self._sessions() as s:
             await s.execute(
@@ -498,6 +521,9 @@ class Orchestrateur:
             ctx.ex.espace, ctx.cfg.image, commande(ctx.cfg, nom, fichiers),
             self._reglages.delai_commande_s, lecture_seule, tout_lecture_seule,
         )  # fmt: skip
+        code = "delai" if r.delai_depasse else "aucun" if r.code is None else str(r.code)
+        metriques.LANCEUR_COMMANDES.labels(nom=nom, code=code).inc()
+        metriques.LANCEUR_DUREE.labels(nom=nom).observe((self._horloge() - debut).total_seconds())
         sortie = r.sortie
         if protege and (restaures := await self._restaurer_proteges(ctx, avant)):
             sortie += f"\n[fichiers de tests restaurés : {', '.join(restaures)}]"
@@ -574,12 +600,13 @@ class Orchestrateur:
         if modele:
             agent = agent.model_copy(update={"modele": modele})
         await self._etape(ctx, nom)
+        journal.nouvelle_mission(nom, agent.contexte_max)
         messages = construire(agent, [], None, consigne, annexes)
 
         async def sur_appel(libelle: str, resultat: str) -> None:
             await self._message(ctx, "tool", resultat[:2000], libelle)
 
-        r = await boucle_outils(self._llm, agent, messages, outils, sur_appel)
+        r = await tourner(self._llm, self._missions, agent, messages, outils, sur_appel)
         if r.limite_atteinte:
             await self._message(
                 ctx, "system", f"limite de {agent.tours_max} appels d'outils atteinte"
@@ -636,10 +663,9 @@ class Orchestrateur:
                 {"role": "assistant", "content": texte},
                 {"role": "user", "content": "Réponse invalide : renvoie uniquement le JSON."},
             ]
-            rep = await self._llm.completer(
-                agent.modele, messages, agent.temperature, response_format=FORMAT_TRI
-            )
-            texte = retirer_reflexion(rep.get("content") or "").strip()
+            texte = (
+                await completer(self._llm, self._missions, agent, messages, FORMAT_TRI)
+            ).strip()
             await self._message(ctx, "assistant", texte or "(réponse vide)")
             tri = lire_tri(texte, ids)
         if tri is None:  # jamais de tri par défaut
@@ -712,7 +738,9 @@ class Orchestrateur:
                 )
                 await self._repondu([c.id])
             except ErreurGitHub as e:
-                logger.warning("reprise %s : réponse impossible (%s)", ctx.pipeline_id, e)
+                logger.warning(
+                    "reprise %s : réponse impossible (%s)", ctx.pipeline_id, type(e).__name__
+                )
         autres = [c for c in pris if c.type != "ligne"]
         blocs = [
             "> " + c.texte[:200].replace("\n", "\n> ") + "\n\n" + _texte_reponse(c, court)
@@ -726,10 +754,12 @@ class Orchestrateur:
                 # ponytail: un redémarrage entre `commenter` et `_repondu` reposte ce commentaire
                 await self._repondu([c.id for c in autres])
             except ErreurGitHub as e:
-                logger.warning("reprise %s : commentaire impossible (%s)", ctx.pipeline_id, e)
+                logger.warning(
+                    "reprise %s : commentaire impossible (%s)", ctx.pipeline_id, type(e).__name__
+                )
         await self._terminer(ctx)
         await self._au_mieux(
-            "notifier", self.notifier(ctx.tache.titre, "Reprise terminée", ctx.ex.pr_url)
+            "notifier", self.notifier(ctx.tache.id, "Reprise terminée", ctx.ex.pr_url)
         )
         return "fini"
 
@@ -861,6 +891,7 @@ class Orchestrateur:
             sortie = r.sortie[-_FIN_SORTIE:]
             if ctx.ex.renvois >= self._reglages.renvois_max:
                 raise _Blocage(f"installation échouée :\n{sortie}")
+            metriques.RENVOIS.labels(agent="installation", vers="code").inc()
             return await self._transition(
                 ctx, "code", renvois=ctx.ex.renvois + 1, controle_courant=0,
                 remarques=[f"installation des dépendances échouée (paquet inventé ?) :\n{sortie}"],
@@ -907,6 +938,7 @@ class Orchestrateur:
                     ]
                     if bloquants := [f for f in faits if f.bloquant]:
                         if ctx.ex.renvois < self._reglages.renvois_max:  # pas de challenger
+                            metriques.RENVOIS.labels(agent="faits", vers=bloquants[0].role).inc()
                             return await self._transition(
                                 ctx, bloquants[0].role, renvois=ctx.ex.renvois + 1,
                                 remarques=[f.texte for f in faits], controle_courant=0,
@@ -927,6 +959,7 @@ class Orchestrateur:
                 if verdict.decision != "ok":
                     if ctx.ex.renvois < self._reglages.renvois_max:
                         suivante = "tests" if verdict.decision == "renvoyer_tests" else "code"
+                        metriques.RENVOIS.labels(agent=nom, vers=suivante).inc()
                         return await self._transition(
                             ctx, suivante, renvois=ctx.ex.renvois + 1,
                             remarques=verdict.remarques, controle_courant=0, notes=notes,
@@ -972,10 +1005,10 @@ class Orchestrateur:
                 {"role": "assistant", "content": texte},
                 {"role": "user", "content": "Réponse invalide : renvoie uniquement le JSON."},
             ]
-            rep = await self._llm.completer(
-                modele, messages, agent.temperature, response_format=FORMAT_VERDICT
-            )
-            texte = retirer_reflexion(rep.get("content") or "").strip()
+            relecteur = agent.model_copy(update={"modele": modele})
+            texte = (
+                await completer(self._llm, self._missions, relecteur, messages, FORMAT_VERDICT)
+            ).strip()
             await self._message(ctx, "assistant", texte or "(réponse vide)")
             verdict = _lire_verdict(texte)
         if verdict is None:
@@ -1059,7 +1092,7 @@ class Orchestrateur:
                 ctx.depot, ctx.ex.branche, ctx.ex.base, ctx.tache.titre, self._corps(ctx, resume)
             )
             await self._maj(ctx, pr_numero=numero, pr_url=url)
-            await self.notifier(ctx.tache.titre, "PR ouverte", url)
+            await self.notifier(ctx.tache.id, "PR ouverte", url)
         await self._terminer(ctx)
         for p in precedentes:  # au mieux : la nouvelle PR est ouverte, quoi qu'il arrive ici
             try:
@@ -1068,8 +1101,8 @@ class Orchestrateur:
                         ctx.depot, p.pr_numero, f"Remplacée par {ctx.ex.pr_url}"
                     )
                     await self._github.fermer_pr(ctx.depot, p.pr_numero)
-            except Exception:
-                logger.exception("fermeture de l'ancienne PR %s impossible", p.pr_numero)
+            except Exception:  # noqa: BLE001
+                journal.erreur(logger, "fermeture de l'ancienne PR %s impossible", p.pr_numero)
         return "fini"
 
     async def _terminer(self, ctx: _Ctx) -> None:
@@ -1093,6 +1126,9 @@ class Orchestrateur:
                 update(ExecutionDev).where(ExecutionDev.id == ctx.ex.id).values(phase="fini")
             )
             await s.commit()
+        metriques.EXECUTIONS_DEV.labels(mode=ctx.ex.mode, issue="en_revue").inc()
+        if ctx.ex.mode == "normal":
+            metriques.DUREE_TACHE.observe((self._horloge() - ctx.ex.debut).total_seconds())
         await self._au_mieux("nettoyer", self._lanceur.nettoyer(ctx.ex.espace))
 
     def _corps(self, ctx: _Ctx, resume: str | None) -> str:
@@ -1122,13 +1158,14 @@ class Orchestrateur:
         """Attend `attente` ; une erreur est seulement journalisée (rend alors None)."""
         try:
             return await attente
-        except Exception:
-            logger.exception("pipeline dev : %s impossible", quoi)
+        except Exception:  # noqa: BLE001
+            journal.erreur(logger, "pipeline dev : %s impossible", quoi)
             return None
 
-    async def bloquer(self, pipeline_id: int, raison: str) -> None:
-        logger.warning("pipeline dev %s bloqué : %s", pipeline_id, raison)
-        ex = projet = titre = None
+    async def bloquer(self, pipeline_id: int, raison: str, *, cause: str) -> None:
+        # la raison reste en base ; au journal et en métrique, seulement la cause (liste fixe)
+        logger.warning("pipeline dev %s bloqué : %s", pipeline_id, cause)
+        ex = projet = None
         try:
             async with self._sessions() as s:
                 pipeline = await s.get(Pipeline, pipeline_id)
@@ -1138,11 +1175,13 @@ class Orchestrateur:
                     select(ExecutionDev).where(ExecutionDev.pipeline_id == pipeline_id)
                 )
                 projet = await s.get(Projet, pipeline.projet_id)
-                if ex is not None:
-                    titre = await s.scalar(select(Tache.titre).where(Tache.id == ex.tache_id))
-        except Exception:
-            logger.exception("blocage du pipeline %s : lecture impossible", pipeline_id)
+        except Exception:  # noqa: BLE001
+            journal.erreur(logger, "blocage du pipeline %s : lecture impossible", pipeline_id)
         reprise = ex is not None and ex.mode == "reprise"
+        metriques.BLOCAGES.labels(cause=cause, phase=ex.phase if ex else "aucune").inc()
+        metriques.EXECUTIONS_DEV.labels(
+            mode=ex.mode if ex else "normal", issue="echouee" if reprise else "bloquee"
+        ).inc()
         branche = None
         if ex is not None and projet is not None:
             espace = Espace(self._reglages.espaces_dir / ex.espace, projet.depot_url)
@@ -1153,21 +1192,19 @@ class Orchestrateur:
             await self._au_mieux("nettoyer", self._lanceur.nettoyer(ex.espace))
             await self._au_mieux("supprimer", espace.supprimer())
         if reprise:
-            await self._echouer_reprise(pipeline_id, raison, ex, projet, titre)
+            await self._echouer_reprise(pipeline_id, raison, ex, projet)
             return
         try:
             await self._enregistrer_blocage(pipeline_id, raison, branche)
-        except Exception:
-            logger.exception("blocage du pipeline %s : état non enregistré", pipeline_id)
+        except Exception:  # noqa: BLE001
+            journal.erreur(logger, "blocage du pipeline %s : état non enregistré", pipeline_id)
             await self._au_mieux("blocage minimal", self._blocage_minimal(pipeline_id, raison))
-        if titre and projet is not None:
+        if ex is not None and projet is not None:
             lien = self.lien(f"/projets/{projet.id}/kanban")
-            await self._au_mieux(
-                "notifier", self.notifier(titre, "Bloquée : " + raison_courte(raison), lien)
-            )
+            await self._au_mieux("notifier", self.notifier(ex.tache_id, "Bloquée", lien))
 
     async def _echouer_reprise(
-        self, pipeline_id: int, raison: str, ex: ExecutionDev, projet: Projet | None, titre
+        self, pipeline_id: int, raison: str, ex: ExecutionDev, projet: Projet | None
     ) -> None:
         """La tâche revient *En revue*, verrou gardé sur la reprise ; explication sur la PR.
         Les commentaires restent pris en charge : Nicolas recommente pour relancer."""
@@ -1200,13 +1237,12 @@ class Orchestrateur:
                     .values(etat=Etat.ECHOUEE, maj_le=self._horloge())
                 )
                 await s.commit()
-        except Exception:
-            logger.exception("échec de la reprise %s : état non enregistré", pipeline_id)
+        except Exception:  # noqa: BLE001
+            journal.erreur(logger, "échec de la reprise %s : état non enregistré", pipeline_id)
             minimal = self._blocage_minimal(pipeline_id, raison, reprise=True)
             await self._au_mieux("blocage minimal", minimal)
-        courte = raison_courte(raison)
         if projet is not None and ex.pr_numero is not None:
-            texte = f"La reprise n'a pas abouti : {courte}. Commentez à nouveau pour la relancer."
+            texte = f"La reprise n'a pas abouti : {_premiere_ligne(raison)}. Commentez à nouveau pour la relancer."
             try:
                 await self._github.commenter(
                     self._depot_de(projet.depot_url or ""), ex.pr_numero, texte
@@ -1215,13 +1251,12 @@ class Orchestrateur:
                 logger.warning(
                     "reprise %s : commentaire impossible (%s)", pipeline_id, type(e).__name__
                 )
-        if titre:
-            try:
-                await self.notifier(titre, "Reprise échouée : " + courte, ex.pr_url)
-            except Exception as e:  # noqa: BLE001 — jamais str(e) : pas de fuite
-                logger.warning(
-                    "reprise %s : notification impossible (%s)", pipeline_id, type(e).__name__
-                )
+        try:
+            await self.notifier(ex.tache_id, "Reprise échouée", ex.pr_url)
+        except Exception as e:  # noqa: BLE001 — jamais str(e) : pas de fuite
+            logger.warning(
+                "reprise %s : notification impossible (%s)", pipeline_id, type(e).__name__
+            )
 
     async def _enregistrer_blocage(self, pipeline_id: int, raison: str, branche: str | None):
         async with self._sessions() as s:
@@ -1289,7 +1324,9 @@ class Orchestrateur:
         if not any(a in COURRIELS_AGENTS for _, a, _ in await espace.commits(ex.base_sha)):
             return False
         if violations := await verifier_commits_code(espace, ex.base_sha, lire_config(config)):
-            logger.warning("branche %s non poussée : %s", ex.branche, ", ".join(violations))
+            logger.warning(
+                "exécution %s : branche non poussée, %d violation(s)", ex.id, len(violations)
+            )
             return False
         jeton = await self._github.jeton(self._depot_de(espace.depot_url))
         await espace.pousser(jeton, ex.branche)

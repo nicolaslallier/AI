@@ -1,6 +1,11 @@
 import asyncio
 import json
 
+from conftest import FauxAgent, _agent
+from sqlalchemy import select
+
+from portail.agents import Catalogue
+from portail.db import Proposition
 from portail.llm import ErreurLLM
 
 
@@ -201,3 +206,79 @@ async def test_erreur_publiee_meme_si_l_enregistrement_echoue(client, faux_llm):
     pause.set()
     await asyncio.wait_for(tache, 5)  # lèverait si l'exception fuyait de la tâche
     assert file.get_nowait() == {"type": "erreur", "message": "boum"}
+
+
+# --- agents en conteneur --------------------------------------------------
+
+
+def _catalogue(nom, **kw):
+    return Catalogue(
+        agents={nom: _agent(nom, service=f"http://agent-{nom}:8080", **kw)},
+        pipelines={nom: [nom]},
+    )
+
+
+async def test_agent_en_conteneur_streame(client_conteneur, faux_llm):
+    faux = FauxAgent("spec")
+
+    async def jouer(demande, portail):
+        for t in ("Quelle ", "cible ?"):
+            yield {"type": "texte", "texte": t}
+        yield {
+            "type": "fin", "texte": " Quelle cible ? ", "limite_atteinte": False,
+            "messages": [{"role": "assistant", "content": "Quelle cible ?"}],
+        }  # fmt: skip
+
+    faux.jouer = jouer
+    client = await client_conteneur(_catalogue("spec"), faux)
+    pid, eid = await _etape(client)
+    chat = _chat(client)
+    _, file = chat.diffuseur.abonner(eid)
+    await _envoyer(client, eid, "Un portail")
+    await _attendre(client, eid)
+    evenements = []
+    while not file.empty():
+        evenements.append(file.get_nowait())
+    assert [e["texte"] for e in evenements if e["type"] == "delta"] == ["Quelle ", "cible ?"]
+    e = await _etat(client, pid)
+    assert [(m["role"], m["contenu"]) for m in e["messages"]] == [
+        ("user", "Un portail"),
+        ("assistant", "Quelle cible ?"),
+    ]
+    [mission] = faux.missions
+    assert mission["corps"]["flux"] is True and mission["corps"]["outils"] == []
+    assert faux_llm.appels == []
+
+
+async def test_taches_en_conteneur_relance(client_conteneur, faux_llm, sessions):
+    from test_etapes_depot import _planifier, _projet
+    from test_propositions import _json, _n
+
+    faux = FauxAgent("taches")
+    catalogue = Catalogue(
+        agents={
+            "plan": _agent("plan", consigne_redaction="Rédige le plan.", produit="plan", auto=True),
+            "taches": _agent(
+                "taches", consigne_redaction="Propose les tâches.", produit="taches", auto=True,
+                service="http://agent-taches:8080",
+            ),
+        },
+        pipelines={"planification": ["plan", "taches"]},
+    )  # fmt: skip
+    client = await client_conteneur(catalogue, faux)
+    pid = await _projet(sessions)
+    faux_llm.morceaux = ["# Plan"]
+    faux_llm.reponses = [{"content": "{oups"}, {"content": _json(_n("n1"))}]
+    _, eid = await _planifier(client, pid)
+    r = await client.post(f"/api/etapes/{eid}/valider")
+    assert r.status_code == 200, r.text
+    etape_taches = r.json()["etapes"][1]["id"]
+    await _attendre(client, etape_taches)
+    assert len(faux.missions) == 2  # la relance est une nouvelle mission
+    assert faux.missions[1]["corps"]["messages"][-1]["content"].startswith("Réponse invalide : ")
+    assert all(m["corps"]["outils"] == [] for m in faux.missions)
+    async with sessions() as s:
+        props = (
+            await s.scalars(select(Proposition).where(Proposition.etape_id == etape_taches))
+        ).all()
+    assert [p.cle for p in props] == ["n1"]

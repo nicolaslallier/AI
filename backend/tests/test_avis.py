@@ -285,3 +285,27 @@ async def test_put_renvoie_les_avis(client, faux_llm):
         ("architecte", True),
         ("challenger", True),
     ]
+
+
+async def test_avis_n_herite_pas_du_contexte_du_redacteur(client, faux_llm):
+    from portail import journal
+
+    pid, _ = await _plan(client, faux_llm)
+    did = (await _document(client, pid))["id"]
+    service = _app(client).state.avis
+    vus = []
+    rediger = service._rediger
+
+    async def espion(*args):  # le contexte à l'entrée, avant toute lecture en base
+        vus.append(dict(journal.contexte.get()))
+        return await rediger(*args)
+
+    service._rediger = espion
+    # lancé depuis le contexte d'une étape de chat : la tâche en reçoit une copie
+    journal.commencer(etape=99, agent="plan", mission="mission-du-redacteur", tache=5)
+    try:
+        await service.lancer(did)
+    finally:
+        journal.commencer()
+    await _attendre(client)
+    assert vus == [{}, {}]

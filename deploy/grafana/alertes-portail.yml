@@ -1,0 +1,113 @@
+# Alertes du portail, à recopier dans monitoring/grafana/provisioning/alerting/portail.yml (Infra).
+# Aucun contenu dans les notifications : un résumé fixe. Une série absente (compteur étiqueté
+# avant son premier incrément, portail arrêté) n'alerte pas : noDataState OK ; l'arrêt du portail
+# est couvert par la règle infra-target-down de l'Infra.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: portail
+    folder: Infra
+    interval: 1m
+    rules:
+      - uid: portail-erreurs-modele
+        title: "Portail : plus d'un appel au modèle sur quatre échoue"
+        condition: B
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        labels: {}
+        annotations:
+          summary: "Portail : plus d'un appel au modèle sur quatre échoue"
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: 'sum(rate(portail_llm_appels_total{issue!="ok"}[15m])) / clamp_min(sum(rate(portail_llm_appels_total[15m])), 1e-9)'
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0.25]}
+      - uid: portail-tache-trop-longue
+        title: "Portail : une exécution dev dépasse deux fois la durée maximale"
+        condition: B
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: {}
+        annotations:
+          summary: "Portail : une exécution dev dépasse deux fois la durée maximale"
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              # `debut` n'est pas remis à zéro au redémarrage alors que le délai repart : marge de deux délais
+              expr: 'portail_tache_en_cours_age_max_secondes - 2 * portail_duree_max_tache_secondes'
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+      - uid: portail-echecs-consecutifs
+        title: "Portail : plus de deux pipelines dev échoués d'affilée"
+        condition: B
+        for: 0m
+        noDataState: OK
+        execErrState: Error
+        labels: {}
+        annotations:
+          summary: "Portail : plus de deux pipelines dev échoués d'affilée"
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: 'portail_echecs_dev_consecutifs'
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [2]}
+      - uid: portail-deploiement-ancien
+        title: "Portail : le déploiement a plus de 25 jours"
+        condition: B
+        for: 1h
+        noDataState: OK
+        execErrState: Error
+        labels: {}
+        annotations:
+          summary: "Portail : le déploiement a plus de 25 jours"
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              # 0 = pile démarrée hors workflow de déploiement : pas d'alerte
+              expr: '(time() - portail_deploiement_horodatage_secondes) and portail_deploiement_horodatage_secondes > 0'
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [2160000]}

@@ -228,6 +228,16 @@ async fn pas_de_reseau() {
 
 #[tokio::test]
 #[ignore]
+async fn sans_route_directe() {
+    avec_banc("route", async |b: &Banc| {
+        let r = b.lancer("wget -T 3 -q -O- http://1.1.1.1", 30, &[]).await;
+        assert_ne!(r.code, Some(0), "{r:?}");
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore]
 async fn utilisateur_non_root() {
     avec_banc("uid", async |b: &Banc| {
         let r = b.lancer("id -u", 30, &[]).await;

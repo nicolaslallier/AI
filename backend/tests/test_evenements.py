@@ -6,7 +6,7 @@ from sqlalchemy import update
 
 from portail.api import create_app
 from portail.config import Reglages
-from portail.db import Pipeline
+from portail.db import ActionConversation, AppelLLM, Pipeline
 from portail.evenements import Bus, bus, flux
 from tests.conftest import CATALOGUE_TEST, URL, FauxLLM
 
@@ -52,6 +52,46 @@ async def test_update_en_masse_pipeline_signale(sessions):
         bus.desabonner(file)
 
 
+async def test_conversation_signale_bureau(client):
+    file = bus.abonner()
+    try:
+        assert (await client.post("/api/conversations")).status_code == 201
+        assert ("bureau", None) in _vider(file)
+    finally:
+        bus.desabonner(file)
+
+
+async def test_appel_llm_signale_bureau(sessions):
+    file = bus.abonner()
+    try:
+        async with sessions() as s, s.begin():
+            s.add(AppelLLM(agent="a", modele="m", duree_ms=1, issue="ok"))
+        assert _vider(file) == [("bureau", None)]
+    finally:
+        bus.desabonner(file)
+
+
+async def test_mise_a_jour_en_masse_signale_bureau(sessions):
+    file = bus.abonner()
+    try:
+        async with sessions() as s:
+            await s.execute(update(ActionConversation).values(etat="perimee"))
+            await s.commit()
+        assert _vider(file) == [("bureau", None)]
+    finally:
+        bus.desabonner(file)
+
+
+async def test_flux_relaye_bureau():
+    b = Bus()
+    it = flux(b)
+    tache = asyncio.ensure_future(anext(it))
+    await asyncio.sleep(0)
+    b.publier(("bureau", None))
+    assert await tache == "event: bureau\ndata: {}\n\n"
+    await it.aclose()
+
+
 async def test_flux_format():
     b = Bus()
     it = flux(b)
@@ -86,3 +126,21 @@ async def test_evenements_exige_l_utilisateur(moteur, schema):
         AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
     ):
         assert (await c.get("/api/evenements")).status_code == 401
+
+
+async def test_flux_sans_tampon(client, monkeypatch):
+    async def fini(_bus):
+        yield "data: x\n\n"
+
+    monkeypatch.setattr("portail.api.flux_evenements", fini)
+    projet = (await client.post("/api/projets", json={"nom": "P"})).json()
+    pid = (
+        await client.post("/api/pipelines", json={"projet_id": projet["id"], "type": "spec"})
+    ).json()
+    eid = pid["etapes"][0]["id"]
+    cid = (await client.post("/api/conversations")).json()["id"]
+    for url in (f"/api/etapes/{eid}/flux", f"/api/conversations/{cid}/flux", "/api/evenements"):
+        r = await asyncio.wait_for(client.get(url), 5)
+        assert r.headers["content-type"].startswith("text/event-stream"), url
+        assert r.headers["x-accel-buffering"] == "no", url
+        assert r.headers["cache-control"] == "no-cache", url

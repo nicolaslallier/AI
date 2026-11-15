@@ -2,15 +2,22 @@ import asyncio
 import json
 
 from asgi_lifespan import LifespanManager
-from conftest import CATALOGUE_TEST, FauxLLM, _agent
+from conftest import CATALOGUE_TEST, FauxAgent, FauxLLM, _agent
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from portail import conversations
 from portail.actions import ACTIONS
-from portail.agents import OUTILS_ACTIONS_PORTAIL, Catalogue
+from portail.agents import OUTILS_ACTIONS_PORTAIL, OUTILS_PORTAIL, Catalogue
 from portail.api import create_app
-from portail.db import ActionConversation, Conversation, Etape, Pipeline, Tache
+from portail.db import (
+    ActionConversation,
+    Conversation,
+    Etape,
+    MessageConversation,
+    Pipeline,
+    Tache,
+)
 from portail.llm import ErreurLLM
 from portail.outils_portail import OutilsPortail
 
@@ -70,6 +77,16 @@ async def test_echange_complet(client, faux_llm):
     }
     liste = (await client.get("/api/conversations")).json()
     assert [(c["id"], c["titre"], c["etat"]) for c in liste] == [(cid, "Bonjour", "pret")]
+
+
+async def test_identifiants_d_une_conversation(client, faux_llm):
+    cid = await _creer(client)
+    faux_llm.reponses = [_texte("Salut")]
+    await _envoyer(client, cid, "Bonjour")
+    await _attendre(client, cid)
+    c = faux_llm.appels[0]["contexte"]
+    assert (c["conversation"], c["agent"]) == (cid, "orchestrateur")
+    assert c["mission"] and "etape" not in c
 
 
 async def test_message_enregistre_avant_l_appel(client, faux_llm):
@@ -362,6 +379,20 @@ def test_noms_d_actions_alignes():
     assert set(OUTILS_ACTIONS_PORTAIL) == set(ACTIONS)
 
 
+async def test_suppression_efface_messages_et_actions(client, sessions, faux_llm):
+    cid, _ = await _proposer(client, faux_llm, "creer_projet", {"nom": "Beta"})
+
+    async def compter(modele):
+        async with sessions() as s:
+            return await s.scalar(
+                select(func.count()).select_from(modele).where(modele.conversation_id == cid)
+            )
+
+    assert await compter(MessageConversation) >= 2 and await compter(ActionConversation) == 1
+    assert (await client.delete(f"/api/conversations/{cid}")).status_code == 204
+    assert await compter(MessageConversation) == 0 and await compter(ActionConversation) == 0
+
+
 async def test_proposition_cree_une_carte(client, faux_llm):
     cid, actions = await _proposer(client, faux_llm, "creer_projet", {"nom": "Beta"})
     assert [(a["nom"], a["parametres"], a["etat"]) for a in actions] == [
@@ -647,3 +678,28 @@ async def test_conversation_par_defaut_orchestrateur(client):
     d = (await client.post("/api/conversations")).json()
     assert d["agent"] == "orchestrateur"
     assert (await client.get("/api/conversations")).json()[0]["agent"] == "orchestrateur"
+
+
+async def test_orchestrateur_en_conteneur_propose(client_conteneur, faux_llm):
+    faux = FauxAgent("orchestrateur")
+    catalogue = Catalogue(
+        agents={
+            "orchestrateur": _agent(
+                "orchestrateur", outils=list(OUTILS_PORTAIL),
+                service="http://agent-orchestrateur:8080",
+            )
+        },
+        pipelines={},
+    )  # fmt: skip
+    client = await client_conteneur(catalogue, faux)
+    cid, actions = await _proposer(client, faux_llm, "creer_projet", {"nom": "Beta"})
+    assert [(a["nom"], a["parametres"], a["etat"]) for a in actions] == [
+        ("creer_projet", {"nom": "Beta"}, "proposee")
+    ]
+    d = await _detail(client, cid)
+    assert d["etat"] == "pret"
+    assert [m["role"] for m in d["messages"]] == ["user", "tool", "assistant"]
+    assert d["messages"][1]["outil"].startswith("creer_projet")
+    assert d["messages"][2]["contenu"] == "Je propose."
+    assert [m["corps"]["agent"] for m in faux.missions] == ["orchestrateur"]
+    assert await _projets(client) == []  # rien ne s'exécute avant la confirmation

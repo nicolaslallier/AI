@@ -1,7 +1,8 @@
 import json
 
 import pytest
-from conftest import FauxLLM
+from conftest import FauxLLM, valeur
+from prometheus_client import generate_latest
 
 from portail.agents import Agent
 from portail.boucle import ErreurOutils, boucle_outils
@@ -271,3 +272,56 @@ async def test_arret_apres_proposition(outils):
     ignore = "ignoré : une action attend la confirmation de Nicolas"
     assert [m["content"] for m in messages if m["role"] == "tool"] == ["proposé", ignore, ignore]
     assert len(llm.appels) == 2 and llm.appels[-1]["outils"] is None
+
+
+async def test_tours_et_outils(outils):
+    llm = FauxLLM()
+    llm.reponses = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "a", "function": {"name": "lire", "arguments": '{"chemin": "README.md"}'}},
+                {"id": "b", "function": {"name": "zzz_987", "arguments": "{}"}},
+            ],
+        },
+        _texte("Fini"),
+    ]
+    ok = {"agent": "plan", "outil": "lire", "issue": "ok"}
+    refus = {"agent": "plan", "outil": "non_autorise", "issue": "refuse"}
+    tours = {"agent": "plan"}
+    av = [
+        valeur("portail_tours_mission_sum", **tours),
+        valeur("portail_tours_mission_count", **tours),
+        valeur("portail_outils_appels_total", **ok),
+        valeur("portail_outils_appels_total", **refus),
+    ]
+    await _go(llm, outils)
+    ap = [
+        valeur("portail_tours_mission_sum", **tours),
+        valeur("portail_tours_mission_count", **tours),
+        valeur("portail_outils_appels_total", **ok),
+        valeur("portail_outils_appels_total", **refus),
+    ]
+    assert [a - b for a, b in zip(ap, av, strict=True)] == [2, 1, 1, 1]
+    assert b"zzz_987" not in generate_latest()
+
+
+async def test_tours_non_observes_sans_appel_et_observe_garde(outils, monkeypatch):
+    sans_outil = Agent(
+        nom="plan", description="p", modele="m", prompt_systeme="s", contexte_max=100
+    )
+    compte = {"agent": "plan"}
+    avant = valeur("portail_tours_mission_count", **compte)
+    with pytest.raises(ErreurOutils):
+        await _go(FauxLLM(), outils, agent=sans_outil)
+    assert valeur("portail_tours_mission_count", **compte) == avant  # 0 tour : rien observé
+
+    def casse(**_):
+        raise RuntimeError("métrique cassée")
+
+    monkeypatch.setattr("portail.boucle.metriques.TOURS_MISSION.labels", casse)
+    llm = FauxLLM()
+    llm.reponses = [_texte("Fini")]
+    resultat, _, _ = await _go(llm, outils)  # l'observation qui lève ne masque pas le résultat
+    assert resultat.texte == "Fini"

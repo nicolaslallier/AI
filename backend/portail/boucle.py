@@ -1,14 +1,18 @@
 """Boucle d'outils en lecture seule : le modèle explore le dépôt, tour après tour."""
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel
 
+from portail import journal, metriques
 from portail.agents import Agent
 from portail.contexte import elaguer_resultats_outils
 from portail.llm import retirer_reflexion
 from portail.outils import OutilsDepot
+
+logger = logging.getLogger(__name__)
 
 _LIMITE = "Limite d'outils atteinte : conclus maintenant avec ce que tu as, sans appeler d'outil."
 _IGNORE = "ignoré : une action attend la confirmation de Nicolas"
@@ -39,7 +43,48 @@ def _texte(message: dict) -> str:
     return retirer_reflexion(message.get("content") or "")
 
 
+class _Compte:
+    """Enveloppe `completer` pour compter les tours de la mission."""
+
+    def __init__(self, llm):
+        self._llm, self.tours = llm, 0
+
+    async def completer(self, *args, **kw):
+        self.tours += 1
+        return await self._llm.completer(*args, **kw)
+
+
+def _outil_mesure(nom, agent: Agent, resultat: str, valide: bool) -> None:
+    """Étiquette bornée : le nom n'est repris que s'il est dans la liste de l'agent."""
+    if isinstance(nom, str) and nom not in agent.outils:
+        outil, issue = "non_autorise", "refuse"
+    elif isinstance(nom, str):
+        outil = nom
+        issue = "ok" if valide and not resultat.startswith("erreur") else "erreur"
+    else:
+        outil, issue = "mal_forme", "erreur"
+    metriques.OUTILS_APPELS.labels(agent=agent.nom, outil=outil, issue=issue).inc()
+
+
 async def boucle_outils(
+    llm,
+    agent: Agent,
+    messages: list[dict],
+    outils: OutilsDepot,
+    sur_appel: Callable[[str, str], Awaitable[None]],
+) -> ResultatBoucle:
+    compte = _Compte(llm)
+    try:
+        return await _boucle(compte, agent, messages, outils, sur_appel)
+    finally:
+        if compte.tours:  # aucun appel (agent sans outil, refus) : rien à observer
+            try:
+                metriques.TOURS_MISSION.labels(agent=agent.nom).observe(compte.tours)
+            except Exception:  # noqa: BLE001 (une métrique ne masque ni l'erreur ni l'annulation)
+                journal.erreur(logger, "métrique des tours non enregistrée")
+
+
+async def _boucle(
     llm,
     agent: Agent,
     messages: list[dict],
@@ -113,6 +158,7 @@ async def boucle_outils(
             else:
                 resultat, mal_forme = "erreur : appel d'outil mal formé", True
                 libelle = nom if isinstance(nom, str) else "outil inconnu"
+            _outil_mesure(nom, agent, resultat, valide)
             mal_formes = mal_formes + 1 if mal_forme else 0
             messages.append({"role": "tool", "tool_call_id": id_, "content": resultat})
             await sur_appel(libelle, resultat)

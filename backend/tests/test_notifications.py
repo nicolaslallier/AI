@@ -2,7 +2,7 @@ import json
 
 import httpx
 
-from portail.notifications import Notifieur, lien_absolu, raison_courte
+from portail.notifications import Notifieur, lien_absolu
 
 
 def _notifieur(jeton, gestionnaire):
@@ -45,9 +45,3 @@ async def test_panne_ne_leve_pas():
 def test_lien_absolu():
     assert lien_absolu("https://p/", "/projets/1/kanban") == "https://p/projets/1/kanban"
     assert lien_absolu("", "/projets/1/kanban") is None
-
-
-def test_raison_courte():
-    assert (
-        raison_courte("vérification échouée (tests) :\nsortie…") == "vérification échouée (tests) :"
-    )

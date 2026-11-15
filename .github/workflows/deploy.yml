@@ -1,13 +1,12 @@
 # Construit l'image, la publie sur GHCR, puis redéploie la pile « portail » dans
 # Portainer depuis le runner auto-hébergé (le Portainer de l'Infra est sur le LAN).
 #
-# AUCUN workflow de ce dépôt ne doit avoir de déclencheur pull_request,
-# pull_request_target, issue_comment ou workflow_run pouvant atteindre le label
-# self-hosted `ai` : une PR de fork peut modifier ci.yml elle-même. Le dépôt est PUBLIC,
-# donc il FAUT exiger l'approbation pour tous les collaborateurs externes (Settings >
-# Actions > General > Fork pull request workflows from outside collaborators), et le
-# runner `ai` DOIT être éphémère (conteneur neuf par job, aucun volume de travail
-# persistant).
+# AUCUN workflow de ce dépôt ne doit avoir de déclencheur pull_request_target,
+# issue_comment ou workflow_run pouvant atteindre le label self-hosted `ai`. ci.yml a un
+# déclencheur pull_request : une PR de fork peut ajouter ou modifier un workflow
+# elle-même. Le dépôt est PUBLIC ; la protection du runner est l'approbation des
+# workflows de TOUS les contributeurs externes et un runner `ai` éphémère
+# (voir « Étapes manuelles » du README).
 name: Build and push image
 
 on:
@@ -25,48 +24,67 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Le déploiement rejoue la CI : rien n'est construit si elle échoue.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   image:
+    needs: ci
     runs-on: ubuntu-latest
+    # Digest de l'image d'exécution, pour le lanceur (liste des images permises).
+    outputs:
+      execution_digest: ${{ steps.construire-execution.outputs.digest }}
+      # Digest de l'image des agents, épinglé par la pile.
+      agents_digest: ${{ steps.construire-agents.outputs.digest }}
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # GHCR veut des minuscules ; github.repository garde la casse du dépôt.
+      - id: nom
+        run: echo "base=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ghcr.io/${{ github.repository }}-portail
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
             type=sha
 
       - id: meta-lanceur
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ghcr.io/${{ github.repository }}-lanceur
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
             type=sha
 
       - id: meta-execution
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ghcr.io/${{ github.repository }}-execution
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+
+      - id: meta-agents
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ghcr.io/${{ github.repository }}-agents
+          tags: |
             type=sha
 
       # ponytail: amd64 seul (hôte de déploiement) ; ajouter arm64 comme DarkAngel si la pile doit tourner sur le Mac mini.
-      - uses: docker/build-push-action@v6
+      - id: construire
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           platforms: linux/amd64
@@ -76,7 +94,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - uses: docker/build-push-action@v6
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.nom.outputs.base }}-portail@${{ steps.construire.outputs.digest }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 1
+
+      - id: construire-lanceur
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: lanceur
           file: lanceur/Dockerfile
@@ -87,7 +113,15 @@ jobs:
           cache-from: type=gha,scope=lanceur
           cache-to: type=gha,mode=max,scope=lanceur
 
-      - uses: docker/build-push-action@v6
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.nom.outputs.base }}-lanceur@${{ steps.construire-lanceur.outputs.digest }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 1
+
+      - id: construire-execution
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: execution
           file: execution/Dockerfile
@@ -97,6 +131,49 @@ jobs:
           labels: ${{ steps.meta-execution.outputs.labels }}
           cache-from: type=gha,scope=execution
           cache-to: type=gha,mode=max,scope=execution
+
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.nom.outputs.base }}-execution@${{ steps.construire-execution.outputs.digest }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 1
+
+      - id: construire-agents
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: agents
+          file: agents/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta-agents.outputs.tags }}
+          labels: ${{ steps.meta-agents.outputs.labels }}
+          cache-from: type=gha,scope=agents
+          cache-to: type=gha,mode=max,scope=agents
+
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.nom.outputs.base }}-agents@${{ steps.construire-agents.outputs.digest }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 1
+
+      # `latest` n'est posé qu'après les quatre analyses : une image refusée par Trivy
+      # n'existe que sous son tag immuable sha-<7>, que rien ne déploie.
+      - name: Publier latest
+        if: github.ref == 'refs/heads/main'
+        env:
+          BASE: ${{ steps.nom.outputs.base }}
+          DIGEST_PORTAIL: ${{ steps.construire.outputs.digest }}
+          DIGEST_LANCEUR: ${{ steps.construire-lanceur.outputs.digest }}
+          DIGEST_EXECUTION: ${{ steps.construire-execution.outputs.digest }}
+          DIGEST_AGENTS: ${{ steps.construire-agents.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create -t "$BASE-portail:latest" "$BASE-portail@$DIGEST_PORTAIL"
+          docker buildx imagetools create -t "$BASE-lanceur:latest" "$BASE-lanceur@$DIGEST_LANCEUR"
+          docker buildx imagetools create -t "$BASE-execution:latest" "$BASE-execution@$DIGEST_EXECUTION"
+          docker buildx imagetools create -t "$BASE-agents:latest" "$BASE-agents@$DIGEST_AGENTS"
 
   deploy:
     needs: image
@@ -127,10 +204,15 @@ jobs:
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
           BAO_TOKEN: ${{ secrets.BAO_TOKEN }}
           GITHUB_SHA_FULL: ${{ github.sha }}
+          EXECUTION_DIGEST: ${{ needs.image.outputs.execution_digest }}
+          AGENTS_DIGEST: ${{ needs.image.outputs.agents_digest }}
         run: |
           set -euo pipefail
-          for v in PORTAINER_API_KEY BAO_TOKEN PORTAINER_ENDPOINT_ID; do
+          for v in PORTAINER_API_KEY BAO_TOKEN PORTAINER_ENDPOINT_ID EXECUTION_DIGEST AGENTS_DIGEST; do
             [ -n "${!v}" ] || { echo "::error::$v absent (secret ou variable du dépôt)"; exit 1; }
+          done
+          for v in EXECUTION_DIGEST AGENTS_DIGEST; do
+            printf '%s' "${!v}" | grep -Eqx 'sha256:[0-9a-f]{64}' || { echo "::error::$v n'a pas la forme sha256:<64 hexadécimaux>"; exit 1; }
           done
           umask 077
           export PORTAIL_STACK_ENV="$RUNNER_TEMP/portail.env"
@@ -139,4 +221,9 @@ jobs:
           PORTAINER_API_KEY= scripts/vault-render-env.sh
           # Le tag que le job image vient de pousser (metadata-action : sha-<7 car.>).
           printf 'IMAGE_TAG=sha-%s\n' "${GITHUB_SHA_FULL::7}" >> "$PORTAIL_STACK_ENV"
+          printf 'DEPLOYE_LE=%s\n' "$(date +%s)" >> "$PORTAIL_STACK_ENV"
+          # Digest de l'image d'exécution que le job image vient de pousser.
+          printf 'EXECUTION_DIGEST=%s\n' "$EXECUTION_DIGEST" >> "$PORTAIL_STACK_ENV"
+          # Digest de l'image des agents que le job image vient de pousser.
+          printf 'AGENTS_DIGEST=%s\n' "$AGENTS_DIGEST" >> "$PORTAIL_STACK_ENV"
           BAO_TOKEN= scripts/portainer-stack.sh up

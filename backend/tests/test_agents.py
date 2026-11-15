@@ -10,9 +10,11 @@ from portail.agents import (
     CatalogueInvalide,
     charger_catalogue,
     modele_pour,
+    rangement,
 )
 
 VALIDE = """
+modeles_permis: [m]
 agents:
   spec:
     description: d
@@ -52,6 +54,27 @@ def test_pipeline_agent_inconnu(tmp_path):
 def test_pipeline_vide_refuse(tmp_path):
     with pytest.raises(CatalogueInvalide):
         charger_catalogue(ecrire(tmp_path, VALIDE.replace("spec: [spec]", "spec: []")))
+
+
+def test_modeles_permis_absents(tmp_path):
+    with pytest.raises(CatalogueInvalide, match="modeles_permis"):
+        charger_catalogue(ecrire(tmp_path, VALIDE.replace("modeles_permis: [m]\n", "")))
+
+
+def test_modeles_permis_vides(tmp_path):
+    with pytest.raises(CatalogueInvalide, match="modeles_permis"):
+        charger_catalogue(ecrire(tmp_path, VALIDE.replace("[m]", "[]", 1)))
+
+
+def test_modele_hors_liste(tmp_path):
+    texte = VALIDE.replace("    modele: m\n", "    modele: gpt-x\n")
+    with pytest.raises(CatalogueInvalide) as exc:
+        charger_catalogue(ecrire(tmp_path, texte))
+    assert "agent « spec »" in str(exc.value) and "gpt-x" in str(exc.value)
+
+
+def test_catalogue_du_depot():
+    assert charger_catalogue(Path("../agents.yaml")).modeles_permis
 
 
 def test_yaml_illisible(tmp_path):
@@ -189,6 +212,11 @@ def test_modele_si_meme_identique_refuse(tmp_path):
         _avec(tmp_path, "    modele_si_meme: m")
 
 
+def test_modele_si_meme_hors_liste_refuse(tmp_path):
+    with pytest.raises(CatalogueInvalide, match="gpt-x"):
+        _avec(tmp_path, "    modele_si_meme: gpt-x")
+
+
 def test_doc_avec_lancer_refuse(tmp_path):
     with pytest.raises(CatalogueInvalide, match="spec"):
         _avec(tmp_path, "    produit: travail\n    role: doc\n    outils: [lire, ecrire, lancer]")
@@ -268,3 +296,72 @@ def test_modele_pour():
     assert modele_pour(agent("challenger", "x", "y"), code) == "y"
     assert modele_pour(agent("challenger", "z", "y"), code) == "z"
     assert modele_pour(agent("revue", "x"), code) == "x"
+
+
+def test_rangement():
+    from tests.conftest import CATALOGUE_TEST
+
+    assert rangement(CATALOGUE_TEST) == [
+        ("spec", ["spec"]),
+        ("double", ["a", "b"]),
+        ("petit", ["petit"]),
+        ("planification", ["plan", "taches"]),
+        (None, ["orchestrateur", "pm"]),
+    ]
+
+
+def test_rangement_sans_groupe_hors_pipeline_et_agent_dans_deux_pipelines():
+    from tests.conftest import CATALOGUE_TEST
+
+    cat = CATALOGUE_TEST.model_copy(
+        update={
+            "agents": {k: v for k, v in CATALOGUE_TEST.agents.items() if k in ("a", "b")},
+            "pipelines": {"x": ["a", "b"], "y": ["b"]},
+        }
+    )
+    assert rangement(cat) == [("x", ["a", "b"]), ("y", ["b"])]
+
+
+def test_rangement_agent_cite_seulement_dans_avis_est_hors_pipeline():
+    from tests.conftest import CATALOGUE_TEST
+
+    cat = CATALOGUE_TEST.model_copy(
+        update={
+            "agents": {k: v for k, v in CATALOGUE_TEST.agents.items() if k in ("a", "b")},
+            "pipelines": {"x": ["a"]},
+            "avis": {"plan": ["b"]},
+        }
+    )
+    assert rangement(cat) == [("x", ["a"]), (None, ["b"])]
+
+
+def test_service_adresse_valide(tmp_path):
+    cat = charger_catalogue(
+        ecrire(
+            tmp_path,
+            VALIDE.replace(
+                "prompt_systeme: p", "prompt_systeme: p\n    service: http://agent-revue:8080"
+            ),
+        )
+    )
+    assert cat.agents["spec"].service == "http://agent-revue:8080"
+    assert charger_catalogue(ecrire(tmp_path, VALIDE)).agents["spec"].service is None
+
+
+@pytest.mark.parametrize(
+    "adresse",
+    [
+        "https://agent-revue:8080",
+        "http://agent-revue",
+        "http://10.0.0.1:8080/x",
+        "agent-revue:8080",
+        "http://10.0.0.1:8080",
+        "http://localhost:8080",
+        "http://litellm:4000",
+        "http://postgres:5432",
+    ],
+)
+def test_service_adresse_invalide(tmp_path, adresse):
+    texte = VALIDE.replace("prompt_systeme: p", f"prompt_systeme: p\n    service: {adresse}")
+    with pytest.raises(CatalogueInvalide, match="« spec »"):
+        charger_catalogue(ecrire(tmp_path, texte))

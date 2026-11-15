@@ -1,22 +1,28 @@
 import asyncio
+import contextlib
+import json
 import os
 import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import pytest
 import pytest_asyncio
 from asgi_lifespan import LifespanManager
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine, text
 
+from portail import journal
 from portail.agents import OUTILS_LECTURE_PORTAIL, OUTILS_PORTAIL, Agent, Catalogue
 from portail.api import create_app
 from portail.config import Reglages
 from portail.db import Base, creer_moteur, fabrique_sessions
 from portail.github import CommentaireGitHub
 from portail.lanceur import Resultat
+from portail.missions import ROUTEUR_INTERNE, DemandeMission, Missions
 
 URL = os.environ.get(
     "PORTAIL_TEST_DATABASE_URL", "postgresql+psycopg://portail:portail@localhost:5433/portail_test"
@@ -59,7 +65,14 @@ class FauxLLM:
         self.reponses: list[dict | asyncio.Event] = []  # renvoyés tour à tour par `completer`
 
     async def flux(self, modele, messages, temperature):
-        self.appels.append({"modele": modele, "messages": messages, "temperature": temperature})
+        self.appels.append(
+            {
+                "modele": modele,
+                "messages": messages,
+                "temperature": temperature,
+                "contexte": dict(journal.contexte.get()),
+            }
+        )
         for m in self.morceaux:
             if isinstance(m, asyncio.Event):
                 await m.wait()
@@ -76,6 +89,7 @@ class FauxLLM:
                 "temperature": temperature,
                 "outils": outils,
                 "response_format": response_format,
+                "contexte": dict(journal.contexte.get()),
             }
         )
         if self.exception:
@@ -138,6 +152,183 @@ async def client(moteur, reglages, faux_llm):
         AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
     ):
         yield c
+
+
+@pytest_asyncio.fixture
+async def client_conteneur(moteur, reglages, faux_llm):
+    """Fabrique `(catalogue, faux_agent) -> client` : l'application tourne avec les missions du faux."""
+    async with contextlib.AsyncExitStack() as pile:
+
+        async def fabriquer(catalogue, faux):
+            app = create_app(
+                reglages=reglages, llm=faux_llm, catalogue=catalogue, missions=faux.registre
+            )
+            await pile.enter_async_context(LifespanManager(app))
+            return await pile.enter_async_context(
+                AsyncClient(transport=ASGITransport(app), base_url="http://t")
+            )
+
+        yield fabriquer
+
+
+# --- routes /interne/ ----------------------------------------------------
+
+
+class Horloge:
+    """Horloge des tests : `t` avance quand le test le décide."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+class Interne:
+    """Une `FastAPI` nue avec les routes `/interne/`, sans base ni lifespan."""
+
+    def __init__(self, faux_llm):
+        self.llm = faux_llm
+        self.horloge = Horloge()
+        self.missions = Missions({}, 60, horloge=self.horloge)
+        app = FastAPI()
+        app.state.missions = self.missions
+        app.include_router(ROUTEUR_INTERNE)
+        self.client = AsyncClient(transport=ASGITransport(app), base_url="http://t")
+
+    def ouvrir(self, agent=None, outils=None, llm=None, sur_appel=None, version="v0"):
+        async def rien(libelle, resultat):
+            return None
+
+        m = self.missions.ouvrir(
+            llm or self.llm, agent or _agent("revue"), outils, sur_appel or rien, version
+        )
+        m.outils_ouverts = bool(outils)  # comme si un appel au modèle avait offert les outils
+        return m
+
+    async def post(self, chemin, m, corps, **kw):
+        return await self.client.post(
+            f"/interne/{chemin}", json=corps, headers={"Authorization": f"Bearer {m.jeton}"}, **kw
+        )
+
+
+@pytest_asyncio.fixture
+async def interne(faux_llm):
+    i = Interne(faux_llm)
+    yield i
+    await i.client.aclose()
+
+
+# --- agent en conteneur ---------------------------------------------------
+
+
+class _FluxAgent(httpx.AsyncByteStream):
+    """Réponse de `/missions` : l'agent tourne dans sa propre tâche, comme dans son conteneur."""
+
+    def __init__(self, faux, demande):
+        self.faux, self.demande = faux, demande
+        self.file: asyncio.Queue = asyncio.Queue()
+        self.tache: asyncio.Task | None = None
+
+    async def _jouer(self):
+        try:
+            async for ligne in self.faux.jouer(self.demande, self.faux.portail(self.demande.jeton)):
+                await self.file.put(ligne)
+        finally:
+            await self.file.put(None)
+
+    async def __aiter__(self):
+        self.tache = asyncio.ensure_future(self._jouer())
+        while (ligne := await self.file.get()) is not None:
+            if isinstance(ligne, dict):
+                ligne = json.dumps(ligne, ensure_ascii=False) + "\n"
+            yield ligne.encode() if isinstance(ligne, str) else ligne
+
+    async def aclose(self):
+        self.faux.deconnecte.set()  # le portail a fermé le flux : l'agent voit la connexion coupée
+        if self.tache:
+            self.tache.cancel()
+            await asyncio.gather(self.tache, return_exceptions=True)
+
+
+class FauxAgent:
+    """Un faux conteneur d'agent : `registre` est un `Missions` branché dessus.
+
+    - `contrat`, `version`, `joignable`, `code` : ce que `/sante` et `/missions` répondent ;
+    - `missions` : les requêtes reçues, `{"entetes", "corps"}` ;
+    - `jouer(demande, portail)` : générateur de lignes (dict, ou texte brut pour une ligne
+      illisible), remplacé par les tests qui trichent ; `portail(chemin, corps)` appelle `/interne/`
+      avec le jeton de la mission ;
+    - `deconnecte` : posé quand le portail ferme le flux.
+    """
+
+    SECRET = "s" * 32
+
+    def __init__(self, agent="revue", duree_s=60):
+        self.agent, self.contrat, self.version = agent, "v1", "sha-agent"
+        self.joignable, self.code = True, 200
+        self.missions: list[dict] = []
+        self.sante: list[dict] = []
+        self.deconnecte = asyncio.Event()
+        self.registre = Missions(
+            {agent: self.SECRET}, duree_s, transport=httpx.MockTransport(self.repondre)
+        )
+        app = FastAPI()
+        app.state.missions = self.registre
+        app.include_router(ROUTEUR_INTERNE)
+        self.client = AsyncClient(transport=ASGITransport(app), base_url="http://t")
+
+    def portail(self, jeton):
+        async def appeler(chemin, corps):
+            return await self.client.post(
+                f"/interne/{chemin}", json=corps, headers={"Authorization": f"Bearer {jeton}"}
+            )
+
+        return appeler
+
+    async def repondre(self, request: httpx.Request) -> httpx.Response:
+        if not self.joignable:
+            raise httpx.ConnectError("hors service")
+        if request.url.path == "/sante":
+            self.sante.append({"entetes": dict(request.headers)})
+            return httpx.Response(
+                200, json={"contrat": self.contrat, "agent": self.agent, "version": self.version}
+            )
+        corps = json.loads(request.content)
+        self.missions.append({"entetes": dict(request.headers), "corps": corps})
+        if self.code != 200:
+            return httpx.Response(self.code)
+        return httpx.Response(200, stream=_FluxAgent(self, DemandeMission.model_validate(corps)))
+
+    async def jouer(self, demande, portail):
+        """La boucle d'outils d'un agent honnête."""
+        messages = [m.model_dump(exclude_none=True) for m in demande.messages]
+        corps = {"outils": bool(demande.outils), "response_format": demande.response_format}
+        while True:
+            r = await portail("modele", {"messages": messages, **corps})
+            if r.status_code != 200:
+                yield {"type": "erreur", "erreur": "texte de l'agent"}
+                return
+            messages.append(r.json()["message"])
+            appels = messages[-1].get("tool_calls") or []
+            if not appels:
+                yield {
+                    "type": "fin", "texte": messages[-1]["content"] or "", "messages": messages,
+                    "limite_atteinte": False,
+                }  # fmt: skip
+                return
+            for a in appels:
+                f = a["function"]
+                r = await portail("outils", {"nom": f["name"], "arguments": f["arguments"]})
+                resultat = r.json().get("resultat", "")
+                messages.append({"role": "tool", "tool_call_id": a["id"], "content": resultat})
+
+
+@pytest_asyncio.fixture
+async def faux_agent():
+    faux = FauxAgent()
+    yield faux
+    await faux.client.aclose()
 
 
 # --- dépôt -------------------------------------------------------------
@@ -310,3 +501,13 @@ class FauxGitHub:
 @pytest.fixture
 def faux_github():
     return FauxGitHub()
+
+
+# --- métriques ---------------------------------------------------------
+
+
+def valeur(nom: str, /, **etiquettes: str) -> float:
+    """Valeur courante d'un échantillon du registre ; les tests comparent avant et après."""
+    from prometheus_client import REGISTRY
+
+    return REGISTRY.get_sample_value(nom, etiquettes) or 0.0

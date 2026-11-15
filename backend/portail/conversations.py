@@ -8,13 +8,15 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from portail import journal
 from portail.actions import executer_action
 from portail.agents import Agent, Catalogue
-from portail.boucle import boucle_outils
+from portail.audit import inscrire
 from portail.chat import Diffuseur, ServiceChat, _sse
 from portail.contexte import jauge
 from portail.db import ActionConversation, Conversation, MessageConversation, Tache
 from portail.llm import ClientLLM, FiltreReflexion, retirer_reflexion
+from portail.missions import Missions, streamer, tourner
 from portail.moteur import Refus
 from portail.outils_portail import OutilsPortail
 from portail.schemas import ActionOut, ConversationDetail, MessageOut
@@ -45,7 +47,9 @@ class ServiceConversation:
         chat: ServiceChat,
         annuler_tache: Callable[[int], Awaitable[None]],
         reveiller: Callable[[], None],
+        missions: Missions | None = None,
     ):
+        self._missions = missions
         self._sessions = sessions
         self._catalogue = catalogue
         self._llm = llm
@@ -211,11 +215,12 @@ class ServiceConversation:
         s.add(MessageConversation(conversation_id=c.id, role="system", contenu=contenu))
         c.etat, c.erreur = "en_cours", None
 
-    async def confirmer(self, action_id: int) -> None:
+    async def confirmer(self, action_id: int, auteur: str) -> None:
         """Seul chemin d'exécution d'une action : le clic de Nicolas, une seule fois."""
         async with self._sessions() as s:
             c, a = await self._verrouiller(s, action_id)
             cid, nom = c.id, a.nom
+            inscrire(s, auteur, "action.confirmer", "action_conversation", action_id)
             if nom == "annuler_tache":
                 # passée confirmee et commitée d'abord : jamais exécutée deux fois
                 tache_id = a.parametres["tache_id"]
@@ -240,7 +245,7 @@ class ServiceConversation:
                 if isinstance(e, Refus):
                     motif = e.message
                 else:  # course rare (projet ou tâche supprimé entre-temps…)
-                    logger.exception("action %s : erreur de base à l'exécution", action_id)
+                    journal.erreur(logger, "action %s : erreur de base à l'exécution", action_id)
                     motif = "le portail a changé entre-temps, réessaie de proposer l'action"
                 a.etat, a.resultat = "echouee", motif
                 texte = f"Action n°{action_id} ({nom}) refusée par le portail : {motif}"
@@ -256,9 +261,9 @@ class ServiceConversation:
             await self._annuler_tache(tache_id)
             etat, resultat = "confirmee", "tâche annulée, revenue à faire"
             texte = f"Action n°{action_id} ({nom}) confirmée par Nicolas : {resultat}"
-        except Exception as e:  # l'action est déjà confirmee : noter l'échec
+        except Exception as e:  # l'action est déjà confirmee : noter l'échec  # noqa: BLE001
             if not isinstance(e, Refus):
-                logger.exception("action %s : annulation de la tâche %s", action_id, tache_id)
+                journal.erreur(logger, "action %s : annulation de la tâche %s", action_id, tache_id)
             etat, resultat = "echouee", e.message if isinstance(e, Refus) else f"erreur : {e}"
             texte = f"Action n°{action_id} ({nom}) refusée par le portail : {resultat}"
         async with self._sessions() as s:
@@ -268,10 +273,11 @@ class ServiceConversation:
             self._systeme(s, c, texte)
             await s.commit()
 
-    async def refuser(self, action_id: int) -> None:
+    async def refuser(self, action_id: int, auteur: str) -> None:
         async with self._sessions() as s:
             c, a = await self._verrouiller(s, action_id)
             cid = c.id
+            inscrire(s, auteur, "action.refuser", "action_conversation", action_id)
             a.etat = "refusee"
             self._systeme(s, c, f"Nicolas a refusé l'action n°{action_id} ({a.nom})")
             await s.commit()
@@ -297,6 +303,13 @@ class ServiceConversation:
             await s.commit()
 
     async def _streamer(self, cid: int, agent: Agent, demande: list[dict]) -> str:
+        if agent.service:
+
+            async def publier(part: str) -> None:
+                self.diffuseur.ajouter_partiel(cid, part)
+                self.diffuseur.publier(cid, {"type": "delta", "texte": part})
+
+            return await streamer(self._llm, self._missions, agent, demande, publier)
         filtre = FiltreReflexion()
         brut = ""
         async for morceau in self._llm.flux(agent.modele, demande, agent.temperature):
@@ -318,7 +331,7 @@ class ServiceConversation:
             self.diffuseur.publier(cid, {"type": "outil", "libelle": libelle})
 
         outils = OutilsPortail(self._sessions, agent.outils, self._catalogue, cid)
-        resultat = await boucle_outils(self._llm, agent, demande, outils, sur_appel)
+        resultat = await tourner(self._llm, self._missions, agent, demande, outils, sur_appel)
         visible = resultat.texte.strip()
         if visible:
             self.diffuseur.publier(cid, {"type": "delta", "texte": visible})
@@ -326,9 +339,11 @@ class ServiceConversation:
 
     async def _tache(self, cid: int) -> None:
         d = self.diffuseur
+        journal.commencer(conversation=cid)
         try:
             async with self._sessions() as s:
                 agent = self._agent(await self._conversation(s, cid))
+                journal.nouvelle_mission(agent.nom, agent.contexte_max)
                 demande = construire_conversation(agent, await self._messages(s, cid))
             limite = False
             if agent.outils:
@@ -366,9 +381,11 @@ class ServiceConversation:
                     if c.etat == "en_cours":
                         c.etat, c.erreur = "erreur", str(exc)
                         await s.commit()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 # l'événement terminal part quand même : les abonnés ne doivent pas rester bloqués
-                logger.exception("impossible d'enregistrer l'échec de la conversation %s", cid)
+                journal.erreur(
+                    logger, "impossible d'enregistrer l'échec de la conversation %s", cid
+                )
             d.publier(cid, {"type": "erreur", "message": str(exc)})
         finally:
             d.oublier(cid)

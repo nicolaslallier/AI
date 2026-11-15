@@ -1,7 +1,8 @@
+import ipaddress
 import re
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +33,24 @@ class Reglages(BaseSettings):
     url_publique: str = ""
     resume_heure: str = "07:00"  # HH:MM à Toronto ; "" désactive le résumé du matin
     delai_commentaires_s: int = 600
+    version: str = ""  # PORTAIL_VERSION : tag de l'image déployée
+    duree_mission_s: int = Field(
+        default=3600, gt=0
+    )  # PORTAIL_DUREE_MISSION_S : durée de vie d'une mission en conteneur
+    reseau_agents: str = (
+        ""  # PORTAIL_RESEAU_AGENTS : CIDR du réseau des agents ; vide : aucun filtrage
+    )
+    deploye_le: int = 0  # PORTAIL_DEPLOYE_LE : secondes Unix du déploiement
+
+    @field_validator("reseau_agents")
+    @classmethod
+    def _reseau_agents(cls, v: str) -> str:
+        if v:
+            try:
+                ipaddress.ip_network(v)
+            except ValueError:
+                raise ValueError("PORTAIL_RESEAU_AGENTS doit être vide ou un réseau CIDR") from None
+        return v
 
     @field_validator("resume_heure")
     @classmethod

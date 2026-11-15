@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {"json": {"()": "portail.journal.FormatJSON"}},
+  "handlers": {
+    "sortie": {"class": "logging.StreamHandler", "formatter": "json", "stream": "ext://sys.stdout"}
+  },
+  "root": {"level": "INFO", "handlers": ["sortie"]},
+  "loggers": {
+    "httpx": {"level": "WARNING"},
+    "httpcore": {"level": "WARNING"},
+    "uvicorn": {"handlers": [], "propagate": true},
+    "uvicorn.error": {"handlers": [], "propagate": true},
+    "uvicorn.access": {"handlers": [], "propagate": true}
+  }
+}

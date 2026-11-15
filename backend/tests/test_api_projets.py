@@ -1,10 +1,12 @@
 from datetime import UTC, datetime
 
+import pytest
 from asgi_lifespan import LifespanManager
-from conftest import CATALOGUE_TEST, URL, FauxLLM
+from conftest import CATALOGUE_TEST, URL, FauxLLM, _agent
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
+from portail.agents import Catalogue, CatalogueInvalide
 from portail.api import create_app
 from portail.config import Reglages
 from portail.db import Document, Etape
@@ -154,3 +156,25 @@ async def test_agent_absent_du_catalogue(client, sessions):
     r = await client.post(f"/api/etapes/{eid}/messages", json={"contenu": "x"})
     assert r.status_code == 409
     assert "disparu" in r.json()["detail"]
+
+
+async def test_demarrage_refuse_un_agent_service_sans_secret(reglages, monkeypatch):
+    monkeypatch.delenv("PORTAIL_AGENT_SECRET_REVUE", raising=False)
+    catalogue = Catalogue(
+        agents={"revue": _agent("revue", service="http://agent-revue:8080")}, pipelines={}
+    )
+    app = create_app(reglages=reglages, llm=FauxLLM(), catalogue=catalogue)
+    with pytest.raises(CatalogueInvalide, match="PORTAIL_AGENT_SECRET_REVUE"):
+        async with LifespanManager(app):
+            pass
+
+
+async def test_demarrage_lit_le_secret_des_agents_service(reglages, monkeypatch):
+    monkeypatch.setenv("PORTAIL_AGENT_SECRET_REVUE", "x" * 40)
+    catalogue = Catalogue(
+        agents={"revue": _agent("revue", service="http://agent-revue:8080")}, pipelines={}
+    )
+    app = create_app(reglages=reglages, llm=FauxLLM(), catalogue=catalogue)
+    async with LifespanManager(app):
+        assert app.state.missions.secrets == {"revue": "x" * 40}
+        assert app.state.missions.duree_s == reglages.duree_mission_s

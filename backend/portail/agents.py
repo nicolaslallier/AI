@@ -67,6 +67,10 @@ class Agent(BaseModel):
     role: Literal["tests", "code", "revue", "doc"] | None = None
     modele_si_meme: str | None = None
     consigne_avis: str | None = None
+    # adresse du conteneur de l'agent sur le réseau portail-agents ; absent : l'agent tourne dans le portail
+    service: str | None = Field(
+        default=None, pattern=r"^http://agent-[a-z][a-z0-9-]{0,40}:[0-9]{1,5}$"
+    )
 
     @model_validator(mode="after")
     def _coherent(self):
@@ -103,9 +107,18 @@ def modele_pour(agent: Agent, auteur: Agent) -> str:
 
 
 class Catalogue(BaseModel):
+    modeles_permis: list[str] = []
     agents: dict[str, Agent]
     pipelines: dict[str, list[str]]
     avis: dict[Literal["spec", "plan"], list[str]] = {}
+
+
+def rangement(cat: Catalogue) -> list[tuple[str | None, list[str]]]:
+    """Un groupe par pipeline (agents dans l'ordre des étapes), puis les agents hors pipeline."""
+    groupes: list[tuple[str | None, list[str]]] = [(p, list(e)) for p, e in cat.pipelines.items()]
+    en_pipeline = {a for e in cat.pipelines.values() for a in e}
+    reste = [a for a in cat.agents if a not in en_pipeline]
+    return groupes + [(None, reste)] if reste else groupes
 
 
 def charger_catalogue(chemin: Path) -> Catalogue:
@@ -128,9 +141,21 @@ def charger_catalogue(chemin: Path) -> Catalogue:
             agents[nom] = Agent(nom=nom, **a)
         except ValidationError as e:
             raise CatalogueInvalide(f"agent « {nom} » invalide ({_details(e)})") from e
+    permis = brut.get("modeles_permis")
+    if not isinstance(permis, list) or not permis or not all(isinstance(m, str) for m in permis):
+        raise CatalogueInvalide("`modeles_permis` doit être une liste non vide de noms de modèles")
+    for nom, a in agents.items():
+        for m in (a.modele, a.modele_si_meme):
+            if m is not None and m not in permis:
+                raise CatalogueInvalide(
+                    f"agent « {nom} » : le modèle « {m} » n'est pas dans `modeles_permis`"
+                )
     try:
         cat = Catalogue(
-            agents=agents, pipelines=brut.get("pipelines") or {}, avis=brut.get("avis") or {}
+            modeles_permis=permis,
+            agents=agents,
+            pipelines=brut.get("pipelines") or {},
+            avis=brut.get("avis") or {},
         )
     except ValidationError as e:
         raise CatalogueInvalide(f"`pipelines` invalide ({_details(e)})") from e

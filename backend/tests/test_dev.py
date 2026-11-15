@@ -1,18 +1,19 @@
 import asyncio
 import itertools
 import json
+import logging
 import subprocess
 from pathlib import Path
 
 import httpx
 import pytest
-from conftest import URL, FauxGitHub, FauxLanceur, FauxLLM, FauxNotifieur
+from conftest import URL, FauxAgent, FauxGitHub, FauxLanceur, FauxLLM, FauxNotifieur, valeur
 from sqlalchemy import select
 
 from portail.agents import Agent, Catalogue
 from portail.config import Reglages
 from portail.db import CommandeLancee, Etape, ExecutionDev, Message, Pipeline, Projet, Tache
-from portail.dev import Orchestrateur
+from portail.dev import FORMAT_VERDICT, Orchestrateur
 from portail.github import ErreurGitHub
 from portail.moteur import Refus, creer_pipeline
 from portail.notifications import Notifieur
@@ -100,7 +101,7 @@ CONTROLES_OK = [verdict("ok"), verdict("ok"), verdict("ok"), texte("rien")]
 
 
 class Monde:
-    def __init__(self, tmp_path, sessions):
+    def __init__(self, tmp_path, sessions, catalogue=CATALOGUE, missions=None, **reglages):
         nu = tmp_path / "origine.git"
         git(tmp_path, "init", "--bare", "-b", "main", str(nu))
         amont = tmp_path / "amont"
@@ -116,15 +117,18 @@ class Monde:
         self.origine = nu
         self.sessions = sessions
         self.reglages = Reglages(
-            database_url=URL, espaces_dir=tmp_path / "espaces", url_publique="https://portail.x"
+            database_url=URL,
+            espaces_dir=tmp_path / "espaces",
+            url_publique="https://portail.x",
+            **reglages,
         )
         self.llm = FauxLLM()
         self.lanceur = FauxLanceur(tmp_path / "espaces")
         self.github = FauxGitHub()
         self.notifieur = FauxNotifieur()
         self.orch = Orchestrateur(
-            sessions, CATALOGUE, self.llm, self.lanceur, self.github, self.reglages,
-            depot_de=lambda url: "nicolas/projet", notifieur=self.notifieur,
+            sessions, catalogue, self.llm, self.lanceur, self.github, self.reglages,
+            depot_de=lambda url: "nicolas/projet", notifieur=self.notifieur, missions=missions,
         )  # fmt: skip
 
     async def creer(self) -> int:
@@ -168,6 +172,86 @@ async def monde(tmp_path, sessions):
     return m
 
 
+CATALOGUE_CONTENEUR = CATALOGUE.model_copy(
+    update={
+        "agents": {
+            **CATALOGUE.agents,
+            "revue": CATALOGUE.agents["revue"].model_copy(
+                update={"service": "http://agent-revue:8080"}
+            ),
+        }
+    }
+)
+
+
+@pytest.fixture
+async def monde_conteneur(request, tmp_path, sessions):
+    faux = FauxAgent("revue")
+    m = Monde(
+        tmp_path, sessions, CATALOGUE_CONTENEUR, faux.registre, **getattr(request, "param", {})
+    )
+    await m.creer()
+    yield m, faux
+    await faux.client.aclose()
+
+
+async def test_revue_en_conteneur_parcours_complet(monde_conteneur):
+    monde, faux = monde_conteneur
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [
+        *TESTS_OK, *CODE_OK, appel("lire", chemin="src/x.py"), verdict("ok", "propre"),
+    ]  # fmt: skip
+    pid = await monde.lancer()
+    ex, _tache, pipeline = await monde.etat(pid)
+    assert (ex.phase, pipeline.etat) == ("fini", "terminee")
+    assert "propre" in monde.github.prs[1]["corps"]
+    assert [m["corps"]["agent"] for m in faux.missions] == [
+        "revue"
+    ]  # tests et code : dans le portail
+    async with monde.sessions() as s:
+        messages = (
+            await s.execute(
+                select(Etape.agent, Message.role, Message.outil, Message.contenu)
+                .join(Message, Message.etape_id == Etape.id)
+                .where(Message.role == "tool")
+            )
+        ).all()
+    revue = [m for m in messages if m.agent == "revue"]
+    assert [(m.outil, m.contenu.strip()) for m in revue] == [("lire(src/x.py)", "x = 1")]
+
+
+async def test_relance_verdict_par_une_nouvelle_mission(monde_conteneur):
+    monde, faux = monde_conteneur
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, texte("pas du json"), verdict("ok", "propre")]
+    pid = await monde.lancer()
+    _ex, _tache, pipeline = await monde.etat(pid)
+    assert pipeline.etat == "terminee" and "propre" in monde.github.prs[1]["corps"]
+    premiere, relance = (m["corps"] for m in faux.missions)
+    assert premiere["outils"] and relance["outils"] == []
+    assert relance["response_format"] == FORMAT_VERDICT
+    derniers = [{k: v for k, v in m.items() if v is not None} for m in relance["messages"][-2:]]
+    assert derniers == [
+        {"role": "assistant", "content": "pas du json"},
+        {"role": "user", "content": "Réponse invalide : renvoie uniquement le JSON."},
+    ]
+
+
+async def test_agent_en_conteneur_injoignable_bloque(monde_conteneur):
+    monde, faux = monde_conteneur
+    faux.joignable = False
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+    avant = valeur("portail_blocages_total", cause="outils", phase="controles")
+    pid = await monde.lancer()
+    ex, tache, pipeline = await monde.etat(pid)
+    assert pipeline.etat == "echouee" and tache.colonne == "bloquee"
+    assert "« revue » injoignable" in tache.resume_blocage
+    assert ex.phase == "controles"
+    assert valeur("portail_blocages_total", cause="outils", phase="controles") == avant + 1
+    assert faux.missions == []
+
+
 async def test_parcours_complet_ouvre_une_pr(monde):
     monde.lanceur.codes = {CIBLES: [1]}
     monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok", "propre")]
@@ -196,6 +280,21 @@ async def test_parcours_complet_ouvre_une_pr(monde):
     ]  # fmt: skip
     assert all(e.etat == "terminee" for e in etapes)
     assert {"route": "nettoyer", "espace": "tache-1-1"} in monde.lanceur.appels
+
+
+async def test_identifiants_d_un_agent_dev(monde):
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok", "propre")]
+    pid = await monde.lancer()
+    _ex, tache, _pipeline = await monde.etat(pid)
+    par_agent = {}
+    for a in monde.llm.appels:
+        c = a["contexte"]
+        par_agent.setdefault(c["agent"], c)
+    tests, code = par_agent["tests"], par_agent["code"]
+    assert (tests["pipeline"], tests["tache"]) == (pid, tache.id)
+    assert tests["etape"] and tests["mission"] and code["mission"] != tests["mission"]
+    assert code["etape"] != tests["etape"]
 
 
 async def test_aucun_test_ecrit_bloque(monde):
@@ -441,6 +540,20 @@ async def test_verification_rouge_avec_violation_ne_pousse_pas(monde):
     assert BRANCHE not in monde.branches()
 
 
+async def test_titre_de_tache_absent_des_journaux(monde, caplog):
+    # la branche porte le slug du titre (en minuscules) : elle ne doit jamais être journalisée
+    async with monde.sessions() as s:
+        (await s.get(Tache, 1)).titre = "MarqueurTitre"
+        await s.commit()
+    monde.lanceur.effets = {"pytest": triche}
+    monde.lanceur.codes = {CIBLES: [1], "pytest": [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+    with caplog.at_level(logging.DEBUG):
+        await monde.lancer()
+    assert "non poussée" in caplog.text  # le chemin concerné a bien été pris
+    assert "marqueurtitre" not in caplog.text.lower()
+
+
 async def test_duree_max_apres_violation_ne_pousse_pas(monde):
     monde.reglages.duree_max_tache_s = 3
     monde.lanceur.effets = {"pytest": triche}
@@ -476,8 +589,8 @@ async def test_bloquer_sans_execution_ne_leve_pas(monde):
         p = Pipeline(projet_id=1, type="dev", etat="en_cours")
         s.add(p)
         await s.commit()
-    await monde.orch.bloquer(p.id, "x")
-    await monde.orch.bloquer(999, "x")
+    await monde.orch.bloquer(p.id, "x", cause="inattendue")
+    await monde.orch.bloquer(999, "x", cause="inattendue")
     async with monde.sessions() as s:
         assert (await s.get(Pipeline, p.id)).etat == "echouee"
 
@@ -663,18 +776,29 @@ async def test_pr_ouverte_notifie(monde):
     monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok", "propre")]
     await monde.lancer()
     (envoi,) = monde.notifieur.envoyes
-    assert envoi["titre"] == "Ajouter l'équipe" and envoi["message"] == "PR ouverte"
+    assert envoi["titre"] == "Portail — tâche T1" and envoi["message"] == "PR ouverte"
     assert envoi["lien"] == monde.github.prs[1]["url"]
 
 
-async def test_blocage_notifie_raison_courte(monde):
+async def test_blocage_notifie_sans_raison(monde):
     monde.lanceur.codes = {CIBLES: [1], "pytest": [1]}
     monde.llm.reponses = [*TESTS_OK, *CODE_OK]
     await monde.lancer()
     (envoi,) = monde.notifieur.envoyes
-    assert envoi["message"].startswith("Bloquée : ")
-    assert "sortie de" not in envoi["message"]
+    assert envoi["titre"] == "Portail — tâche T1" and envoi["message"] == "Bloquée"
     assert envoi["lien"] == "https://portail.x/projets/1/kanban"
+
+
+async def test_notification_sans_contenu(monde):
+    async with monde.sessions() as s:
+        (await s.get(Tache, 1)).titre = "MARQUEUR"
+        await s.commit()
+    monde.lanceur.codes = {CIBLES: [1], "pytest": [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+    await monde.lancer()
+    (envoi,) = monde.notifieur.envoyes
+    assert "MARQUEUR" not in envoi["titre"] + envoi["message"]
+    assert envoi["message"] == "Bloquée"
 
 
 async def test_corps_pr_liens_absolus(monde):
@@ -1029,3 +1153,44 @@ async def test_affirmation_prouvee_par_la_verification_ne_renvoie_pas(monde_d):
     pid = await monde_d.lancer()
     ex, _tache, pipeline = await monde_d.etat(pid)
     assert (pipeline.etat, ex.renvois) == ("terminee", 0)
+
+
+async def test_parcours_compte_phases_duree_et_commandes(monde):
+    lus = {
+        "phase": ("portail_phases_dev_total", {"phase": "tests", "issue": "ok"}),
+        "exec": ("portail_executions_dev_total", {"mode": "normal", "issue": "en_revue"}),
+        "duree": ("portail_duree_tache_secondes_count", {}),
+        "cmd": ("portail_lanceur_commandes_total", {"nom": "installer", "code": "0"}),
+        "cmd_duree": ("portail_lanceur_duree_secondes_count", {"nom": "installer"}),
+    }
+    avant = {k: valeur(n, **e) for k, (n, e) in lus.items()}
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok", "propre")]
+    await monde.lancer()
+    for k, (n, e) in lus.items():
+        assert valeur(n, **e) > avant[k], k
+
+
+async def test_delai_compte_commande_et_blocage(monde):
+    lus = [
+        ("portail_lanceur_commandes_total", {"nom": "tests", "code": "delai"}),
+        ("portail_blocages_total", {"cause": "blocage", "phase": "verification"}),
+        ("portail_executions_dev_total", {"mode": "normal", "issue": "bloquee"}),
+    ]
+    avant = [valeur(n, **e) for n, e in lus]
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.lanceur.delais = {"pytest"}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+    await monde.lancer()
+    assert [valeur(n, **e) - a for (n, e), a in zip(lus, avant, strict=True)] == [1, 1, 1]
+
+
+async def test_renvoi_compte(monde):
+    avant = valeur("portail_renvois_total", agent="revue", vers="code")
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [
+        *TESTS_OK, *CODE_OK, verdict("renvoyer_code", "renommer x"),
+        appel("ecrire", chemin="src/x.py", contenu="x = 2\n"), texte("corrigé"), verdict("ok"),
+    ]  # fmt: skip
+    await monde.lancer()
+    assert valeur("portail_renvois_total", agent="revue", vers="code") == avant + 1

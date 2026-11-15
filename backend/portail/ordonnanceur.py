@@ -10,6 +10,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
+from portail import journal, metriques
+from portail.audit import inscrire
 from portail.db import (
     CommentairePris,
     Etape,
@@ -22,7 +24,6 @@ from portail.db import (
 from portail.dev import Orchestrateur
 from portail.etats import Etat
 from portail.github import ErreurGitHub
-from portail.notifications import raison_courte
 from portail.taches import deplacer_tache
 
 logger = logging.getLogger(__name__)
@@ -124,16 +125,21 @@ class Ordonnanceur:
                     if libre is None:
                         return  # la route occupée réveillera l'ordonnanceur après son commit
                     pipeline = await self._orch.demarrer(s, tache, base)
+                    inscrire(s, "ordonnanceur", "pipeline.lancer", "pipeline", pipeline.id)
                     await s.commit()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 passagere = isinstance(e, SQLAlchemyError) or (
                     isinstance(e, ErreurGitHub) and e.transitoire
                 )
                 if passagere:  # GitHub ou base : la tâche reste Prête, retentée au tour suivant
-                    logger.warning("ordonnanceur : tâche %s reportée : %s", tache_id, e)
+                    logger.warning(
+                        "ordonnanceur : tâche %s reportée (%s)", tache_id, type(e).__name__
+                    )
                     return
                 # sinon elle reviendrait à chaque tour, devant les autres
-                logger.exception("ordonnanceur : démarrage de la tâche %s impossible", tache_id)
+                journal.erreur(
+                    logger, "ordonnanceur : démarrage de la tâche %s impossible", tache_id
+                )
                 await self._bloquer(tache_id, f"démarrage impossible : {e}")
                 continue
             self.lancer(pipeline.id)
@@ -156,6 +162,8 @@ class Ordonnanceur:
                 return None
             pipeline_id = ex.pipeline_id
             demarree = await self._orch.demarrer_reprise(s, ex)
+            if demarree:
+                inscrire(s, "ordonnanceur", "pipeline.reprendre", "pipeline", pipeline_id)
             await s.commit()
         if demarree:
             self.lancer(pipeline_id)
@@ -174,13 +182,13 @@ class Ordonnanceur:
             if tache is None or tache.colonne != "prete" or tache.verrou is not None:
                 return  # déplacée entre-temps : on n'y touche pas
             await deplacer_tache(s, tache, "bloquee", None, "portail")
+            metriques.BLOCAGES.labels(cause="demarrage", phase="aucune").inc()
             tache.resume_blocage = raison
-            titre = tache.titre
             await s.commit()
         try:
             await self._orch.notifier(
-                titre,
-                "Bloquée : " + raison_courte(raison),
+                tache_id,
+                "Bloquée",
                 self._orch.lien(f"/projets/{projet_id}/kanban"),
             )
         except Exception as e:  # noqa: BLE001 — jamais str(e) : pas de fuite
@@ -191,8 +199,8 @@ class Ordonnanceur:
             self._reveil.clear()
             try:
                 await self.tour()
-            except Exception:  # la boucle ne meurt jamais ; CancelledError l'arrête
-                logger.exception("ordonnanceur : tour en échec")
+            except Exception:  # la boucle ne meurt jamais ; CancelledError l'arrête  # noqa: BLE001
+                journal.erreur(logger, "ordonnanceur : tour en échec")
             try:
                 async with asyncio.timeout(PERIODE_S):
                     await self._reveil.wait()
@@ -229,4 +237,4 @@ async def reprendre_interrompues(
         if interruptions <= 1:
             (lancer or orchestrateur.lancer)(pipeline_id)
         else:
-            await orchestrateur.bloquer(pipeline_id, "interrompue deux fois")
+            await orchestrateur.bloquer(pipeline_id, "interrompue deux fois", cause="interrompue")

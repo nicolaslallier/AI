@@ -6,13 +6,14 @@ import logging
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from portail import journal
 from portail.agents import Catalogue, modele_pour
-from portail.boucle import boucle_outils
 from portail.contexte import construire
 from portail.db import Avis, Document, Etape, Pipeline, Projet
 from portail.depots import Depots
 from portail.etats import Etat
 from portail.llm import ClientLLM, retirer_reflexion
+from portail.missions import Missions, completer, tourner
 from portail.moteur import spec_courante
 from portail.outils import OutilsDepot
 
@@ -30,7 +31,9 @@ class ServiceAvis:
         catalogue: Catalogue,
         llm: ClientLLM,
         depots: Depots,
+        missions: Missions | None = None,
     ):
+        self._missions = missions
         self._sessions = sessions
         self._catalogue = catalogue
         self._llm = llm
@@ -96,6 +99,7 @@ class ServiceAvis:
         await s.execute(update(Avis).where(Avis.etat == "en_cours").values(etat="abandonne"))
 
     async def _tache(self, avis_id: int, document_id: int, contenu: str, version: int) -> None:
+        journal.commencer()  # la tâche hérite d'une copie du contexte du rédacteur : on repart à vide
         try:
             texte = await self._rediger(avis_id, document_id, contenu, version)
             async with self._sessions() as s:
@@ -116,8 +120,8 @@ class ServiceAvis:
                 await s.commit()
         except asyncio.CancelledError:
             raise  # la ligne est déjà passée « abandonne » par celui qui annule
-        except Exception:
-            logger.exception("avis %s abandonné", avis_id)
+        except Exception:  # noqa: BLE001
+            journal.erreur(logger, "avis %s abandonné", avis_id)
             async with self._sessions() as s:
                 await s.execute(
                     update(Avis)
@@ -140,6 +144,8 @@ class ServiceAvis:
         if etape.apercu:
             annexes.append(f"Aperçu du dépôt (SHA {etape.sha}) :\n\n" + etape.apercu)
         agent = self._catalogue.agents[avis.agent]
+        journal.lier(pipeline=etape.pipeline_id)
+        journal.nouvelle_mission(agent.nom, agent.contexte_max)
         auteur = self._catalogue.agents[etape.agent]
         agent = agent.model_copy(update={"modele": modele_pour(agent, auteur)})
         demande = construire(agent, [], None, agent.consigne_avis, annexes)
@@ -147,9 +153,10 @@ class ServiceAvis:
             arbre, _ = await self._depots.preparer(
                 projet.id, projet.depot_url, projet.branche_ref, etape.id, etape.sha
             )
-            resultat = await boucle_outils(self._llm, agent, demande, OutilsDepot(arbre), _rien)
+            resultat = await tourner(
+                self._llm, self._missions, agent, demande, OutilsDepot(arbre), _rien
+            )
             texte = resultat.texte
         else:
-            reponse = await self._llm.completer(agent.modele, demande, agent.temperature)
-            texte = reponse.get("content") or ""
+            texte = await completer(self._llm, self._missions, agent, demande, None)
         return retirer_reflexion(texte).strip()

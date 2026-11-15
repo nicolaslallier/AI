@@ -3,7 +3,7 @@ import json
 
 import pytest
 from asgi_lifespan import LifespanManager
-from conftest import commentaire
+from conftest import commentaire, valeur
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, update
 from test_dev import (
@@ -111,6 +111,7 @@ async def pris(monde: Monde) -> list[CommentairePris]:
 
 
 async def test_creer_reprise_en_attente(monde):
+    reprises = valeur("portail_reprises_total")
     origine = await en_revue(monde)
     pid = await creer(monde, [commentaire("ligne", 7, "x" * 30_000, chemin="src/x.py", ligne=1)])
     ex, tache, pipeline = await monde.etat(pid)
@@ -129,6 +130,7 @@ async def test_creer_reprise_en_attente(monde):
     )
     assert len(c.texte) == 20_000
     assert (tache.colonne, tache.verrou) == ("en_revue", origine)
+    assert valeur("portail_reprises_total") == reprises + 1
 
 
 async def test_demarrer_reprise_prend_le_verrou(monde):
@@ -168,7 +170,7 @@ async def test_conflit_ramene_en_revue_avec_commentaire(monde):
     ((numero, corps),) = monde.github.commentaires
     assert numero == 1 and "conflit avec main" in corps and "Commentez à nouveau" in corps
     (envoi,) = [e for e in monde.notifieur.envoyes if e["message"] != "PR ouverte"]
-    assert envoi["message"].startswith("Reprise échouée : conflit")
+    assert envoi["titre"] == "Portail — tâche T1" and envoi["message"] == "Reprise échouée"
     assert envoi["lien"] == monde.github.prs[1]["url"]
     assert git(monde.origine, "rev-parse", BRANCHE) == pointe
     assert not (monde.reglages.espaces_dir / "tache-1-2").exists()
@@ -414,7 +416,7 @@ async def test_echec_verification_en_revue_sans_push(monde):
     assert "La reprise n'a pas abouti : vérification échouée (tests)" in corps
     assert "sortie de" not in corps
     assert monde.github.reponses == []
-    assert any(e["message"].startswith("Reprise échouée") for e in monde.notifieur.envoyes)
+    assert any(e["message"] == "Reprise échouée" for e in monde.notifieur.envoyes)
 
 
 async def test_violation_protection_en_reprise_sans_push(monde):

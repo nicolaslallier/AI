@@ -1,28 +1,35 @@
 import asyncio
+import ipaddress
 import logging
+import os
+import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from portail import resume
+from portail import bureau, journal, metriques, resume
 from portail.agents import Catalogue, charger_catalogue
 from portail.arbitre import Arbitre, LLMArbitre
+from portail.audit import auteur_de, inscrire
 from portail.avis import ServiceAvis
 from portail.chat import Diffuseur, ServiceChat, annexes
 from portail.config import Reglages
 from portail.contexte import construire, jauge
 from portail.conversations import ServiceConversation
 from portail.db import (
+    Audit,
     Avis,
     CommandeLancee,
     CommentairePris,
@@ -46,13 +53,16 @@ from portail.execution import lire_config
 from portail.github import ErreurGitHub, GitHubApp
 from portail.lanceur import ClientLanceur
 from portail.llm import ClientLLM
+from portail.missions import ROUTEUR_INTERNE, Missions, lire_secrets
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
 from portail.notifications import Notifieur
 from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.schemas import (
     Acceptation,
+    AuditOut,
     AvisOut,
+    Bureau,
     CommandeVue,
     CommentaireVue,
     ConversationDetail,
@@ -71,6 +81,7 @@ from portail.schemas import (
     PipelineDetail,
     PipelineIn,
     PipelineResume,
+    PosteDetail,
     ProjetDetail,
     ProjetIn,
     ProjetOut,
@@ -98,6 +109,41 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 
 
 Session = Annotated[AsyncSession, Depends(get_session)]
+
+
+_METHODES = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
+
+
+async def _compter(generateur, nom: str):
+    """Compte le flux ouvert dès le premier morceau demandé ; `finally` couvre fermeture et annulation."""
+    jauge_flux = metriques.FLUX_OUVERTS.labels(flux=nom)
+    jauge_flux.inc()
+    try:
+        async with aclosing(generateur):  # ferme le générateur interne (son `finally` désabonne)
+            async for morceau in generateur:
+                yield morceau
+    finally:
+        jauge_flux.dec()
+
+
+def _flux(generateur, nom: str) -> StreamingResponse:
+    """Flux SSE : le proxy ne doit ni le mettre en tampon ni le mettre en cache."""
+    return StreamingResponse(
+        _compter(generateur, nom),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _tracer(s: AsyncSession, request: Request, action: str, objet: str, objet_id: int):
+    """Ligne d'audit « au mieux », commitée après le service (qui a sa propre session) : elle peut
+    manquer après un crash entre les deux commits. Un échec est journalisé, jamais relevé : l'action a eu lieu."""
+    try:
+        inscrire(s, auteur_de(request), action, objet, objet_id)
+        await s.commit()
+    except SQLAlchemyError:
+        await s.rollback()  # sinon la lecture qui suit dans la route lève PendingRollbackError
+        journal.erreur(logger, "audit non inscrit : %s %s", action, objet_id)
 
 
 async def _avis(session: AsyncSession, docs: list[Document]) -> dict[int, list[AvisOut]]:
@@ -329,18 +375,20 @@ async def _annuler_tache(state, s: AsyncSession, tache_id: int) -> None:
     await _annuler(state, s, verrou, clos=False)  # même chemin que /pipelines/{id}/annuler
 
 
-def _orchestrateur(r: Reglages, sessions, catalogue, llm) -> Orchestrateur | None:
+def _orchestrateur(r: Reglages, sessions, catalogue, llm, missions) -> Orchestrateur | None:
     """Seulement si l'App GitHub et le lanceur sont configurés ; sinon rien, sans erreur."""
     if not (r.github_app_id and r.github_app_cle and r.lanceur_secret):
         return None
     try:
         github = GitHubApp(r.github_app_id, r.github_app_cle)
     except ErreurGitHub:
-        logger.exception("App GitHub mal configurée : pas d'ordonnanceur")
+        journal.erreur(logger, "App GitHub mal configurée : pas d'ordonnanceur")
         return None
     lanceur = ClientLanceur(r.lanceur_url, r.lanceur_secret)
     notifieur = Notifieur(r.ntfy_url, r.ntfy_sujet, r.ntfy_jeton)
-    return Orchestrateur(sessions, catalogue, llm, lanceur, github, r, notifieur=notifieur)
+    return Orchestrateur(
+        sessions, catalogue, llm, lanceur, github, r, notifieur=notifieur, missions=missions
+    )
 
 
 def create_app(
@@ -348,16 +396,25 @@ def create_app(
     llm: ClientLLM | None = None,
     catalogue: Catalogue | None = None,
     orchestrateur: Orchestrateur | None = None,
+    missions: Missions | None = None,
 ) -> FastAPI:
     r = reglages or Reglages()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.reglages = r
+        app.state.reseau_agents = ipaddress.ip_network(r.reseau_agents) if r.reseau_agents else None
+        metriques.initialiser(r)
         app.state.catalogue = catalogue or charger_catalogue(r.agents_fichier)
-        app.state.llm = llm or ClientLLM(r.litellm_url, r.litellm_cle)
+        # un agent à `service:` sans secret valide empêche le démarrage
+        app.state.missions = missions or Missions(
+            lire_secrets(app.state.catalogue, os.environ), r.duree_mission_s
+        )
         moteur = creer_moteur(r.database_url)
         app.state.sessions = fabrique_sessions(moteur)
+        app.state.llm = llm or ClientLLM(
+            r.litellm_url, r.litellm_cle, sessions=app.state.sessions, version=r.version
+        )
         async with app.state.sessions() as s:
             await recuperer_interrompues(s)
             await s.commit()
@@ -369,14 +426,16 @@ def create_app(
             # au démarrage, aucune étape n'est au milieu d'une préparation : nettoyer sans verrou
             await depots.nettoyer(garder=en_attente)
         except ErreurDepot:
-            logger.exception("nettoyage des arbres de travail incomplet")
+            journal.erreur(logger, "nettoyage des arbres de travail incomplet")
         arbitre = Arbitre()
         interactif = LLMArbitre(app.state.llm, arbitre, "interactif")
         app.state.diffuseur = Diffuseur()
-        app.state.avis = ServiceAvis(app.state.sessions, app.state.catalogue, interactif, depots)
+        app.state.avis = ServiceAvis(
+            app.state.sessions, app.state.catalogue, interactif, depots, app.state.missions
+        )
         app.state.chat = ServiceChat(
             app.state.sessions, app.state.catalogue, interactif, app.state.diffuseur, depots,
-            app.state.avis,
+            app.state.avis, app.state.missions,
         )  # fmt: skip
         async with app.state.sessions() as s:
             await app.state.avis.recuperer_interrompues(s)
@@ -394,6 +453,7 @@ def create_app(
             app.state.chat,
             annuler_tache,
             lambda: _reveiller(app.state),
+            app.state.missions,
         )
         async with app.state.sessions() as s:
             await app.state.conversations.recuperer_interrompues(s)
@@ -410,7 +470,11 @@ def create_app(
                 )
             )  # fmt: skip
         orch = orchestrateur or _orchestrateur(
-            r, app.state.sessions, app.state.catalogue, LLMArbitre(app.state.llm, arbitre, "fond")
+            r,
+            app.state.sessions,
+            app.state.catalogue,
+            LLMArbitre(app.state.llm, arbitre, "fond"),
+            app.state.missions,
         )
         app.state.orchestrateur, app.state.ordonnanceur = orch, None
         if orch:
@@ -463,6 +527,52 @@ def create_app(
                 not site and origine and urlsplit(origine).netloc != request.headers.get("Host")
             ):
                 return JSONResponse(status_code=403, content={"detail": "requête d'un autre site"})
+        try:
+            return await call_next(request)
+        except Exception:  # noqa: BLE001
+            # Pas de gestionnaire `exception_handler(Exception)` : Starlette relève l'exception
+            # après lui et uvicorn la journaliserait avec son message (jeton, sortie de commande).
+            route = request.scope.get("route")  # le modèle (`/api/taches/{tache_id}`), pas l'URL
+            journal.erreur(
+                logger, "erreur interne sur %s %s", request.method, getattr(route, "path", "?")
+            )
+            return JSONResponse(status_code=500, content={"detail": "erreur interne"})
+
+    @app.middleware("http")
+    async def _mesurer(request: Request, call_next):
+        # Déclaré après `_utilisateur` : extérieur, il voit aussi les 401 et 403.
+        debut = time.perf_counter()
+        code = "500"  # si call_next relève
+        try:
+            reponse = await call_next(request)
+            code = str(reponse.status_code)
+            return reponse
+        finally:
+            # Le modèle de route, jamais l'URL : sans route, une valeur fixe (cardinalité bornée).
+            route = getattr(request.scope.get("route"), "path", "aucune")
+            if route != "/metrics":
+                # ensemble fixe : une méthode inventée par un client ne crée pas de série
+                methode = request.method if request.method in _METHODES else "AUTRE"
+                metriques.HTTP_REQUETES.labels(methode, route, code).inc()
+                metriques.HTTP_DUREE.labels(methode, route).observe(time.perf_counter() - debut)
+
+    @app.middleware("http")
+    async def _reseau_agents(request: Request, call_next):
+        # Déclaré en dernier : le plus extérieur, exécuté avant toute lecture d'en-tête. Le pair est
+        # celui de la connexion (uvicorn sans --proxy-headers) : aucun en-tête ne le réécrit.
+        reseau = request.app.state.reseau_agents
+        if reseau is not None:
+            try:
+                pair = ipaddress.ip_address(request.client.host) if request.client else None
+            except ValueError:
+                pair = None
+            pair = getattr(pair, "ipv4_mapped", None) or pair  # ::ffff:a.b.c.d est a.b.c.d
+            chez_agents = pair is not None and pair in reseau
+            if chez_agents != request.url.path.startswith("/interne/"):
+                return Response(status_code=404)
+            # un chemin non normalisé (`/interne/../x`, `%2e%2e`) ne sort pas de /interne/
+            if chez_agents and "/.." in request.url.path:
+                return Response(status_code=404)
         return await call_next(request)
 
     @app.get("/api/sante")
@@ -474,28 +584,31 @@ def create_app(
         return (await s.scalars(select(Projet).order_by(Projet.nom))).all()
 
     @app.post("/api/projets", status_code=201, response_model=ProjetOut)
-    async def creer_projet(corps: ProjetIn, s: Session):
+    async def creer_projet(corps: ProjetIn, request: Request, s: Session):
         verifier_depot(corps.depot_url)
         projet = Projet(**corps.model_dump())
         s.add(projet)
+        await s.flush()
+        inscrire(s, auteur_de(request), "projet.creer", "projet", projet.id)
         await s.commit()
         await s.refresh(projet)
         return projet
 
     @app.patch("/api/projets/{projet_id}", response_model=ProjetOut)
-    async def modifier_projet(projet_id: int, corps: ProjetPatch, s: Session):
+    async def modifier_projet(projet_id: int, corps: ProjetPatch, request: Request, s: Session):
         projet = await s.get(Projet, projet_id)
         if projet is None:
             raise Refus(404, "projet introuvable")
         verifier_depot(corps.depot_url)
         for champ in corps.model_fields_set:
             setattr(projet, champ, getattr(corps, champ))
+        inscrire(s, auteur_de(request), "projet.modifier", "projet", projet_id)
         await s.commit()
         await s.refresh(projet)
         return projet
 
     @app.put("/api/projets/{projet_id}/execution", response_model=ProjetOut)
-    async def definir_execution(projet_id: int, corps: ExecutionIn, s: Session):
+    async def definir_execution(projet_id: int, corps: ExecutionIn, request: Request, s: Session):
         projet = await s.get(Projet, projet_id)
         if projet is None:
             raise Refus(404, "projet introuvable")
@@ -504,6 +617,7 @@ def create_app(
             projet.config_execution = corps.yaml
         else:
             projet.config_execution = None
+        inscrire(s, auteur_de(request), "projet.definir_execution", "projet", projet_id)
         await s.commit()
         await s.refresh(projet)
         return projet
@@ -545,6 +659,7 @@ def create_app(
             raise Refus(404, "projet introuvable")
         cat = request.app.state.catalogue
         pipeline, a_lancer = await creer_pipeline(s, cat, corps.projet_id, corps.type)
+        inscrire(s, auteur_de(request), "pipeline.lancer", "pipeline", pipeline.id)
         await s.commit()
         if a_lancer:
             request.app.state.chat.lancer(a_lancer.id)
@@ -557,6 +672,7 @@ def create_app(
     @app.post("/api/pipelines/{pipeline_id}/annuler", response_model=PipelineDetail)
     async def annuler(pipeline_id: int, request: Request, s: Session):
         await _annuler(request.app.state, s, pipeline_id, clos=True)
+        await _tracer(s, request, "pipeline.annuler", "pipeline", pipeline_id)
         return await _detail(s, request.app.state.catalogue, pipeline_id)
 
     @app.get("/api/projets/{projet_id}/kanban", response_model=Kanban)
@@ -589,6 +705,7 @@ def create_app(
             if p.etat == "perimee":  # le marquage est gardé, même si l'acceptation échoue
                 await _fermer(request, s, p.etape_id)
             raise
+        inscrire(s, auteur_de(request), "proposition.accepter", "proposition", p.id)
         await _fermer(request, s, p.etape_id)
         _reveiller(request.app.state)
         return await _kanban(s, p.projet_id)
@@ -597,6 +714,7 @@ def create_app(
     async def rejeter_proposition(proposition_id: int, request: Request, s: Session):
         p = await _proposition(s, proposition_id)
         await rejeter(s, p)
+        inscrire(s, auteur_de(request), "proposition.rejeter", "proposition", p.id)
         await _fermer(request, s, p.etape_id)
         return await _kanban(s, p.projet_id)
 
@@ -624,6 +742,7 @@ def create_app(
                 if p.etat != "perimee":
                     raise
                 perimees += 1
+        inscrire(s, auteur_de(request), "propositions.tout_accepter", "etape", etape_id)
         await _fermer(request, s, etape_id)
         _reveiller(request.app.state)
         k = await _kanban(s, projet_id)
@@ -632,6 +751,7 @@ def create_app(
     @app.post("/api/projets/{projet_id}/taches", status_code=201, response_model=TacheVue)
     async def ajouter_tache(projet_id: int, corps: DonneesTache, request: Request, s: Session):
         t = await creer_tache(s, projet_id, corps, "nicolas")
+        inscrire(s, auteur_de(request), "tache.creer", "tache", t.id)
         await s.commit()
         _reveiller(request.app.state)
         return await _vue(s, t.id)
@@ -640,6 +760,7 @@ def create_app(
     async def modifier(tache_id: int, corps: DonneesTachePartielles, request: Request, s: Session):
         t = await _tache(s, tache_id)
         await modifier_tache(s, t, corps, "nicolas")
+        inscrire(s, auteur_de(request), "tache.modifier", "tache", tache_id)
         await s.commit()
         _reveiller(request.app.state)
         return await _vue(s, tache_id)
@@ -648,37 +769,43 @@ def create_app(
     async def deplacer(tache_id: int, corps: Deplacement, request: Request, s: Session):
         t = await _tache(s, tache_id)
         await deplacer_tache(s, t, corps.colonne, corps.avant_id, "nicolas")
+        inscrire(s, auteur_de(request), "tache.deplacer", "tache", tache_id)
         await s.commit()
         _reveiller(request.app.state)
         return await _vue(s, tache_id)
 
     @app.delete("/api/taches/{tache_id}", status_code=204)
-    async def supprimer(tache_id: int, s: Session):
+    async def supprimer(tache_id: int, request: Request, s: Session):
         t = await _tache(s, tache_id)
         await supprimer_tache(s, t, "nicolas")
+        inscrire(s, auteur_de(request), "tache.supprimer", "tache", tache_id)
         await s.commit()
 
     @app.post("/api/taches/{tache_id}/annuler", response_model=TacheVue)
     async def annuler_tache(tache_id: int, request: Request, s: Session):
         await _annuler_tache(request.app.state, s, tache_id)
+        await _tracer(s, request, "tache.annuler", "tache", tache_id)
         return await _vue(s, tache_id)
 
     class MessageIn(BaseModel):
         contenu: str
 
     @app.post("/api/etapes/{etape_id}/messages", status_code=202)
-    async def envoyer_message(etape_id: int, corps: MessageIn, request: Request):
+    async def envoyer_message(etape_id: int, corps: MessageIn, request: Request, s: Session):
         await request.app.state.chat.envoyer(etape_id, corps.contenu)
+        await _tracer(s, request, "etape.message", "etape", etape_id)
         return {}
 
     @app.post("/api/etapes/{etape_id}/rediger", status_code=202)
-    async def rediger(etape_id: int, request: Request):
+    async def rediger(etape_id: int, request: Request, s: Session):
         await request.app.state.chat.rediger(etape_id)
+        await _tracer(s, request, "etape.rediger", "etape", etape_id)
         return {}
 
     @app.post("/api/etapes/{etape_id}/reessayer", status_code=202)
-    async def reessayer(etape_id: int, request: Request):
+    async def reessayer(etape_id: int, request: Request, s: Session):
         await request.app.state.chat.reessayer(etape_id)
+        await _tracer(s, request, "etape.reessayer", "etape", etape_id)
         return {}
 
     class DocumentIn(BaseModel):
@@ -687,6 +814,7 @@ def create_app(
     @app.put("/api/etapes/{etape_id}/document", response_model=DocumentOut)
     async def corriger_document(etape_id: int, corps: DocumentIn, request: Request, s: Session):
         doc = await request.app.state.chat.corriger(etape_id, corps.contenu)
+        await _tracer(s, request, "etape.corriger", "etape", etape_id)
         sortie = DocumentOut.model_validate(doc, from_attributes=True)
         sortie.avis = (await _avis(s, [doc])).get(doc.id, [])
         return sortie
@@ -699,12 +827,13 @@ def create_app(
         if doc.etat != "brouillon":
             raise Refus(409, "document déjà validé")
         await request.app.state.avis.lancer(document_id)
+        await _tracer(s, request, "avis.relancer", "document", document_id)
 
     class AvisPatch(BaseModel):
         etat: Literal["pris_en_compte", "ecarte", "ouvert"]
 
     @app.patch("/api/avis/{avis_id}", response_model=AvisOut)
-    async def trier_avis(avis_id: int, corps: AvisPatch, s: Session):
+    async def trier_avis(avis_id: int, corps: AvisPatch, request: Request, s: Session):
         avis = await s.get(Avis, avis_id)
         if avis is None:
             raise Refus(404, "avis introuvable")
@@ -712,6 +841,7 @@ def create_app(
             raise Refus(409, "avis non tranchable : encore en cours ou abandonné")
         avis.etat = corps.etat
         doc = await s.get(Document, avis.document_id)
+        inscrire(s, auteur_de(request), "avis.trier", "avis", avis_id)
         await s.commit()
         return AvisOut.model_validate(avis, from_attributes=True).model_copy(
             update={"ancienne": avis.version < doc.version}
@@ -720,22 +850,25 @@ def create_app(
     @app.post("/api/etapes/{etape_id}/valider", response_model=PipelineDetail)
     async def valider(etape_id: int, request: Request, s: Session):
         pipeline_id = await request.app.state.chat.valider(etape_id)
+        await _tracer(s, request, "etape.valider", "etape", etape_id)
         return await _detail(s, request.app.state.catalogue, pipeline_id)
 
     @app.get("/api/etapes/{etape_id}/flux")
     async def flux(etape_id: int, request: Request):
         chat = request.app.state.chat
         await chat.etat(etape_id)  # 404 avant de commencer le flux
-        return StreamingResponse(chat.flux(etape_id), media_type="text/event-stream")
+        return _flux(chat.flux(etape_id), "etapes")
 
     @app.get("/api/conversations", response_model=list[ConversationResume])
     async def lister_conversations(request: Request):
         return await request.app.state.conversations.lister()
 
     @app.post("/api/conversations", status_code=201, response_model=ConversationDetail)
-    async def creer_conversation(request: Request, corps: ConversationIn | None = None):
+    async def creer_conversation(request: Request, s: Session, corps: ConversationIn | None = None):
         service = request.app.state.conversations
-        return await service.detail((await service.creer((corps or ConversationIn()).agent)).id)
+        cid = (await service.creer((corps or ConversationIn()).agent)).id
+        await _tracer(s, request, "conversation.creer", "conversation", cid)
+        return await service.detail(cid)
 
     @app.get("/api/conversations/{conversation_id}", response_model=ConversationDetail)
     async def lire_conversation(conversation_id: int, request: Request):
@@ -743,49 +876,76 @@ def create_app(
 
     @app.patch("/api/conversations/{conversation_id}", response_model=ConversationDetail)
     async def renommer_conversation(
-        conversation_id: int, corps: ConversationPatch, request: Request
+        conversation_id: int, corps: ConversationPatch, request: Request, s: Session
     ):
         service = request.app.state.conversations
         await service.renommer(conversation_id, corps.titre)
+        await _tracer(s, request, "conversation.renommer", "conversation", conversation_id)
         return await service.detail(conversation_id)
 
     @app.delete("/api/conversations/{conversation_id}", status_code=204)
-    async def supprimer_conversation(conversation_id: int, request: Request):
+    async def supprimer_conversation(conversation_id: int, request: Request, s: Session):
         await request.app.state.conversations.supprimer(conversation_id)
+        await _tracer(s, request, "conversation.supprimer", "conversation", conversation_id)
 
     @app.post("/api/conversations/{conversation_id}/messages", status_code=202)
-    async def envoyer_conversation(conversation_id: int, corps: MessageIn, request: Request):
+    async def envoyer_conversation(
+        conversation_id: int, corps: MessageIn, request: Request, s: Session
+    ):
         await request.app.state.conversations.envoyer(conversation_id, corps.contenu)
+        await _tracer(s, request, "conversation.message", "conversation", conversation_id)
         return {}
 
     @app.post("/api/conversations/{conversation_id}/reessayer", status_code=202)
-    async def reessayer_conversation(conversation_id: int, request: Request):
+    async def reessayer_conversation(conversation_id: int, request: Request, s: Session):
         await request.app.state.conversations.reessayer(conversation_id)
+        await _tracer(s, request, "conversation.reessayer", "conversation", conversation_id)
         return {}
 
     @app.post("/api/actions/{action_id}/confirmer", status_code=202)
     async def confirmer_action(action_id: int, request: Request):
-        await request.app.state.conversations.confirmer(action_id)
+        await request.app.state.conversations.confirmer(action_id, auteur_de(request))
         return {}
 
     @app.post("/api/actions/{action_id}/refuser", status_code=202)
     async def refuser_action(action_id: int, request: Request):
-        await request.app.state.conversations.refuser(action_id)
+        await request.app.state.conversations.refuser(action_id, auteur_de(request))
         return {}
 
     @app.get("/api/conversations/{conversation_id}/flux")
     async def flux_conversation(conversation_id: int, request: Request):
         service = request.app.state.conversations
         await service.etat(conversation_id)  # 404 avant de commencer le flux
-        return StreamingResponse(service.flux(conversation_id), media_type="text/event-stream")
+        return _flux(service.flux(conversation_id), "conversations")
+
+    @app.get("/api/audit", response_model=list[AuditOut])
+    async def lire_audit(s: Session, limite: int = 100, avant: int | None = None):
+        q = select(Audit).order_by(Audit.id.desc()).limit(max(1, min(limite, 500)))
+        if avant is not None:
+            q = q.where(Audit.id < avant)
+        return (await s.scalars(q)).all()
+
+    @app.get("/api/bureau", response_model=Bureau)
+    async def lire_le_bureau(request: Request, s: Session):
+        return await bureau.lire_bureau(
+            s, request.app.state.catalogue, datetime.now(UTC), request.app.state.missions
+        )
+
+    @app.get("/api/bureau/{agent}", response_model=PosteDetail)
+    async def lire_un_poste(agent: str, request: Request, s: Session):
+        return await bureau.lire_poste(s, request.app.state.catalogue, agent)
 
     @app.get("/api/evenements")
     async def evenements():
-        return StreamingResponse(
-            flux_evenements(bus),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+        return _flux(flux_evenements(bus), "evenements")
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics(request: Request):
+        await metriques.rafraichir(request.app.state.sessions)
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    # Avant le repli SPA ; hors /api/ : le jeton de mission remplace l'en-tête d'utilisateur.
+    app.include_router(ROUTEUR_INTERNE)
 
     if r.static_dir:
         racine = r.static_dir.resolve()
