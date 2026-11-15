@@ -3,17 +3,20 @@ import json
 import logging
 import sys
 
+import httpx
 from asgi_lifespan import LifespanManager
 from conftest import CATALOGUE_TEST, FauxLLM
 from httpx import ASGITransport, AsyncClient
+from prometheus_client import generate_latest
+from sqlalchemy import select
 from test_conversations import _attendre, _creer, _envoyer
 from test_dev import CIBLES, CODE_OK, CONFIG, TESTS_OK, Monde, appel, texte, verdict
 
 from portail import journal
 from portail.api import create_app
-from portail.db import Projet, Tache
+from portail.db import AppelLLM, Projet, Tache
 from portail.lanceur import Resultat
-from portail.llm import ErreurLLM
+from portail.llm import ClientLLM, ErreurLLM
 
 MARQUEUR = "ZZ-secret-7731"
 logger = logging.getLogger("portail.test_journal")
@@ -72,6 +75,21 @@ async def test_mission_complete_sans_contenu(tmp_path, sessions, caplog):
     await m.lancer(3)
     assert MARQUEUR not in caplog.text
     assert "bloqué : llm" in caplog.text
+    assert m.notifieur.envoyes  # les notifications ntfy sont sur le chemin
+    _sans_contenu(
+        generate_latest().decode(), *_lignes_formatees(caplog), json.dumps(m.notifieur.envoyes)
+    )
+
+
+def _lignes_formatees(caplog) -> list[str]:
+    formateur = journal.FormatJSON()
+    return [formateur.format(r) for r in caplog.records]
+
+
+def _sans_contenu(*textes: str) -> None:
+    # le slug d'une branche met le titre en minuscules : on cherche aussi cette forme
+    for t in textes:
+        assert MARQUEUR not in t and MARQUEUR.lower() not in t.lower()
 
 
 async def test_conversation_sans_contenu(client, faux_llm, caplog):
@@ -180,3 +198,39 @@ def test_identifiant_non_serialisable_ne_casse_pas_le_formateur():
         assert "object" in _formater()["pipeline"]
     finally:
         journal.commencer()
+
+
+async def test_conversation_sans_contenu_nulle_part(moteur, sessions, reglages, caplog):
+    usage = {"prompt_tokens": 10, "completion_tokens": 5}
+    texte = f"<think>{MARQUEUR}</think>réponse {MARQUEUR}"
+
+    def h(requete: httpx.Request) -> httpx.Response:
+        corps = json.loads(requete.content)
+        if f"second {MARQUEUR}" in json.dumps(corps["messages"]):
+            return httpx.Response(500, text=f"panne {MARQUEUR}")
+        if not corps.get("stream"):  # l'agent a des outils : tour non diffusé
+            reponse = {"choices": [{"message": {"content": texte}}], "usage": usage}
+            return httpx.Response(200, json=reponse)
+        morceaux = [{"choices": [{"delta": {"content": texte}}]}, {"choices": [], "usage": usage}]
+        flux = "".join(f"data: {json.dumps(m)}\n\n" for m in morceaux) + "data: [DONE]\n\n"
+        return httpx.Response(200, text=flux)
+
+    llm = ClientLLM(
+        "http://l", "k", transport=httpx.MockTransport(h), sessions=sessions, version="sha-test"
+    )
+    app = create_app(reglages=reglages, llm=llm, catalogue=CATALOGUE_TEST)
+    caplog.set_level(logging.DEBUG)
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        cid = await _creer(c)
+        await _envoyer(c, cid, f"message {MARQUEUR}")
+        await _attendre(c, cid)
+        await _envoyer(c, cid, f"second {MARQUEUR}")
+        await _attendre(c, cid)
+        metriques = (await c.get("/metrics")).text
+    async with sessions() as s:
+        lignes = list((await s.scalars(select(AppelLLM))).all())
+    assert sorted(x.issue for x in lignes) == ["erreur", "ok"]
+    _sans_contenu(metriques, *_lignes_formatees(caplog), *(str(vars(x)) for x in lignes))
