@@ -330,9 +330,11 @@ class ServiceConversation:
 
     async def _tache(self, cid: int) -> None:
         d = self.diffuseur
+        journal.commencer(conversation=cid)
         try:
             async with self._sessions() as s:
                 agent = self._agent(await self._conversation(s, cid))
+                journal.nouvelle_mission(agent.nom, agent.contexte_max)
                 demande = construire_conversation(agent, await self._messages(s, cid))
             limite = False
             if agent.outils:

@@ -198,6 +198,21 @@ async def test_parcours_complet_ouvre_une_pr(monde):
     assert {"route": "nettoyer", "espace": "tache-1-1"} in monde.lanceur.appels
 
 
+async def test_identifiants_d_un_agent_dev(monde):
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok", "propre")]
+    pid = await monde.lancer()
+    _ex, tache, _pipeline = await monde.etat(pid)
+    par_agent = {}
+    for a in monde.llm.appels:
+        c = a["contexte"]
+        par_agent.setdefault(c["agent"], c)
+    tests, code = par_agent["tests"], par_agent["code"]
+    assert (tests["pipeline"], tests["tache"]) == (pid, tache.id)
+    assert tests["etape"] and tests["mission"] and code["mission"] != tests["mission"]
+    assert code["etape"] != tests["etape"]
+
+
 async def test_aucun_test_ecrit_bloque(monde):
     monde.lanceur.codes = {"pytest ": [5]}
     monde.llm.reponses = [appel("lancer", nom="tests_cibles"), texte("rien")]

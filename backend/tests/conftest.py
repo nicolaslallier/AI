@@ -11,6 +11,7 @@ from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine, text
 
+from portail import journal
 from portail.agents import OUTILS_LECTURE_PORTAIL, OUTILS_PORTAIL, Agent, Catalogue
 from portail.api import create_app
 from portail.config import Reglages
@@ -59,7 +60,14 @@ class FauxLLM:
         self.reponses: list[dict | asyncio.Event] = []  # renvoyés tour à tour par `completer`
 
     async def flux(self, modele, messages, temperature):
-        self.appels.append({"modele": modele, "messages": messages, "temperature": temperature})
+        self.appels.append(
+            {
+                "modele": modele,
+                "messages": messages,
+                "temperature": temperature,
+                "contexte": dict(journal.contexte.get()),
+            }
+        )
         for m in self.morceaux:
             if isinstance(m, asyncio.Event):
                 await m.wait()
@@ -76,6 +84,7 @@ class FauxLLM:
                 "temperature": temperature,
                 "outils": outils,
                 "response_format": response_format,
+                "contexte": dict(journal.contexte.get()),
             }
         )
         if self.exception:

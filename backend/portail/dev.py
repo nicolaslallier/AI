@@ -377,6 +377,7 @@ class Orchestrateur:
             await s.commit()
 
     async def executer(self, pipeline_id: int) -> None:
+        journal.commencer(pipeline=pipeline_id)
         delai = asyncio.timeout(self._reglages.duree_max_tache_s)
         try:
             async with delai:
@@ -434,6 +435,7 @@ class Orchestrateur:
             ex = await s.scalar(select(ExecutionDev).where(ExecutionDev.pipeline_id == pipeline_id))
             tache = await s.get(Tache, ex.tache_id)
             projet = await s.get(Projet, tache.projet_id)
+        journal.lier(tache=ex.tache_id)
         if not projet.depot_url or not projet.config_execution:
             raise _Blocage("projet sans dépôt ou sans configuration d'exécution")
         return _Ctx(
@@ -465,6 +467,7 @@ class Orchestrateur:
             s.add(etape)
             await s.commit()
         ctx.etape_id = etape.id
+        journal.lier(etape=etape.id, agent=agent, mission=None)
 
     async def _transition(self, ctx: _Ctx, suivante: str, erreur: str | None = None, **champs):
         """Termine l'étape en cours et écrit la phase suivante avec `champs`, en une transaction :
@@ -581,6 +584,7 @@ class Orchestrateur:
         if modele:
             agent = agent.model_copy(update={"modele": modele})
         await self._etape(ctx, nom)
+        journal.nouvelle_mission(nom, agent.contexte_max)
         messages = construire(agent, [], None, consigne, annexes)
 
         async def sur_appel(libelle: str, resultat: str) -> None:

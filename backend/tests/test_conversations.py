@@ -79,6 +79,16 @@ async def test_echange_complet(client, faux_llm):
     assert [(c["id"], c["titre"], c["etat"]) for c in liste] == [(cid, "Bonjour", "pret")]
 
 
+async def test_identifiants_d_une_conversation(client, faux_llm):
+    cid = await _creer(client)
+    faux_llm.reponses = [_texte("Salut")]
+    await _envoyer(client, cid, "Bonjour")
+    await _attendre(client, cid)
+    c = faux_llm.appels[0]["contexte"]
+    assert (c["conversation"], c["agent"]) == (cid, "orchestrateur")
+    assert c["mission"] and "etape" not in c
+
+
 async def test_message_enregistre_avant_l_appel(client, faux_llm):
     cid = await _creer(client)
     faux_llm.exception = ErreurLLM("boom")

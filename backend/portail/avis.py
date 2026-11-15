@@ -141,6 +141,8 @@ class ServiceAvis:
         if etape.apercu:
             annexes.append(f"Aperçu du dépôt (SHA {etape.sha}) :\n\n" + etape.apercu)
         agent = self._catalogue.agents[avis.agent]
+        journal.commencer(pipeline=etape.pipeline_id)
+        journal.nouvelle_mission(agent.nom, agent.contexte_max)
         auteur = self._catalogue.agents[etape.agent]
         agent = agent.model_copy(update={"modele": modele_pour(agent, auteur)})
         demande = construire(agent, [], None, agent.consigne_avis, annexes)

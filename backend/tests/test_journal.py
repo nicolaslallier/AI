@@ -1,4 +1,7 @@
+import asyncio
+import json
 import logging
+import sys
 
 from asgi_lifespan import LifespanManager
 from conftest import CATALOGUE_TEST, FauxLLM
@@ -99,3 +102,45 @@ async def test_route_500_sans_contenu(moteur, reglages, caplog):
         r = await c.get("/api/boom/valeur-url")
     assert (r.status_code, r.json()) == (500, {"detail": "erreur interne"})
     assert MARQUEUR not in caplog.text and "/api/boom/{x}" in caplog.text
+
+
+def _formater(logger_nom="portail.test_journal", exc=None):
+    rec = logging.LogRecord(logger_nom, logging.INFO, __file__, 1, "message %s", ("x",), exc)
+    return json.loads(journal.FormatJSON().format(rec))
+
+
+def test_ligne_json_avec_identifiants():
+    journal.commencer(pipeline=3)
+    journal.lier(etape=7, agent="code")
+    journal.nouvelle_mission("code", 4096)
+    ligne = _formater()
+    assert (ligne["niveau"], ligne["module"], ligne["message"]) == (
+        "INFO", "portail.test_journal", "message x"
+    )  # fmt: skip
+    assert (ligne["pipeline"], ligne["etape"], ligne["agent"]) == (3, 7, "code")
+    assert len(ligne["mission"]) == 12
+    assert "tache" not in ligne and "contexte_max" not in ligne
+    journal.lier(etape=None)
+    assert "etape" not in _formater()
+    journal.commencer()
+
+
+def test_exception_rendue_sans_message():
+    try:
+        raise ValueError(MARQUEUR)
+    except ValueError:
+        ligne = _formater("tiers", sys.exc_info())
+    assert ligne["exception"] == "ValueError" and "pile" in ligne
+    assert MARQUEUR not in json.dumps(ligne)
+
+
+async def test_tache_enfant_sans_identifiants_perimes():
+    journal.commencer(conversation=1)
+
+    async def enfant():
+        journal.commencer(etape=2)
+        return dict(journal.contexte.get())
+
+    assert await asyncio.create_task(enfant()) == {"etape": 2}
+    assert journal.contexte.get() == {"conversation": 1}
+    journal.commencer()
