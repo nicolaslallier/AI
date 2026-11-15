@@ -2,6 +2,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -13,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from portail import resume
 from portail.agents import Catalogue, charger_catalogue
 from portail.arbitre import Arbitre, LLMArbitre
 from portail.avis import ServiceAvis
@@ -396,10 +398,21 @@ def create_app(
         async with app.state.sessions() as s:
             await app.state.conversations.recuperer_interrompues(s)
             await s.commit()
+        boucles: list[asyncio.Task] = []
+        if "pm" in app.state.catalogue.agents:
+            boucles.append(
+                asyncio.create_task(
+                    resume.tourner(
+                        app.state.sessions, app.state.conversations,
+                        Notifieur(r.ntfy_url, r.ntfy_sujet, r.ntfy_jeton),
+                        r.resume_heure, r.url_publique, lambda: datetime.now(UTC),
+                    )
+                )
+            )  # fmt: skip
         orch = orchestrateur or _orchestrateur(
             r, app.state.sessions, app.state.catalogue, LLMArbitre(app.state.llm, arbitre, "fond")
         )
-        app.state.orchestrateur, app.state.ordonnanceur, boucles = orch, None, []
+        app.state.orchestrateur, app.state.ordonnanceur = orch, None
         if orch:
             app.state.ordonnanceur = Ordonnanceur(app.state.sessions, orch, r.paralleles_max)
             await reprendre_interrompues(app.state.sessions, orch, app.state.ordonnanceur.lancer)
@@ -407,7 +420,7 @@ def create_app(
                 app.state.sessions, orch._github, orch, app.state.ordonnanceur,
                 proprietaire=r.github_proprietaire, delai_s=r.delai_commentaires_s,
             )  # fmt: skip
-            boucles = [
+            boucles += [
                 asyncio.create_task(app.state.ordonnanceur.tourner()),
                 asyncio.create_task(suivi.tourner()),
             ]
@@ -417,8 +430,9 @@ def create_app(
             *app.state.conversations.taches.values(),
             *app.state.avis.taches.values(),
         ]
+        taches += boucles
         if orch:
-            taches += [*boucles, *orch.taches.values()]
+            taches += [*orch.taches.values()]
         for t in taches:
             t.cancel()
         await asyncio.gather(*taches, return_exceptions=True)

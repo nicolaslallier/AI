@@ -1,9 +1,10 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -99,6 +100,17 @@ class Conversation(Base):
     erreur: Mapped[str | None] = mapped_column(Text)
     cree_le: Mapped[datetime] = _horodatage()
     maj_le: Mapped[datetime] = _horodatage(onupdate=func.now())
+
+
+class Resume(Base):
+    __tablename__ = "resume"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    jour: Mapped[date] = mapped_column(Date, unique=True)
+    conversation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("conversation.id", ondelete="SET NULL")
+    )
+    cree_le: Mapped[datetime] = _horodatage()
 
 
 class MessageConversation(Base):

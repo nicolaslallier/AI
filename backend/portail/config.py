@@ -28,4 +28,5 @@ class Reglages(BaseSettings):
     ntfy_sujet: str = "portail"
     ntfy_jeton: str = ""
     url_publique: str = ""
+    resume_heure: str = "07:00"
     delai_commentaires_s: int = 600

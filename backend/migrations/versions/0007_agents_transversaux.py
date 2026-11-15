@@ -42,10 +42,22 @@ def upgrade() -> None:
         "conversation",
         sa.Column("agent", sa.String, nullable=False, server_default="orchestrateur"),
     )
+    op.create_table(
+        "resume",
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("jour", sa.Date, nullable=False, unique=True),
+        sa.Column(
+            "conversation_id", sa.Integer, sa.ForeignKey("conversation.id", ondelete="SET NULL")
+        ),
+        sa.Column(
+            "cree_le", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+    )
     op.execute("UPDATE execution_dev SET phase = 'controles' WHERE phase = 'revue'")
 
 
 def downgrade() -> None:
+    op.drop_table("resume")
     op.drop_column("conversation", "agent")
     op.drop_index("ix_avis_document_id", table_name="avis")
     op.drop_table("avis")
