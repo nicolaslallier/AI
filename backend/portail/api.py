@@ -352,7 +352,10 @@ def create_app(
         if orch:
             app.state.ordonnanceur = Ordonnanceur(app.state.sessions, orch, r.paralleles_max)
             await reprendre_interrompues(app.state.sessions, orch, app.state.ordonnanceur.lancer)
-            suivi = SuiviPR(app.state.sessions, orch._github, orch, app.state.ordonnanceur)
+            suivi = SuiviPR(
+                app.state.sessions, orch._github, orch, app.state.ordonnanceur,
+                proprietaire=r.github_proprietaire, delai_s=r.delai_commentaires_s,
+            )  # fmt: skip
             boucles = [
                 asyncio.create_task(app.state.ordonnanceur.tourner()),
                 asyncio.create_task(suivi.tourner()),

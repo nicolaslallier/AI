@@ -5,12 +5,20 @@ import asyncio
 import logging
 from collections.abc import Callable
 
-from sqlalchemy import exists, select, update
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
-from portail.db import Etape, ExecutionDev, Pipeline, Projet, Tache, TacheDependance
+from portail.db import (
+    CommentairePris,
+    Etape,
+    ExecutionDev,
+    Pipeline,
+    Projet,
+    Tache,
+    TacheDependance,
+)
 from portail.dev import Orchestrateur
 from portail.etats import Etat
 from portail.github import ErreurGitHub
@@ -47,6 +55,24 @@ async def choisir(session: AsyncSession) -> Tache | None:
     )
 
 
+async def choisir_reprise(session: AsyncSession) -> ExecutionDev | None:
+    """La reprise en attente aux commentaires les plus anciens ; sa ligne reste verrouillée
+    jusqu'à la fin de la transaction de l'appelant."""
+    premier = (
+        select(func.min(CommentairePris.cree_le))
+        .where(CommentairePris.execution_id == ExecutionDev.id)
+        .scalar_subquery()
+    )
+    return await session.scalar(
+        select(ExecutionDev)
+        .join(Pipeline, Pipeline.id == ExecutionDev.pipeline_id)
+        .where(ExecutionDev.mode == "reprise", Pipeline.etat == Etat.EN_ATTENTE)
+        .order_by(premier, ExecutionDev.id)
+        .limit(1)
+        .with_for_update(skip_locked=True, of=ExecutionDev)
+    )
+
+
 class Ordonnanceur:
     def __init__(
         self,
@@ -68,8 +94,13 @@ class Ordonnanceur:
         self._orch.taches[pipeline_id].add_done_callback(lambda _: self.reveiller())
 
     async def tour(self) -> None:
-        """Démarre des tâches tant qu'il reste de la place."""
+        """Démarre des tâches tant qu'il reste de la place : les reprises d'abord."""
         while len(self._orch.taches) < self._max:
+            reprise = await self._reprise()
+            if reprise is None:
+                return
+            if reprise:
+                continue
             async with self._sessions() as s:  # repérage : verrou relâché avant GitHub
                 tache = await choisir(s)
                 if tache is None:
@@ -106,6 +137,29 @@ class Ordonnanceur:
                 await self._bloquer(tache_id, f"démarrage impossible : {e}")
                 continue
             self.lancer(pipeline.id)
+
+    async def _reprise(self) -> bool | None:
+        """Démarre la plus ancienne reprise en attente. `True` : une reprise a été traitée ;
+        `False` : aucune ; `None` : projet occupé, le tour s'arrête."""
+        async with self._sessions() as s:
+            ex = await choisir_reprise(s)
+            if ex is None:
+                return False
+            # comme pour les tâches : le projet en `skip_locked`, jamais en attente
+            libre = await s.scalar(
+                select(Projet.id)
+                .join(Tache, Tache.projet_id == Projet.id)
+                .where(Tache.id == ex.tache_id)
+                .with_for_update(skip_locked=True, of=Projet)
+            )
+            if libre is None:
+                return None
+            pipeline_id = ex.pipeline_id
+            demarree = await self._orch.demarrer_reprise(s, ex)
+            await s.commit()
+        if demarree:
+            self.lancer(pipeline_id)
+        return True
 
     async def _bloquer(self, tache_id: int, raison: str) -> None:
         async with self._sessions() as s:

@@ -1,7 +1,9 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from asgi_lifespan import LifespanManager
+from conftest import commentaire
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
@@ -390,3 +392,105 @@ async def test_recuperer_interrompues_ignore_dev(sessions):
         etapes = (await s.scalars(select(Etape.etat).order_by(Etape.id))).all()
     assert [tuple(e) for e in etats] == [("dev", "en_cours"), ("spec", "echouee")]
     assert etapes == ["en_cours", "echouee"]
+
+
+# --- reprises -----------------------------------------------------------
+
+
+async def _en_revue(sessions, projet_id, rang) -> int:
+    """Une tâche *En revue* avec sa PR n° `rang`, verrou tenu par son pipeline fini."""
+    async with sessions() as s:
+        t = Tache(
+            projet_id=projet_id, titre=f"r{rang}", colonne="en_revue", rang=rang, origine="manuel"
+        )
+        s.add(t)
+        pipeline = Pipeline(projet_id=projet_id, type="dev", etat="terminee")
+        s.add(pipeline)
+        await s.flush()
+        t.verrou = pipeline.id
+        s.add(
+            ExecutionDev(
+                pipeline_id=pipeline.id, tache_id=t.id, n=1, branche=f"b{rang}",
+                espace=f"e{rang}", base="main", base_sha="x", phase="fini", pr_numero=rang,
+            )
+        )  # fmt: skip
+        await s.commit()
+        return t.id
+
+
+async def _reprise(m: Monde, tache_id: int, age_min: int = 0) -> int:
+    """Une reprise en attente dont le commentaire a `age_min` minutes."""
+    async with m.sessions() as s:
+        origine = await s.scalar(
+            select(ExecutionDev).where(ExecutionDev.tache_id == tache_id).order_by(ExecutionDev.id)
+        )
+        cree = datetime.now(UTC) - timedelta(minutes=age_min)
+        p = await m.orch.creer_reprise(s, origine, [commentaire("revue", tache_id, cree_le=cree)])
+        await s.commit()
+        return p.id
+
+
+async def test_reprise_passe_avant_les_taches_pretes(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)  # T1 est Prête
+    t2 = await _en_revue(sessions, 1, 2000)
+    pid = await _reprise(m, t2)
+    m.llm.reponses = [asyncio.Event()]
+    try:
+        await Ordonnanceur(sessions, m.orch, 1).tour()
+        assert list(m.orch.taches) == [pid]
+        async with sessions() as s:
+            assert (await s.get(Tache, 1)).colonne == "prete"
+            assert (await s.get(Tache, t2)).colonne == "en_cours"
+    finally:
+        await _arreter(m)
+
+
+async def test_reprises_dans_l_ordre_des_commentaires(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    async with sessions() as s:
+        (await s.get(Tache, 1)).colonne = "terminee"
+        await s.commit()
+    ta, tb = await _en_revue(sessions, 1, 2000), await _en_revue(sessions, 1, 3000)
+    await _reprise(m, ta, age_min=5)
+    pid_b = await _reprise(m, tb, age_min=30)  # commentaire plus ancien, id plus grand
+    m.llm.reponses = [asyncio.Event()]
+    try:
+        await Ordonnanceur(sessions, m.orch, 1).tour()
+        assert list(m.orch.taches) == [pid_b]
+    finally:
+        await _arreter(m)
+
+
+async def test_reprise_compte_dans_paralleles_max(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    ta, tb = await _en_revue(sessions, 1, 2000), await _en_revue(sessions, 1, 3000)
+    pid_a = await _reprise(m, ta)
+    await _reprise(m, tb)
+    m.llm.reponses = [asyncio.Event()]
+    ordo = Ordonnanceur(sessions, m.orch, 1)
+    try:
+        await ordo.tour()
+        await ordo.tour()
+        assert list(m.orch.taches) == [pid_a]
+        async with sessions() as s:
+            assert (await s.get(Tache, tb)).colonne == "en_revue"
+            assert (await s.get(Tache, 1)).colonne == "prete"
+    finally:
+        await _arreter(m)
+
+
+async def test_reprise_en_attente_tache_annulee_abandonnee(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    async with sessions() as s:
+        (await s.get(Tache, 1)).colonne = "terminee"
+        await s.commit()
+    ta = await _en_revue(sessions, 1, 2000)
+    pid = await _reprise(m, ta)
+    async with sessions() as s:  # la route d'annulation : la tâche repart À faire
+        t = await s.get(Tache, ta)
+        t.colonne, t.verrou = "a_faire", None
+        await s.commit()
+    await Ordonnanceur(sessions, m.orch, 1).tour()
+    assert m.orch.taches == {}
+    _ex, tache, pipeline = await m.etat(pid)
+    assert (pipeline.etat, tache.colonne) == ("echouee", "a_faire")
