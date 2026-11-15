@@ -103,6 +103,15 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 
+def _flux(generateur) -> StreamingResponse:
+    """Flux SSE : le proxy ne doit ni le mettre en tampon ni le mettre en cache."""
+    return StreamingResponse(
+        generateur,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 async def _tracer(s: AsyncSession, request: Request, action: str, objet: str, objet_id: int):
     """Pour les routes dont le service a déjà validé : une ligne d'audit, commitée aussitôt."""
     inscrire(s, auteur_de(request), action, objet, objet_id)
@@ -765,7 +774,7 @@ def create_app(
     async def flux(etape_id: int, request: Request):
         chat = request.app.state.chat
         await chat.etat(etape_id)  # 404 avant de commencer le flux
-        return StreamingResponse(chat.flux(etape_id), media_type="text/event-stream")
+        return _flux(chat.flux(etape_id))
 
     @app.get("/api/conversations", response_model=list[ConversationResume])
     async def lister_conversations(request: Request):
@@ -824,7 +833,7 @@ def create_app(
     async def flux_conversation(conversation_id: int, request: Request):
         service = request.app.state.conversations
         await service.etat(conversation_id)  # 404 avant de commencer le flux
-        return StreamingResponse(service.flux(conversation_id), media_type="text/event-stream")
+        return _flux(service.flux(conversation_id))
 
     @app.get("/api/audit", response_model=list[AuditOut])
     async def lire_audit(s: Session, limite: int = 100, avant: int | None = None):
@@ -835,11 +844,7 @@ def create_app(
 
     @app.get("/api/evenements")
     async def evenements():
-        return StreamingResponse(
-            flux_evenements(bus),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+        return _flux(flux_evenements(bus))
 
     if r.static_dir:
         racine = r.static_dir.resolve()

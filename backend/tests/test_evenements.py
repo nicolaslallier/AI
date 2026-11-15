@@ -86,3 +86,21 @@ async def test_evenements_exige_l_utilisateur(moteur, schema):
         AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
     ):
         assert (await c.get("/api/evenements")).status_code == 401
+
+
+async def test_flux_sans_tampon(client, monkeypatch):
+    async def fini(_bus):
+        yield "data: x\n\n"
+
+    monkeypatch.setattr("portail.api.flux_evenements", fini)
+    projet = (await client.post("/api/projets", json={"nom": "P"})).json()
+    pid = (
+        await client.post("/api/pipelines", json={"projet_id": projet["id"], "type": "spec"})
+    ).json()
+    eid = pid["etapes"][0]["id"]
+    cid = (await client.post("/api/conversations")).json()["id"]
+    for url in (f"/api/etapes/{eid}/flux", f"/api/conversations/{cid}/flux", "/api/evenements"):
+        r = await asyncio.wait_for(client.get(url), 5)
+        assert r.headers["content-type"].startswith("text/event-stream"), url
+        assert r.headers["x-accel-buffering"] == "no", url
+        assert r.headers["cache-control"] == "no-cache", url
