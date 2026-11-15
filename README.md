@@ -85,9 +85,9 @@ Chaque agent peut tourner dans son propre conteneur, écrit en Rust (`agents/`, 
 ### Migrer un agent (pilote : `revue`)
 
 1. **Relever la référence** (au moins une semaine) dans Grafana : tableau « Portail : agents et modèles » avec `agent=revue` et `lieu=portail` (panneaux « Jetons par heure », « Durée d'un appel, p95 », « Erreurs LiteLLM (1 h) », « Réussite par lieu »), et tableau « Portail : boucle de dev » (« Renvois (1 j) », « Blocages par cause (7 j) »).
-2. **Vérifier la page Bureau** : le poste `revue` doit montrer « conteneur ● <version> » (« conteneur injoignable » sinon). La sonde est faite par `GET /api/bureau`, au plus une fois toutes les 10 secondes par agent, et jamais plus d'une seconde d'attente.
-3. **Poser `service:`** : une PR qui ajoute `service: http://agent-revue:8080` à `revue` dans `agents.yaml` (forme `http://agent-<nom>:<port>`, aucune autre) ; le déploiement suit la fusion. Le portail refuse de démarrer si la variable `PORTAIL_AGENT_SECRET_REVUE` manque ou fait moins de 32 caractères.
-4. **Comparer** après quelques jours : mêmes panneaux avec `lieu=conteneur` ; et la requête SQL
+2. **Vérifier la santé du conteneur depuis le portail** (le bureau ne sonde que les agents qui ont déjà `service:`, et l'image agent n'a pas de shell) : `docker exec <conteneur portail> python -c "import urllib.request;print(urllib.request.urlopen('http://agent-revue:8080/sante').read())"` doit rendre la santé de l'agent.
+3. **Poser `service:`** : une PR qui ajoute `service: http://agent-revue:8080` à `revue` dans `agents.yaml` (forme `http://agent-<nom>:<port>`, aucune autre) ; le déploiement suit la fusion. Le portail refuse de démarrer si la variable `PORTAIL_AGENT_SECRET_REVUE` manque ou fait moins de 32 caractères. Une fois déployé, la page Bureau doit montrer « conteneur ● <version> » pour le poste `revue` (« conteneur injoignable » sinon) ; la sonde est faite par `GET /api/bureau`, au plus une fois toutes les 10 secondes par agent, et jamais plus d'une seconde d'attente.
+4. **Comparer** après quelques jours : mêmes panneaux avec `lieu=conteneur`, sauf « Durée d'un appel, p95 » et « Erreurs LiteLLM (1 h) » qui ignorent `$lieu` (les comparer par plage de temps, avant et après le déploiement) ; et la requête SQL
 
    ```sql
    select lieu, version_image, issue, count(*), avg(duree_ms), sum(jetons_entree + jetons_sortie)
@@ -134,6 +134,7 @@ Le dépôt est public : rien de secret n'y entre, tout passe par OpenBao.
 12. **Avant la fusion du lot I** : ranger dans OpenBao, dans le secret `infra/portail`, une clé par agent `PORTAIL_AGENT_SECRET_<NOM>` : `SPEC`, `ORCHESTRATEUR`, `PLAN`, `TACHES`, `TESTS`, `CODE`, `REVUE`, `ARCHITECTE`, `CHALLENGER`, `SECURITE`, `DOC`, `PM`, `TRI` (13 clés, chacune tirée de `openssl rand -hex 32`). Sans elles, le déploiement s'arrête proprement sur « clé absente ».
 13. Ajouter le contrôle `agents` à la protection de `main` (avec `backend`, `frontend`, `lanceur` et `securite`).
 14. **Après la fusion** : ouvrir la PR Infra du lot I (`deploy/infra/README.md`).
+15. **Avant le premier `service:`** : vérifier que le réseau `portail_portail-agents` n'ouvre pas l'hôte (`nc -zv 172.31.250.1 22` depuis un conteneur de test doit échouer) et que le paquet GHCR `ai-agents` peut être tiré par Portainer et Trivy (voir `deploy/infra/README.md`).
 
 ### Jeton GitHub (lecture seule)
 

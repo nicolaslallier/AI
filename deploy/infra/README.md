@@ -73,6 +73,15 @@ Sans cette PR, `/metrics` répond sur `infra-net` sans être lu : rien ne casse.
 4. Décider, agent par agent, de poser `service:` dans `agents.yaml` (procédure et retour arrière :
    section « Agents en conteneur » du README ; aucun agent ne migre dans ce lot).
 
+5. Avant de poser le premier `service:` :
+   - Depuis un conteneur de test attaché à `portail_portail-agents`, `nc -zv 172.31.250.1 22`
+     (et chaque autre port ouvert de l'hôte) doit échouer : un réseau `internal: true` peut
+     garder l'adresse de passerelle sur le pont de l'hôte, donc exposer ses services. Si c'est
+     ouvert : `driver_opts: {com.docker.network.bridge.inhibit_ipv4: "true"}` sur
+     `portail-agents`, ou une règle INPUT DROP sur ce pont.
+   - Le paquet GHCR `ai-agents` est peut-être privé par défaut : Portainer et Trivy doivent
+     pouvoir le tirer (le rendre public, ou leur donner un accès en lecture).
+
 Les services `agent-<nom>` sont tous sur le réseau `portail-agents` (interne) : ils voient le
 portail, pas l'Infra, ni la base, ni LiteLLM, ni le lanceur, ni Internet. Ils partagent ce
 réseau entre eux ; seul le secret propre à chaque agent les empêche de se parler utilement.
