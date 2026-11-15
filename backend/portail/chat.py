@@ -535,6 +535,15 @@ class ServiceChat:
             )
             await annuler_pipeline(s, pipeline)
             await s.commit()
+            docs = (
+                await s.scalars(select(Document.id).where(Document.pipeline_id == pipeline_id))
+            ).all()
+        # avant de libérer : un avis en cours ne finit pas `ouvert` ni ne recrée l'arbre
+        for doc_id in docs if self._avis else ():
+            try:
+                await self._avis.abandonner(doc_id)
+            except Exception:
+                logger.exception("avis non abandonnés pour le document %s", doc_id)
         for i in ids:
             self.diffuseur.publier(i, {"type": "erreur", "message": "annulé"})
             await self._depots.liberer(i)

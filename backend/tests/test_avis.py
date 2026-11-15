@@ -163,6 +163,18 @@ async def test_valider_abandonne_les_avis_en_cours(client, faux_llm, sessions):
         assert set((await s.scalars(select(Avis.etat))).all()) == {"abandonne"}
 
 
+async def test_annuler_abandonne_les_avis_en_cours(client, faux_llm, sessions):
+    bloque = asyncio.Event()
+    pid, _eid = await _plan(
+        client, faux_llm, [bloque, bloque, _reponse("a"), _reponse("b")], avis=False
+    )
+    assert (await client.post(f"/api/pipelines/{pid}/annuler")).status_code == 200
+    bloque.set()
+    await _attendre(client)
+    async with sessions() as s:
+        assert set((await s.scalars(select(Avis.etat))).all()) == {"abandonne"}
+
+
 async def test_challenger_change_de_modele_si_meme_que_le_redacteur(client, faux_llm):
     await _plan(client, faux_llm)
     assert sorted(a["modele"] for a in _avis_appels(faux_llm)) == ["m", "m2"]
