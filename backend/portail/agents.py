@@ -113,6 +113,12 @@ class Catalogue(BaseModel):
     avis: dict[Literal["spec", "plan"], list[str]] = {}
 
 
+def agent_effectif(cat: Catalogue, nom: str, modele: str | None) -> Agent | None:
+    """L'agent du catalogue, avec le modèle choisi pour l'étape s'il y en a un (le catalogue reste intact)."""
+    agent = cat.agents.get(nom)
+    return agent.model_copy(update={"modele": modele}) if agent and modele else agent
+
+
 def rangement(cat: Catalogue) -> list[tuple[str | None, list[str]]]:
     """Un groupe par pipeline (agents dans l'ordre des étapes), puis les agents hors pipeline."""
     groupes: list[tuple[str | None, list[str]]] = [(p, list(e)) for p, e in cat.pipelines.items()]
