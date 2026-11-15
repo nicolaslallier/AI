@@ -1,5 +1,6 @@
 import asyncio
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from asgi_lifespan import LifespanManager
@@ -7,6 +8,8 @@ from httpx import ASGITransport, AsyncClient
 
 from portail.api import _flux, create_app
 from portail.config import Reglages
+from portail.db import ExecutionDev, Pipeline, Projet, Tache
+from portail.metriques import rafraichir
 from tests.conftest import CATALOGUE_TEST, URL, FauxLLM, valeur
 
 VHOST = Path(__file__).parents[2] / "deploy" / "nginx" / "portail.conf"
@@ -153,3 +156,73 @@ async def test_flux_ouverts_annule():
     await asyncio.gather(tache, return_exceptions=True)
     await r.body_iterator.aclose()
     assert valeur("portail_flux_ouverts", flux="evenements") == avant
+
+
+async def _metrics(app):
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        return (await c.get("/metrics")).text
+
+
+async def _tache(s, pid, colonne):
+    t = Tache(projet_id=pid, titre="t", colonne=colonne, rang=1000, origine="manuel")
+    s.add(t)
+    await s.flush()
+    return t
+
+
+async def test_collecte_taches_par_colonne(moteur, sessions, tmp_path):
+    async with sessions() as s, s.begin():
+        p = Projet(nom="p")
+        s.add(p)
+        await s.flush()
+        await _tache(s, p.id, "a_faire")
+        await _tache(s, p.id, "a_faire")
+        b = await _tache(s, p.id, "bloquee")
+    texte = await _metrics(await _client(tmp_path))
+    assert 'portail_taches{colonne="a_faire"} 2.0' in texte
+    assert 'portail_taches{colonne="bloquee"} 1.0' in texte
+    async with sessions() as s, s.begin():
+        (await s.get(Tache, b.id)).colonne = "terminee"
+    texte = await _metrics(await _client(tmp_path))
+    # une colonne vidée sort à 0, elle ne disparaît pas (les alertes ne voient pas de série absente)
+    assert 'portail_taches{colonne="bloquee"} 0.0' in texte
+    assert 'portail_taches{colonne="prete"} 0.0' in texte
+
+
+async def test_collecte_age_et_echecs_consecutifs(moteur, sessions, tmp_path):
+    maintenant = datetime.now(UTC)
+    async with sessions() as s, s.begin():
+        p = Projet(nom="p")
+        s.add(p)
+        await s.flush()
+        t = await _tache(s, p.id, "en_cours")
+        etats = ["terminee", "echouee", "echouee", "echouee", "en_cours"]
+        for i, etat in enumerate(etats):
+            pl = Pipeline(
+                projet_id=p.id, type="dev", etat=etat, maj_le=maintenant - timedelta(hours=9 - i)
+            )
+            s.add(pl)
+            await s.flush()
+            s.add(ExecutionDev(
+                pipeline_id=pl.id, tache_id=t.id, n=i, branche="b", espace="e", base="main",
+                base_sha="x", phase="code",
+                debut=maintenant - timedelta(hours=3 if etat == "en_cours" else 20),
+            ))  # fmt: skip
+    texte = await _metrics(await _client(tmp_path))
+    assert "portail_echecs_dev_consecutifs 3.0" in texte
+    age = float(
+        re.search(r"^portail_tache_en_cours_age_max_secondes (\S+)$", texte, re.MULTILINE)[1]
+    )
+    assert 10_800 <= age < 11_400
+    assert "portail_base_joignable 1.0" in texte
+
+
+async def test_collecte_base_injoignable():
+    def casse():
+        raise ConnectionError("base saturée")
+
+    await rafraichir(casse)
+    assert valeur("portail_base_joignable") == 0.0

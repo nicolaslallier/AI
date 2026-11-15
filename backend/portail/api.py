@@ -887,7 +887,8 @@ def create_app(
         return _flux(flux_evenements(bus), "evenements")
 
     @app.get("/metrics", include_in_schema=False)
-    async def metrics():
+    async def metrics(request: Request):
+        await metriques.rafraichir(request.app.state.sessions)
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     if r.static_dir:
