@@ -11,6 +11,7 @@ from portail.boucle import boucle_outils
 from portail.contexte import construire
 from portail.db import Avis, Document, Etape, Pipeline, Projet
 from portail.depots import Depots
+from portail.etats import Etat
 from portail.llm import ClientLLM, retirer_reflexion
 from portail.moteur import spec_courante
 from portail.outils import OutilsDepot
@@ -43,6 +44,12 @@ class ServiceAvis:
                 select(Document).where(Document.id == document_id).with_for_update()
             )
             if doc is None or doc.etat != "brouillon":
+                return
+            # un pipeline annulé garde des brouillons : pas de nouvel avis sur son arbre clos
+            if (
+                await s.scalar(select(Pipeline.etat).where(Pipeline.id == doc.pipeline_id))
+                == Etat.ECHOUEE
+            ):
                 return
             noms = self._catalogue.avis.get(doc.type, [])
             for nom in noms:  # une relance remplace l'avis encore en cours du même agent

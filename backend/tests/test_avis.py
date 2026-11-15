@@ -251,6 +251,19 @@ async def test_lancer_sur_un_document_valide_ne_fait_rien(client, faux_llm, sess
         assert len((await s.scalars(select(Avis.id))).all()) == n
 
 
+async def test_lancer_sur_un_pipeline_annule_ne_fait_rien(client, faux_llm, sessions):
+    pid, _eid = await _plan(client, faux_llm)
+    did = (await _document(client, pid))["id"]
+    assert (await client.post(f"/api/pipelines/{pid}/annuler")).status_code == 200
+    avant = len(_avis_appels(faux_llm))
+    async with sessions() as s:
+        n = len((await s.scalars(select(Avis.id))).all())
+    await _app(client).state.avis.lancer(did)
+    assert not _app(client).state.avis.taches and len(_avis_appels(faux_llm)) == avant
+    async with sessions() as s:
+        assert len((await s.scalars(select(Avis.id))).all()) == n
+
+
 async def test_avis_qui_finit_apres_la_validation_n_est_pas_enregistre(client, faux_llm, sessions):
     bloque = asyncio.Event()
     pid, _ = await _plan(client, faux_llm, [bloque, bloque, _reponse("a"), _reponse("b")], False)
