@@ -127,7 +127,8 @@ async fn avec_banc<F: AsyncFnOnce(&Banc)>(nom: &str, corps: F) {
             reseau: reseau.clone(),
             proxy: "http://proxy.invalide:3128".into(),
             images: vec![IMAGE.into()],
-            images_services: vec![],
+            // la liste du lanceur est fermée : le service du test doit y figurer
+            images_services: vec!["postgres:16-alpine".into()],
         },
         docker: docker.clone(),
         espace,
