@@ -23,6 +23,8 @@ OUTILS_ACTIONS_PORTAIL = (
     "annuler_tache",
 )
 OUTILS_PORTAIL = OUTILS_LECTURE_PORTAIL + OUTILS_ACTIONS_PORTAIL
+# vision : discussion avec Nicolas ; volet : analyse automatique d'un domaine ; architecture : synthèse finale
+PRODUITS_ARCHITECTURE = ("vision", "volet", "architecture")
 
 
 class CatalogueInvalide(Exception):
@@ -37,8 +39,15 @@ class Agent(BaseModel):
     contexte_max: int = Field(gt=0)
     temperature: float | None = None
     consigne_redaction: str | None = None
-    produit: Literal["spec", "plan", "taches", "travail", "verdict"] = "spec"
+    produit: Literal[
+        "spec", "plan", "taches", "travail", "verdict", "vision", "volet", "architecture"
+    ] = "spec"
     auto: bool = False
+    sans_validation: bool = False
+    # début des identifiants ArchiMate émis par l'agent (produits d'architecture)
+    prefixe: str | None = Field(default=None, pattern=r"^[a-z]{3}-$")
+    # nom lisible du volet (« affaires », « données »…), sert au catalogue d'origine
+    volet: str | None = None
     outils: list[
         Literal[
             "lister",
@@ -79,6 +88,32 @@ class Agent(BaseModel):
         portail = set(self.outils) & set(OUTILS_PORTAIL)
         if portail and portail != set(self.outils):
             raise ValueError(f"l'agent « {self.nom} » mélange outils du portail et outils de dépôt")
+        if self.produit in PRODUITS_ARCHITECTURE:
+            if not self.prefixe:
+                raise ValueError(f"l'agent « {self.nom} » produit {self.produit} : prefixe requis")
+            if not self.consigne_redaction:
+                raise ValueError(
+                    f"l'agent « {self.nom} » produit {self.produit} : consigne_redaction requise"
+                )
+        elif self.prefixe:
+            raise ValueError(
+                f"l'agent « {self.nom} » ne produit pas d'architecture : prefixe interdit"
+            )
+        if self.produit == "volet" and not self.volet:
+            raise ValueError(f"l'agent « {self.nom} » produit un volet : volet requis")
+        if self.produit not in PRODUITS_ARCHITECTURE and self.volet:
+            raise ValueError(f"l'agent « {self.nom} » ne produit pas un volet : volet interdit")
+        if self.produit == "vision" and self.auto:
+            raise ValueError(f"l'agent « {self.nom} » est une discussion : pas auto")
+        if self.sans_validation and not (self.auto and self.produit == "volet"):
+            raise ValueError(f"l'agent « {self.nom} » : sans_validation réservé aux volets auto")
+        if self.produit == "volet" and not self.auto:
+            raise ValueError(f"l'agent « {self.nom} » produit un volet : auto requis")
+        if self.produit == "architecture":
+            if not self.auto:
+                raise ValueError(f"l'agent « {self.nom} » produit l'architecture : auto requis")
+            if self.outils:
+                raise ValueError(f"l'agent « {self.nom} » produit l'architecture : pas d'outils")
         if self.produit == "taches" and self.outils:
             raise ValueError(f"l'agent « {self.nom} » produit des tâches : pas d'outils")
         if self.modele_si_meme == self.modele:
@@ -171,6 +206,8 @@ def charger_catalogue(chemin: Path) -> Catalogue:
                 raise CatalogueInvalide(
                     f"pipeline « {p} » : l'agent « {a} » a des outils du portail"
                 )
+    for p, etapes in cat.pipelines.items():
+        _verifier_architecture(p, [(a, cat.agents[a]) for a in etapes])
     for etape, noms in cat.avis.items():
         for a in noms:
             if a not in cat.agents:
@@ -183,6 +220,32 @@ def charger_catalogue(chemin: Path) -> Catalogue:
     if pm and set(pm.outils) & set(OUTILS_ACTIONS_PORTAIL):
         raise CatalogueInvalide("l'agent « pm » a des outils d'action du portail")
     return cat
+
+
+def _verifier_architecture(pipeline: str, etapes: list[tuple[str, Agent]]) -> None:
+    prefixes: dict[str, str] = {}
+    for nom, a in etapes:
+        if a.prefixe in prefixes:
+            raise CatalogueInvalide(
+                f"pipeline « {pipeline} » : le préfixe « {a.prefixe} » "
+                f"est utilisé par « {prefixes[a.prefixe]} » et « {nom} »"
+            )
+        if a.prefixe:
+            prefixes[a.prefixe] = nom
+    for produit in ("vision", "architecture"):
+        if sum(a.produit == produit for _, a in etapes) > 1:
+            raise CatalogueInvalide(f"pipeline « {pipeline} » : un seul agent {produit} est permis")
+    vision_vue = False
+    for i, (nom, a) in enumerate(etapes):
+        vision_vue = vision_vue or a.produit == "vision"
+        if a.produit in ("volet", "architecture") and not vision_vue:
+            raise CatalogueInvalide(
+                f"pipeline « {pipeline} » : l'agent « {nom} » n'est pas précédé d'un agent vision"
+            )
+        if a.produit == "architecture" and i != len(etapes) - 1:
+            raise CatalogueInvalide(
+                f"pipeline « {pipeline} » : l'agent « {nom} » doit être la dernière étape"
+            )
 
 
 def _details(e: ValidationError) -> str:
