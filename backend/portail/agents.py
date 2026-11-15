@@ -103,6 +103,7 @@ def modele_pour(agent: Agent, auteur: Agent) -> str:
 
 
 class Catalogue(BaseModel):
+    modeles_permis: list[str] = []
     agents: dict[str, Agent]
     pipelines: dict[str, list[str]]
     avis: dict[Literal["spec", "plan"], list[str]] = {}
@@ -128,9 +129,21 @@ def charger_catalogue(chemin: Path) -> Catalogue:
             agents[nom] = Agent(nom=nom, **a)
         except ValidationError as e:
             raise CatalogueInvalide(f"agent « {nom} » invalide ({_details(e)})") from e
+    permis = brut.get("modeles_permis")
+    if not isinstance(permis, list) or not permis or not all(isinstance(m, str) for m in permis):
+        raise CatalogueInvalide("`modeles_permis` doit être une liste non vide de noms de modèles")
+    for nom, a in agents.items():
+        for m in (a.modele, a.modele_si_meme):
+            if m is not None and m not in permis:
+                raise CatalogueInvalide(
+                    f"agent « {nom} » : le modèle « {m} » n'est pas dans `modeles_permis`"
+                )
     try:
         cat = Catalogue(
-            agents=agents, pipelines=brut.get("pipelines") or {}, avis=brut.get("avis") or {}
+            modeles_permis=permis,
+            agents=agents,
+            pipelines=brut.get("pipelines") or {},
+            avis=brut.get("avis") or {},
         )
     except ValidationError as e:
         raise CatalogueInvalide(f"`pipelines` invalide ({_details(e)})") from e

@@ -13,6 +13,7 @@ from portail.agents import (
 )
 
 VALIDE = """
+modeles_permis: [m]
 agents:
   spec:
     description: d
@@ -52,6 +53,27 @@ def test_pipeline_agent_inconnu(tmp_path):
 def test_pipeline_vide_refuse(tmp_path):
     with pytest.raises(CatalogueInvalide):
         charger_catalogue(ecrire(tmp_path, VALIDE.replace("spec: [spec]", "spec: []")))
+
+
+def test_modeles_permis_absents(tmp_path):
+    with pytest.raises(CatalogueInvalide, match="modeles_permis"):
+        charger_catalogue(ecrire(tmp_path, VALIDE.replace("modeles_permis: [m]\n", "")))
+
+
+def test_modeles_permis_vides(tmp_path):
+    with pytest.raises(CatalogueInvalide, match="modeles_permis"):
+        charger_catalogue(ecrire(tmp_path, VALIDE.replace("[m]", "[]", 1)))
+
+
+def test_modele_hors_liste(tmp_path):
+    texte = VALIDE.replace("    modele: m\n", "    modele: gpt-x\n")
+    with pytest.raises(CatalogueInvalide) as exc:
+        charger_catalogue(ecrire(tmp_path, texte))
+    assert "agent « spec »" in str(exc.value) and "gpt-x" in str(exc.value)
+
+
+def test_catalogue_du_depot():
+    assert charger_catalogue(Path("../agents.yaml")).modeles_permis
 
 
 def test_yaml_illisible(tmp_path):

@@ -29,6 +29,7 @@ Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolas
   - Étapes manuelles (réglages GitHub, hors dépôt) :
     - protéger `main` : exiger les contrôles `backend`, `frontend`, `lanceur` et `securite` avant fusion ;
     - installer l'application Renovate sur le dépôt.
+    - remplacer `PORTAIL_LITELLM_CLE` dans OpenBao par une clé LiteLLM limitée aux modèles de `modeles_permis` (`agents.yaml`), jamais la clé maîtresse.
 
 ### Jeton GitHub (lecture seule)
 
