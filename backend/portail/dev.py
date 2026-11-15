@@ -383,20 +383,20 @@ class Orchestrateur:
                 await self._derouler(pipeline_id)
             return
         except _Blocage as e:
-            raison = e.raison
-        except TimeoutError:
-            raison = "durée maximale dépassée"
+            raison, cause = e.raison, type(e).__name__
+        except TimeoutError as e:
+            raison, cause = "durée maximale dépassée", type(e).__name__
             if not delai.expired():  # un délai interne, pas celui de la tâche
                 journal.erreur(logger, "pipeline dev %s : erreur inattendue", pipeline_id)
                 raison = "erreur inattendue : TimeoutError"
         except Refus as e:  # config stockée qui ne passe plus la validation
-            raison = e.message
+            raison, cause = e.message, type(e).__name__
         except (ErreurLanceur, ErreurGitHub, ErreurDepot, ErreurLLM, ErreurOutils) as e:
-            raison = str(e)
+            raison, cause = str(e), type(e).__name__
         except Exception as e:  # dernier recours : une tâche ne reste jamais verrouillée en cours  # noqa: BLE001
             journal.erreur(logger, "pipeline dev %s : erreur inattendue", pipeline_id)
-            raison = f"erreur inattendue : {type(e).__name__}"
-        await self.bloquer(pipeline_id, raison)
+            raison, cause = f"erreur inattendue : {type(e).__name__}", type(e).__name__
+        await self.bloquer(pipeline_id, raison, cause)
 
     async def _derouler(self, pipeline_id: int) -> None:
         ctx = await self._charger(pipeline_id)
@@ -1137,8 +1137,9 @@ class Orchestrateur:
             journal.erreur(logger, "pipeline dev : %s impossible", quoi)
             return None
 
-    async def bloquer(self, pipeline_id: int, raison: str) -> None:
-        logger.warning("pipeline dev %s bloqué", pipeline_id)  # la raison reste en base
+    async def bloquer(self, pipeline_id: int, raison: str, cause: str = "") -> None:
+        # la raison reste en base ; au journal, seulement la classe de l'exception (cause)
+        logger.warning("pipeline dev %s bloqué : %s", pipeline_id, cause or "-")
         ex = projet = None
         try:
             async with self._sessions() as s:

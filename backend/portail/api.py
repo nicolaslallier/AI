@@ -444,14 +444,6 @@ def create_app(
     async def _refus(_: Request, refus: Refus):
         return JSONResponse(status_code=refus.code, content={"detail": refus.message})
 
-    @app.exception_handler(Exception)
-    async def _erreur_interne(request: Request, _: Exception):
-        route = request.scope.get("route")  # le modèle (`/api/taches/{tache_id}`), pas l'URL
-        journal.erreur(
-            logger, "erreur interne sur %s %s", request.method, getattr(route, "path", "?")
-        )
-        return JSONResponse(status_code=500, content={"detail": "erreur interne"})
-
     @app.middleware("http")
     async def _utilisateur(request: Request, call_next):
         chemin = request.url.path
@@ -471,7 +463,16 @@ def create_app(
                 not site and origine and urlsplit(origine).netloc != request.headers.get("Host")
             ):
                 return JSONResponse(status_code=403, content={"detail": "requête d'un autre site"})
-        return await call_next(request)
+        try:
+            return await call_next(request)
+        except Exception:  # noqa: BLE001
+            # Pas de gestionnaire `exception_handler(Exception)` : Starlette relève l'exception
+            # après lui et uvicorn la journaliserait avec son message (jeton, sortie de commande).
+            route = request.scope.get("route")  # le modèle (`/api/taches/{tache_id}`), pas l'URL
+            journal.erreur(
+                logger, "erreur interne sur %s %s", request.method, getattr(route, "path", "?")
+            )
+            return JSONResponse(status_code=500, content={"detail": "erreur interne"})
 
     @app.get("/api/sante")
     async def sante():
