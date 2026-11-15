@@ -113,6 +113,8 @@ export interface Etape {
   action: string | null
   sha: string | null
   produit: string | null
+  modele: string | null
+  modeles: string[]
   messages: Message[]
   document: Document | null
   jauge: Jauge | null
@@ -232,8 +234,8 @@ export const annulerPipeline = (id: number) =>
   appel<PipelineDetail>('POST', `/pipelines/${id}/annuler`)
 export const lirePipeline = (id: number) => appel<PipelineDetail>('GET', `/pipelines/${id}`)
 
-export const envoyerMessage = (etapeId: number, contenu: string) =>
-  appel<object>('POST', `/etapes/${etapeId}/messages`, { contenu })
+export const envoyerMessage = (etapeId: number, contenu: string, modele?: string) =>
+  appel<object>('POST', `/etapes/${etapeId}/messages`, { contenu, modele })
 export const rediger = (etapeId: number) => appel<object>('POST', `/etapes/${etapeId}/rediger`)
 export const reessayer = (etapeId: number) => appel<object>('POST', `/etapes/${etapeId}/reessayer`)
 export const enregistrerDocument = (etapeId: number, contenu: string) =>
