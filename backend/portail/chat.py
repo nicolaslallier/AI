@@ -424,7 +424,10 @@ class ServiceChat:
                 self.lancer(suivante.id)
             d.publier(etape_id, {"type": "fin"})
             if a_relire and self._avis:
-                await self._avis.lancer(a_relire)
+                try:
+                    await self._avis.lancer(a_relire)
+                except Exception:
+                    logger.exception("avis non lancés pour le document %s", a_relire)
         except Exception as exc:  # noqa: BLE001 - toute erreur doit finir en étape échouée
             try:
                 async with self._sessions() as s:
@@ -496,7 +499,10 @@ class ServiceChat:
             suivante = await terminer_etape(s, self._catalogue, etape)
             await s.commit()
         if self._avis:
-            await self._avis.abandonner(doc.id)
+            try:
+                await self._avis.abandonner(doc.id)
+            except Exception:
+                logger.exception("avis non abandonnés pour le document %s", doc.id)
         await self._depots.liberer(etape_id)
         if suivante:
             self.lancer(suivante.id)

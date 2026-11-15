@@ -3,12 +3,12 @@ import asyncio
 import pytest_asyncio
 from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from portail.agents import Catalogue
 from portail.api import create_app
-from portail.db import Avis
-from tests.conftest import OUTILS, _agent
+from portail.db import Avis, Document
+from tests.conftest import OUTILS, FauxLLM, _agent
 
 CATALOGUE_AVIS = Catalogue(
     agents={
@@ -25,6 +25,20 @@ CATALOGUE_AVIS = Catalogue(
     pipelines={"spec": ["spec"], "planification": ["plan"]},
     avis={"plan": ["architecte", "challenger"]},
 )  # fmt: skip
+
+
+class LLMAvis(FauxLLM):
+    """Sans réponse préparée, l'avis dit quel modèle l'a donné."""
+
+    async def completer(self, modele, messages, temperature, outils=None, response_format=None):
+        if not self.reponses:
+            self.reponses.append({"content": f"avis {modele}"})
+        return await super().completer(modele, messages, temperature, outils, response_format)
+
+
+@pytest_asyncio.fixture
+def faux_llm():
+    return LLMAvis()
 
 
 @pytest_asyncio.fixture
@@ -65,7 +79,7 @@ async def _plan(client, faux_llm, reponses=None, avis=True):
     await _attendre(client, sid)
     assert (await client.post(f"/api/etapes/{sid}/valider")).status_code == 200
     faux_llm.morceaux = ["# Plan"]
-    faux_llm.reponses = reponses if reponses is not None else [_reponse("avis"), _reponse("avis")]
+    faux_llm.reponses = reponses if reponses is not None else []
     p = (
         await client.post(
             "/api/pipelines", json={"projet_id": projet["id"], "type": "planification"}
@@ -91,7 +105,10 @@ async def test_redaction_declenche_les_avis_du_plan(client, faux_llm):
         ("architecte", "ouvert", 1),
         ("challenger", "ouvert", 1),
     ]
-    assert {a["contenu"] for a in doc["avis"]} == {"avis"}
+    assert {a["agent"]: a["contenu"] for a in doc["avis"]} == {
+        "architecte": "avis m",
+        "challenger": "avis m2",
+    }
     # le brouillon et la spec courante sont lus par l'agent d'avis
     lu = "\n".join(m["content"] for m in _avis_appels(faux_llm)[0]["messages"])
     assert "# Plan" in lu and "# Spec" in lu
@@ -118,13 +135,13 @@ async def test_avis_marque_ancien_apres_correction(client, faux_llm):
 async def test_avis_ouverts_donnes_a_la_redaction_suivante(client, faux_llm):
     pid, eid = await _plan(client, faux_llm)
     faux_llm.morceaux = ["# Plan 2"]
-    faux_llm.reponses = [_reponse("n1"), _reponse("n2")]
     assert (await client.post(f"/api/etapes/{eid}/rediger")).status_code == 202
     await _attendre(client, eid)
     redaction = next(a for a in reversed(faux_llm.appels) if "outils" not in a)
     annexe = next(m["content"] for m in redaction["messages"] if "Avis ouverts" in m["content"])
     assert (
-        annexe == "Avis ouverts à prendre en compte :\n\n- architecte : avis\n- challenger : avis"
+        annexe
+        == "Avis ouverts à prendre en compte :\n\n- architecte : avis m\n- challenger : avis m2"
     )
     doc = await _document(client, pid)
     assert doc["version"] == 2
@@ -163,7 +180,7 @@ async def test_demande_manuelle(client, faux_llm):
     assert (await client.post(f"/api/documents/{did}/avis")).status_code == 409
 
 
-async def test_tri_d_un_avis(client, faux_llm):
+async def test_tri_d_un_avis(client, faux_llm, sessions):
     pid, _ = await _plan(client, faux_llm)
     avis = (await _document(client, pid))["avis"][0]
     r = await client.patch(f"/api/avis/{avis['id']}", json={"etat": "ecarte"})
@@ -171,6 +188,18 @@ async def test_tri_d_un_avis(client, faux_llm):
     assert (
         await client.patch(f"/api/avis/{avis['id']}", json={"etat": "en_cours"})
     ).status_code == 422
+    # un avis non ouvert (en cours, abandonné) ne se trie pas
+    async with sessions() as s:
+        await s.execute(update(Avis).where(Avis.id == avis["id"]).values(etat="en_cours"))
+        await s.commit()
+    r = await client.patch(f"/api/avis/{avis['id']}", json={"etat": "ouvert"})
+    assert r.status_code == 409
+    async with sessions() as s:
+        await s.execute(update(Avis).where(Avis.id == avis["id"]).values(etat="abandonne"))
+        await s.commit()
+    assert (
+        await client.patch(f"/api/avis/{avis['id']}", json={"etat": "ouvert"})
+    ).status_code == 409
     assert (await client.patch("/api/avis/999999", json={"etat": "ecarte"})).status_code == 404
 
 
@@ -195,3 +224,39 @@ async def test_redemarrage_abandonne_les_avis_en_cours(client, faux_llm, session
     bloque.set()
     await _attendre(client)  # le modèle répond ensuite : la ligne reste abandonnée
     assert (await _document(client, pid))["avis"] == []
+
+
+async def test_lancer_sur_un_document_valide_ne_fait_rien(client, faux_llm, sessions):
+    pid, eid = await _plan(client, faux_llm)
+    did = (await _document(client, pid))["id"]
+    await client.post(f"/api/etapes/{eid}/valider")
+    avant = len(_avis_appels(faux_llm))
+    async with sessions() as s:
+        n = len((await s.scalars(select(Avis.id))).all())
+    await _app(client).state.avis.lancer(did)
+    assert not _app(client).state.avis.taches and len(_avis_appels(faux_llm)) == avant
+    async with sessions() as s:
+        assert len((await s.scalars(select(Avis.id))).all()) == n
+
+
+async def test_avis_qui_finit_apres_la_validation_n_est_pas_enregistre(client, faux_llm, sessions):
+    bloque = asyncio.Event()
+    pid, _ = await _plan(client, faux_llm, [bloque, bloque, _reponse("a"), _reponse("b")], False)
+    did = (await _document(client, pid))["id"]
+    async with sessions() as s:  # validation sans passer par `abandonner`
+        await s.execute(update(Document).where(Document.id == did).values(etat="validee"))
+        await s.commit()
+    bloque.set()
+    await _attendre(client)
+    async with sessions() as s:
+        assert set((await s.scalars(select(Avis.etat))).all()) == {"abandonne"}
+
+
+async def test_put_renvoie_les_avis(client, faux_llm):
+    _, eid = await _plan(client, faux_llm)
+    r = await client.put(f"/api/etapes/{eid}/document", json={"contenu": "# Plan corrigé"})
+    assert r.json()["version"] == 2
+    assert sorted((a["agent"], a["ancienne"]) for a in r.json()["avis"]) == [
+        ("architecte", True),
+        ("challenger", True),
+    ]

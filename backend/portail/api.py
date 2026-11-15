@@ -97,6 +97,19 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 
+async def _avis(session: AsyncSession, docs: list[Document]) -> dict[int, list[AvisOut]]:
+    """Avis visibles (hors abandonnés) de ces documents, par document."""
+    par_id = {d.id: d for d in docs}
+    sortie: dict[int, list[AvisOut]] = {}
+    for a in await session.scalars(
+        select(Avis).where(Avis.document_id.in_(par_id), Avis.etat != "abandonne").order_by(Avis.id)
+    ):
+        vue = AvisOut.model_validate(a, from_attributes=True)
+        vue.ancienne = a.version < par_id[a.document_id].version
+        sortie.setdefault(a.document_id, []).append(vue)
+    return sortie
+
+
 async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int) -> PipelineDetail:
     pipeline = await session.scalar(
         select(Pipeline)
@@ -110,14 +123,7 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
     if pipeline is None:
         raise Refus(404, "pipeline introuvable")
     projet = await session.get(Projet, pipeline.projet_id)
-    docs = {e.document.id: e.document for e in pipeline.etapes if e.document}
-    avis_par_doc: dict[int, list[AvisOut]] = {}
-    for a in await session.scalars(
-        select(Avis).where(Avis.document_id.in_(docs), Avis.etat != "abandonne").order_by(Avis.id)
-    ):
-        vue = AvisOut.model_validate(a, from_attributes=True)
-        vue.ancienne = a.version < docs[a.document_id].version
-        avis_par_doc.setdefault(a.document_id, []).append(vue)
+    avis_par_doc = await _avis(session, [e.document for e in pipeline.etapes if e.document])
     etapes = []
     for e in pipeline.etapes:
         agent = catalogue.agents.get(e.agent)
@@ -664,8 +670,11 @@ def create_app(
         contenu: str
 
     @app.put("/api/etapes/{etape_id}/document", response_model=DocumentOut)
-    async def corriger_document(etape_id: int, corps: DocumentIn, request: Request):
-        return await request.app.state.chat.corriger(etape_id, corps.contenu)
+    async def corriger_document(etape_id: int, corps: DocumentIn, request: Request, s: Session):
+        doc = await request.app.state.chat.corriger(etape_id, corps.contenu)
+        sortie = DocumentOut.model_validate(doc, from_attributes=True)
+        sortie.avis = (await _avis(s, [doc])).get(doc.id, [])
+        return sortie
 
     @app.post("/api/documents/{document_id}/avis", status_code=202)
     async def relancer_avis(document_id: int, request: Request, s: Session):
@@ -684,6 +693,8 @@ def create_app(
         avis = await s.get(Avis, avis_id)
         if avis is None:
             raise Refus(404, "avis introuvable")
+        if avis.etat not in ("ouvert", "pris_en_compte", "ecarte"):
+            raise Refus(409, "avis non tranchable : encore en cours ou abandonné")
         avis.etat = corps.etat
         doc = await s.get(Document, avis.document_id)
         await s.commit()

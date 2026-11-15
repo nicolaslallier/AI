@@ -38,8 +38,11 @@ class ServiceAvis:
 
     async def lancer(self, document_id: int) -> None:
         async with self._sessions() as s:
-            doc = await s.get(Document, document_id)
-            if doc is None:
+            # le verrou le sérialise avec la validation : un document validé n'a plus d'avis
+            doc = await s.scalar(
+                select(Document).where(Document.id == document_id).with_for_update()
+            )
+            if doc is None or doc.etat != "brouillon":
                 return
             noms = self._catalogue.avis.get(doc.type, [])
             for nom in noms:  # une relance remplace l'avis encore en cours du même agent
@@ -54,18 +57,19 @@ class ServiceAvis:
             )
             lignes = [Avis(document_id=document_id, version=doc.version, agent=n) for n in noms]
             s.add_all(lignes)
-            await s.commit()
-            contenu, version = doc.contenu, doc.version
-        for ligne in lignes:
-            tache = asyncio.create_task(self._tache(ligne.id, document_id, contenu, version))
-            cle = (document_id, ligne.agent)
-            self.taches[cle] = tache  # référence forte
+            await s.commit()  # lignes visibles avant que les tâches ne les lisent
+            for ligne in lignes:  # aucun await entre le commit et la création des tâches
+                tache = asyncio.create_task(
+                    self._tache(ligne.id, document_id, doc.contenu, doc.version)
+                )
+                cle = (document_id, ligne.agent)
+                self.taches[cle] = tache  # référence forte
 
-            def _fini(t: asyncio.Task, cle=cle) -> None:
-                if self.taches.get(cle) is t:
-                    del self.taches[cle]
+                def _fini(t: asyncio.Task, cle=cle) -> None:
+                    if self.taches.get(cle) is t:
+                        del self.taches[cle]
 
-            tache.add_done_callback(_fini)
+                tache.add_done_callback(_fini)
 
     async def abandonner(self, document_id: int) -> None:
         taches = [t for (d, _), t in self.taches.items() if d == document_id]
@@ -119,6 +123,8 @@ class ServiceAvis:
         async with self._sessions() as s:
             avis = await s.get(Avis, avis_id)
             doc = await s.get(Document, document_id)
+            if avis is None or doc is None:  # supprimés pendant l'attente
+                return ""
             etape = await s.get(Etape, doc.etape_id)
             projet = await s.get(Projet, (await s.get(Pipeline, etape.pipeline_id)).projet_id)
             annexes = [f"Brouillon à relire (version {version}) :\n\n{contenu}"]
