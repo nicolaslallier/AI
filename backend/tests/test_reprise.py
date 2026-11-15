@@ -575,6 +575,30 @@ async def test_reprise_passe_par_tous_les_controles(monde_d):
     assert "Mets à jour la documentation" in doc and "commentaires de Nicolas sur la doc" not in doc
 
 
+async def test_reprise_regles_du_challenger_lues_a_la_base(monde_d):
+    pousser_sur_main(monde_d, "CLAUDE.md", "Règle de base.\n")
+    amont = monde_d.origine.parent / "amont"
+    git(amont, "fetch", "origin")
+    git(amont, "checkout", "-B", "pr", f"origin/{BRANCHE}")
+    git(amont, "merge", "--no-edit", "origin/main")  # la fusion de la reprise sera « à jour »
+    (amont / "CLAUDE.md").write_text("Règle de l'auteur.\n")
+    git(amont, "commit", "-am", "règles assouplies")
+    git(amont, "push", "origin", f"pr:{BRANCHE}")
+    monde_d.llm.reponses = [
+        tri((1, "code", "corrige a")),
+        modifier("src/a.py", "a = 2\n"), texte("fait"),
+        *CONTROLES_OK,
+    ]  # fmt: skip
+    pid = await reprendre(monde_d, [commentaire("revue", 10)])
+    _ex, _tache, pipeline = await monde_d.etat(pid)
+    assert pipeline.etat == "terminee"
+    annexes = "\n".join(
+        m["content"] or "" for m in appels_de(monde_d, "challenger")[-1]["messages"]
+    )
+    assert "Règles du dépôt (CLAUDE.md) :\n\nRègle de base." in annexes
+    assert "Règle de l'auteur." not in annexes
+
+
 async def test_reprise_commentaire_doc_passe_par_l_agent_doc(monde_d):
     monde_d.llm.reponses = [
         tri((1, "doc", "documente l'équipe")),
