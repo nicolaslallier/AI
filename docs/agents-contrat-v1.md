@@ -19,7 +19,7 @@ Un message (`MessageLLM`) a pour champs `role` (`system`, `user`, `assistant`, `
 
 ## `GET /sante` (agent)
 
-Sans authentification. Réponse `Sante` : le contrat parlé, le nom de l'agent, la version de l'image.
+Sans authentification. Réponse `Sante` : le contrat parlé (16 caractères au plus, `[A-Za-z0-9_.-]`), le nom de l'agent (64 au plus, `[A-Za-z0-9_-]`, égal au nom du catalogue : sinon le portail n'envoie ni secret ni mission), la version de l'image (64 au plus, `[A-Za-z0-9_.:@+-]`). Une réponse hors bornes vaut « l'agent ne répond pas ».
 
 ## `POST /interne/modele` et `POST /interne/outils` (agent vers portail)
 
@@ -37,11 +37,11 @@ Permise seulement avec `outils: false`. Les lignes sont distinctes de celles de 
 
 ## Limites tenues par le portail
 
-Le nombre de tours de la mission, le nombre d'appels d'outils par tour, le contexte maximal et le nombre d'appels au modèle sont comptés par le portail, pas par l'agent. Au-delà, le portail répond par le code ci-dessus (413, 429, 409) ; une limite atteinte est rendue à l'appelant avec `limite_atteinte: true`, quoi que dise l'agent : le champ `limite_atteinte` de la ligne `fin` n'est jamais lu. La réponse d'un agent est bornée en taille de ligne, en nombre de lignes et en total d'octets ; au-delà, la mission est interrompue.
+Le nombre de tours de la mission, le nombre d'appels d'outils par tour, le contexte maximal et le nombre d'appels au modèle sont comptés par le portail, pas par l'agent. Au-delà, le portail répond par le code ci-dessus (413, 429, 409) ; une limite atteinte est rendue à l'appelant avec `limite_atteinte: true`, quoi que dise l'agent : le champ `limite_atteinte` de la ligne `fin` n'est jamais lu. La réponse d'un agent est bornée en taille de ligne, en nombre de lignes et en total d'octets ; au-delà, la mission est interrompue. Le `texte` d'une ligne `texte` ou `fin` ne dépasse pas 500 000 caractères, et le total des caractères de `texte` relayés par mission non plus ; au-delà, la mission est interrompue. Aucun texte venu de l'agent (ligne `erreur`, `contrat`) n'entre dans une erreur du portail : les messages sont fixes.
 
 ## Validité du jeton
 
-Un jeton vaut pour une mission et un agent, pendant la durée de la mission seulement. Il meurt à la fin de la mission (fermeture, annulation, délai dépassé) ; une demande reçue après l'échéance est refusée (409) ; les appels en vol sont alors annulés. Il n'apparaît dans aucun journal ni aucune métrique.
+Un jeton vaut pour une mission et un agent, pendant la durée de la mission seulement. Il meurt à la fin de la mission (fermeture, annulation, délai dépassé) ; après l'échéance ou la fermeture, une NOUVELLE demande reçoit 401 (jeton mort) ; seul un appel déjà authentifié, en cours ou en vol, reçoit 409 ; les appels en vol sont annulés. Il n'apparaît dans aucun journal ni aucune métrique.
 
 ## Compatibilité
 

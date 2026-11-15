@@ -301,15 +301,18 @@ async def test_echeance_sans_fermer(interne, espace):
 # --- ce que le portail envoie à l'agent --------------------------------------------------------
 
 
+SECRETS = {
+    "litellm_cle": "SECRET-LITELLM-01", "github_jeton": "SECRET-GITHUB-02",
+    "lanceur_secret": "SECRET-LANCEUR-03", "github_app_cle": "SECRET-APPCLE-04",
+    "ntfy_jeton": "SECRET-NTFY-05",
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("monde_conteneur", [SECRETS], indirect=True)  # posés avant la construction
 async def test_aucun_secret_dans_la_mission(monde_conteneur):  # noqa: F811
     monde, faux = monde_conteneur
-    secrets = {
-        "litellm_cle": "SECRET-LITELLM-01", "github_jeton": "SECRET-GITHUB-02",
-        "lanceur_secret": "SECRET-LANCEUR-03", "github_app_cle": "SECRET-APPCLE-04",
-        "ntfy_jeton": "SECRET-NTFY-05",
-    }  # fmt: skip
-    for nom, valeur in secrets.items():
-        setattr(monde.reglages, nom, valeur)
+    secrets = SECRETS
+    assert all(getattr(monde.reglages, nom) == v for nom, v in secrets.items())
     monde.lanceur.codes = {CIBLES: [1]}
     monde.llm.reponses = [*TESTS_OK, *CODE_OK, appel("lire", chemin="src/x.py"), texte("{}")]
     await monde.lancer()

@@ -101,7 +101,7 @@ CONTROLES_OK = [verdict("ok"), verdict("ok"), verdict("ok"), texte("rien")]
 
 
 class Monde:
-    def __init__(self, tmp_path, sessions, catalogue=CATALOGUE, missions=None):
+    def __init__(self, tmp_path, sessions, catalogue=CATALOGUE, missions=None, **reglages):
         nu = tmp_path / "origine.git"
         git(tmp_path, "init", "--bare", "-b", "main", str(nu))
         amont = tmp_path / "amont"
@@ -117,7 +117,10 @@ class Monde:
         self.origine = nu
         self.sessions = sessions
         self.reglages = Reglages(
-            database_url=URL, espaces_dir=tmp_path / "espaces", url_publique="https://portail.x"
+            database_url=URL,
+            espaces_dir=tmp_path / "espaces",
+            url_publique="https://portail.x",
+            **reglages,
         )
         self.llm = FauxLLM()
         self.lanceur = FauxLanceur(tmp_path / "espaces")
@@ -182,9 +185,11 @@ CATALOGUE_CONTENEUR = CATALOGUE.model_copy(
 
 
 @pytest.fixture
-async def monde_conteneur(tmp_path, sessions):
+async def monde_conteneur(request, tmp_path, sessions):
     faux = FauxAgent("revue")
-    m = Monde(tmp_path, sessions, CATALOGUE_CONTENEUR, faux.registre)
+    m = Monde(
+        tmp_path, sessions, CATALOGUE_CONTENEUR, faux.registre, **getattr(request, "param", {})
+    )
     await m.creer()
     yield m, faux
     await faux.client.aclose()

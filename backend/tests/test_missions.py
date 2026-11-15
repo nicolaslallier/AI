@@ -445,7 +445,7 @@ async def test_agent_injoignable(faux_agent, faux_llm):
 
 async def test_contrat_incompatible(faux_agent, faux_llm):
     faux_agent.contrat = "v2"
-    with pytest.raises(ErreurMission, match="contrat v2 incompatible"):
+    with pytest.raises(ErreurMission, match="« revue » : contrat incompatible"):
         await _tourner(faux_agent, faux_llm)
     assert faux_agent.missions == [] and faux_agent.registre._en_cours == []
 
@@ -457,7 +457,10 @@ def _fin(**kw):
 @pytest.mark.parametrize(
     ("lignes", "attendu"),
     [
-        ([{"type": "erreur", "erreur": "boum " + "x" * 400}], "agent « revue » : boum x"),
+        (
+            [{"type": "erreur", "erreur": "boum " + "x" * 400}],
+            "agent « revue » : mission en erreur",
+        ),
         ([], "mission interrompue"),
         ([{"type": "texte", "texte": "a"}], "mission interrompue"),
         (["pas du json\n"], "mission interrompue"),
@@ -701,3 +704,75 @@ async def test_completer_refuse_tout_outil(faux_agent, faux_llm):
     faux_agent.jouer = jouer
     texte = await completer(faux_llm, faux_agent.registre, _agent(), _messages(), {"type": "x"})
     assert texte == "409"  # aucun appel au modèle n'a offert d'outil à cette mission
+
+
+MARQUEUR = "ZZ-secret-7731"
+
+
+async def test_flot_de_texte_interrompt_la_mission(faux_agent, faux_llm, monkeypatch):
+    monkeypatch.setattr(mod_missions, "CONTENU_MAX", 100)
+
+    async def jouer(demande, portail):
+        for _ in range(10):
+            yield {"type": "texte", "texte": "x" * 40}
+        yield _fin()
+
+    faux_agent.jouer = jouer
+    recu = []
+
+    async def sur_texte(t):
+        recu.append(t)
+
+    with pytest.raises(ErreurMission, match="mission interrompue"):
+        await _tourner(faux_agent, faux_llm, sur_texte=sur_texte)
+    assert sum(map(len, recu)) <= 100
+    _morte(faux_agent)
+
+
+@pytest.mark.parametrize(
+    "ligne", [{"type": "texte", "texte": "x" * 500_001}, _fin(texte="x" * 500_001)]
+)
+async def test_ligne_de_texte_trop_longue_refusee(faux_agent, faux_llm, ligne):
+    async def jouer(demande, portail):
+        yield ligne
+
+    faux_agent.jouer = jouer
+    with pytest.raises(ErreurMission, match="mission interrompue"):
+        await _tourner(faux_agent, faux_llm)
+    _morte(faux_agent)
+
+
+async def test_aucun_texte_de_l_agent_dans_l_erreur(faux_agent, faux_llm):
+    async def jouer(demande, portail):
+        yield {"type": "erreur", "erreur": f"@{MARQUEUR} https://x.test"}
+
+    faux_agent.jouer = jouer
+    with pytest.raises(ErreurMission) as e:
+        await _tourner(faux_agent, faux_llm)
+    assert str(e.value) == "agent « revue » : mission en erreur"
+    faux_agent.contrat = MARQUEUR
+    with pytest.raises(ErreurMission) as e:
+        await _tourner(faux_agent, faux_llm)
+    assert str(e.value) == "agent « revue » : contrat incompatible"
+
+
+@pytest.mark.parametrize(
+    "champ, valeur",
+    [
+        ("version", "v" * 65),
+        ("version", "a b"),
+        ("version", ""),
+        ("contrat", "v" * 17),
+        ("agent", "a b"),
+    ],
+)
+async def test_sante_hors_bornes_agent_injoignable(faux_agent, faux_llm, champ, valeur):
+    setattr(faux_agent, champ, valeur)
+    assert await faux_agent.registre.sante(_agent()) is None
+
+
+async def test_sante_d_un_autre_agent_refusee_avant_le_secret(faux_agent, faux_llm):
+    faux_agent.agent = "tri"
+    with pytest.raises(ErreurMission, match="« revue » : agent inattendu"):
+        await _tourner(faux_agent, faux_llm)
+    assert faux_agent.missions == [] and faux_agent.registre._en_cours == []

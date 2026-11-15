@@ -95,12 +95,12 @@ class DemandeMission(BaseModel):
 
 class LigneTexte(BaseModel):
     type: Literal["texte"]
-    texte: str
+    texte: str = Field(max_length=CONTENU_MAX)
 
 
 class LigneFin(BaseModel):
     type: Literal["fin"]
-    texte: str
+    texte: str = Field(max_length=CONTENU_MAX)
     messages: list[MessageLLM] = Field(max_length=MESSAGES_MAX)
     limite_atteinte: bool
 
@@ -170,9 +170,11 @@ class ReponseOutil(BaseModel):
 
 
 class Sante(BaseModel):
-    contrat: str
-    agent: str
-    version: str
+    """Réponse d'un conteneur non fiable : bornée, d'un jeu de caractères sûr, sinon écartée."""
+
+    contrat: str = Field(max_length=16, pattern=r"^[\w.-]+$")
+    agent: str = Field(max_length=64, pattern=r"^[\w-]+$")
+    version: str = Field(max_length=64, pattern=r"^[\w.:@+-]+$")
 
 
 class ErreurMission(ErreurOutils):
@@ -198,6 +200,7 @@ class Mission:
     fermee: bool = False
     erreur: Exception | None = None
     tache: asyncio.Task | None = None  # lecture du flux de l'agent
+    # ponytail: reste posé si une réponse en flux ne démarre jamais ; borné par l'échéance de la mission.
     occupee: bool = False  # une demande /interne/ à la fois : la suivante est refusée (429)
     outils_ouverts: bool = False  # le dernier appel au modèle a offert les outils
     en_vol: set[asyncio.Task] = field(default_factory=set)
@@ -314,7 +317,9 @@ class Missions:
         if s is None:
             raise ErreurMission(f"agent « {agent.nom} » injoignable")
         if s.contrat != CONTRAT:
-            raise ErreurMission(f"agent « {agent.nom} » : contrat {s.contrat} incompatible")
+            raise ErreurMission(f"agent « {agent.nom} » : contrat incompatible")
+        if s.agent != agent.nom:  # avant d'envoyer le secret : un `service:` mal configuré
+            raise ErreurMission(f"agent « {agent.nom} » : agent inattendu")
         secret = self.secrets.get(agent.nom)
         if secret is None:
             raise ErreurMission(f"agent « {agent.nom} » : secret absent")
@@ -375,6 +380,7 @@ class Missions:
         self, agent: Agent, secret: str, demande: DemandeMission, sur_texte
     ) -> LigneFin:
         interrompue = ErreurMission(f"agent « {agent.nom} » : mission interrompue")
+        relaye = 0  # caractères de `texte` relayés : un flot de lignes courtes coûte aussi
         lignes = TypeAdapter(LigneMission)
         try:
             async with (
@@ -403,12 +409,16 @@ class Missions:
                     except ValidationError:  # le détail reprendrait la ligne de l'agent
                         raise interrompue from None
                     if isinstance(ligne, LigneTexte):
+                        relaye += len(ligne.texte)
+                        if relaye > CONTENU_MAX:
+                            raise interrompue
                         if sur_texte is not None:
                             await sur_texte(ligne.texte)
                     elif isinstance(ligne, LigneFin):
                         return ligne
                     else:
-                        raise ErreurMission(f"agent « {agent.nom} » : {ligne.erreur[:300]}")
+                        # texte fixe : celui de l'agent finirait en base, en commentaire de PR
+                        raise ErreurMission(f"agent « {agent.nom} » : mission en erreur")
         except (httpx.HTTPError, ValueError):  # réponse hors bornes, ou illisible
             raise interrompue from None
         raise interrompue  # flux fini sans ligne `fin`
