@@ -98,3 +98,73 @@ def valider(modele: Modele, prefixe: str, connus: set[str]) -> None:
         for ident in v.elements:
             if ident not in citables:
                 raise BlocInvalide(f"vue « {v.nom} » : identifiant inconnu « {ident} »")
+
+
+def valider_synthese(modele: Modele, connus: set[str]) -> None:
+    """Règles de l'étape 8 : ajouts préfixés `ent-`, fusions entre éléments `connus`."""
+    valider(modele.model_copy(update={"fusions": []}), "ent-", connus)
+    gardes: set[str] = set()
+    retires: set[str] = set()
+    for f in modele.fusions:
+        for ident in (f.garder, f.retirer):
+            if ident not in connus:
+                raise BlocInvalide(f"fusion : identifiant inconnu « {ident} »")
+        if f.garder == f.retirer:
+            raise BlocInvalide(f"fusion : « {f.garder} » ne peut pas se remplacer lui-même")
+        if f.retirer in retires:
+            raise BlocInvalide(f"fusion : « {f.retirer} » retiré deux fois")
+        retires.add(f.retirer)
+        gardes.add(f.garder)
+    if conflit := sorted(gardes & retires):
+        raise BlocInvalide(f"fusion : « {conflit[0]} » est gardé et retiré")
+
+
+def fusionner(blocs: list[Modele], synthese: Modele | None) -> Modele:
+    """Union des blocs, ajouts de la synthèse, puis fusions appliquées."""
+    tous = [*blocs, *([synthese] if synthese else [])]
+    remplace = {f.retirer: f.garder for m in tous for f in m.fusions}
+
+    def nouveau(ident: str) -> str:
+        return remplace.get(ident, ident)
+
+    elements = [e for m in tous for e in m.elements if e.id not in remplace]
+    relations: list[Relation] = []
+    vues: list[Vue] = []
+    vus: set[tuple[str, str, str]] = set()
+    for m in tous:
+        for r in m.relations:
+            s, c = nouveau(r.source), nouveau(r.cible)
+            if s != c and (r.type, s, c) not in vus:
+                vus.add((r.type, s, c))
+                relations.append(r.model_copy(update={"source": s, "cible": c}))
+        for v in m.vues:
+            ids = list(dict.fromkeys(nouveau(i) for i in v.elements))
+            if ids:
+                vues.append(v.model_copy(update={"elements": ids}))
+    return Modele(elements=elements, relations=relations, vues=vues)
+
+
+def _ligne(*cellules: str) -> str:
+    return "| " + " | ".join(c.replace("|", "\\|") for c in cellules) + " |"
+
+
+def catalogues_markdown(modele: Modele, origine: dict[str, str]) -> str:
+    """Les éléments, relations et vues en trois tableaux markdown ; `origine` : préfixe → volet."""
+
+    def volet(ident: str) -> str:
+        return next((n for p, n in origine.items() if ident.startswith(p)), "")
+
+    lignes = [
+        _ligne("Identifiant", "Type", "Nom", "Volet d'origine"),
+        _ligne("---", "---", "---", "---"),
+        *(_ligne(e.id, e.type, e.nom, volet(e.id)) for e in modele.elements),
+        "",
+        _ligne("Source", "Relation", "Cible", "Note"),
+        _ligne("---", "---", "---", "---"),
+        *(_ligne(r.source, r.type, r.cible, r.nom) for r in modele.relations),
+        "",
+        _ligne("Vue", "Point de vue", "Éléments"),
+        _ligne("---", "---", "---"),
+        *(_ligne(v.nom, v.point_de_vue, str(len(v.elements))) for v in modele.vues),
+    ]
+    return "\n".join(lignes) + "\n"

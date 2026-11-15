@@ -2,7 +2,15 @@ import json
 
 import pytest
 
-from portail.archimate import BlocInvalide, lire_bloc, valider
+from portail.archimate import (
+    BlocInvalide,
+    Modele,
+    catalogues_markdown,
+    fusionner,
+    lire_bloc,
+    valider,
+    valider_synthese,
+)
 
 MODELE = {
     "elements": [{"id": "app-portail", "type": "ApplicationComponent", "nom": "Portail"}],
@@ -118,3 +126,124 @@ def test_valider_refuse(m, prefixe, connus, message):
     with pytest.raises(BlocInvalide) as exc:
         valider(m, prefixe, connus)
     assert message in str(exc.value)
+
+
+def el(ident, nom=None):
+    return {"id": ident, "type": "ApplicationComponent", "nom": nom or ident}
+
+
+def bloc(elements=(), relations=(), vues=(), fusions=()):
+    return Modele.model_validate(
+        {
+            "elements": [el(i) for i in elements],
+            "relations": [{"type": "Serving", "source": s, "cible": c} for s, c in relations],
+            "vues": [{"nom": n, "elements": list(ids)} for n, ids in vues],
+            "fusions": [{"garder": g, "retirer": r} for g, r in fusions],
+        }
+    )
+
+
+def test_fusionner_unit_les_blocs_dans_l_ordre():
+    a = bloc(["app-b", "app-a"], vues=[("A", ["app-a"])])
+    b = bloc(["tec-c"], vues=[("B", ["tec-c"])])
+    m = fusionner([a, b], bloc(["ent-d"], vues=[("S", ["ent-d"])]))
+    assert [e.id for e in m.elements] == ["app-b", "app-a", "tec-c", "ent-d"]
+    assert [v.nom for v in m.vues] == ["A", "B", "S"]
+    assert m.fusions == []
+
+
+def test_fusionner_sans_synthese():
+    m = fusionner([bloc(["app-a"], vues=[("A", ["app-a"])])], None)
+    assert [e.id for e in m.elements] == ["app-a"]
+
+
+def test_fusion_remplace_partout():
+    a = bloc(["app-x", "app-y"], vues=[("V", ["app-x", "app-y"])])
+    b = bloc(["tec-n"], relations=[("tec-n", "app-x")])
+    m = fusionner([a, b], bloc(fusions=[("app-y", "app-x")]))
+    assert [e.id for e in m.elements] == ["app-y", "tec-n"]
+    assert [(r.source, r.cible) for r in m.relations] == [("tec-n", "app-y")]
+    assert m.vues[0].elements == ["app-y"]
+    assert m.fusions == []
+
+
+def test_fusion_retire_relation_devenue_boucle_ou_doublon():
+    a = bloc(
+        ["app-x", "app-y", "tec-n"],
+        relations=[("app-x", "app-y"), ("tec-n", "app-x"), ("tec-n", "app-y")],
+        vues=[("V", ["tec-n"])],
+    )
+    m = fusionner([a], bloc(fusions=[("app-y", "app-x")]))
+    assert [(r.source, r.cible) for r in m.relations] == [("tec-n", "app-y")]
+
+
+def test_fusion_retire_une_vue_videe():
+    a = bloc(["app-x"], vues=[("Pleine", ["app-x"]), ("Vide", [])])
+    m = fusionner([a], None)
+    assert [v.nom for v in m.vues] == ["Pleine"]
+
+
+@pytest.mark.parametrize(
+    "fusions, message",
+    [
+        ([("app-y", "app-inconnu")], "fusion : identifiant inconnu « app-inconnu »"),
+        ([("app-y", "app-y")], "fusion : « app-y » ne peut pas se remplacer lui-même"),
+        ([("app-y", "app-x"), ("app-z", "app-y")], "fusion : « app-y » est gardé et retiré"),
+        ([("app-y", "app-x"), ("app-z", "app-x")], "fusion : « app-x » retiré deux fois"),
+    ],
+)
+def test_valider_synthese_refuse(fusions, message):
+    m = bloc(fusions=fusions, vues=[("S", ["app-y"])])
+    with pytest.raises(BlocInvalide) as exc:
+        valider_synthese(m, {"app-x", "app-y", "app-z"})
+    assert message in str(exc.value)
+
+
+def test_valider_synthese_refuse_un_ajout_mal_prefixe():
+    m = bloc(["app-nouveau"], vues=[("S", ["app-nouveau"])])
+    with pytest.raises(BlocInvalide) as exc:
+        valider_synthese(m, set())
+    assert "préfixe « ent- » attendu" in str(exc.value)
+
+
+def test_valider_synthese_refuse_sans_vue():
+    with pytest.raises(BlocInvalide) as exc:
+        valider_synthese(bloc(["ent-a"]), set())
+    assert "au moins une vue est attendue" in str(exc.value)
+
+
+def test_valider_synthese_refuse_une_relation_inconnue():
+    m = bloc(["ent-a"], relations=[("ent-a", "app-rien")], vues=[("S", ["ent-a"])])
+    with pytest.raises(BlocInvalide) as exc:
+        valider_synthese(m, set())
+    assert "relation : identifiant inconnu « app-rien »" in str(exc.value)
+
+
+def test_valider_synthese_accepte():
+    m = bloc(
+        ["ent-a"],
+        relations=[("ent-a", "app-x")],
+        vues=[("S", ["ent-a", "app-x"])],
+        fusions=[("app-y", "app-x")],
+    )
+    valider_synthese(m, {"app-x", "app-y"})
+
+
+def test_catalogues_markdown_nomme_le_volet_d_origine():
+    m = Modele.model_validate(
+        {
+            "elements": [
+                {"id": "app-portail", "type": "ApplicationComponent", "nom": "Portail"},
+                {"id": "zzz-a", "type": "Node", "nom": "A|B"},
+            ],
+            "relations": [
+                {"type": "Serving", "source": "app-portail", "cible": "zzz-a", "nom": "sert"}
+            ],
+            "vues": [{"nom": "Coop", "point_de_vue": "Cooperation", "elements": ["app-portail"]}],
+        }
+    )
+    md = catalogues_markdown(m, {"app-": "applicatif"})
+    assert "| app-portail | ApplicationComponent | Portail | applicatif |" in md
+    assert "| zzz-a | Node | A\\|B |  |" in md
+    assert "| app-portail | Serving | zzz-a | sert |" in md
+    assert "| Coop | Cooperation | 1 |" in md
