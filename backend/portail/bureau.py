@@ -1,6 +1,6 @@
 """Le bureau des agents : qui travaille, attend ou a échoué aujourd'hui. Aucun contenu, que des identifiants."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import case, func, select
@@ -19,10 +19,13 @@ from portail.db import (
     Pipeline,
 )
 from portail.etats import ANNULE, REPRISE_ABANDONNEE, Etat
-from portail.schemas import Bureau, Groupe, Poste, Travail
+from portail.moteur import Refus
+from portail.schemas import Bureau, Groupe, MissionOut, Poste, PosteDetail, Travail
 
 FUSEAU = ZoneInfo("America/Toronto")
 LIMITE = 500  # par requête : un bureau n'a que quelques travaux en cours
+FENETRE = 200  # lignes d'appel_llm lues par poste
+MISSIONS = 10
 ORDRE = {"au_travail": 0, "en_attente": 1, "en_erreur": 2}
 
 
@@ -190,3 +193,58 @@ async def lire_bureau(s: AsyncSession, cat: Catalogue, maintenant: datetime) -> 
         n, jetons = activite.get(a, (0, 0))
         postes[a] = Poste(nom=a, etat=etat, travaux=travaux, appels_jour=n, jetons_jour=jetons)
     return Bureau(groupes=[Groupe(nom=n, agents=g) for n, g in rangement(cat)], postes=postes)
+
+
+def _libelle_et_lien(a: AppelLLM) -> tuple[str | None, str | None]:
+    if a.tache_id:
+        return f"T{a.tache_id}", f"/pipelines/{a.pipeline_id}"
+    if a.conversation_id:
+        return f"conversation #{a.conversation_id}", f"/chat/{a.conversation_id}"
+    if a.pipeline_id:
+        return f"pipeline #{a.pipeline_id}", f"/pipelines/{a.pipeline_id}"
+    return None, None
+
+
+async def lire_poste(s: AsyncSession, cat: Catalogue, nom: str) -> PosteDetail:
+    agent = cat.agents.get(nom)
+    if agent is None:
+        raise Refus(404, "agent inconnu")  # sans écho du nom : il vient de l'URL
+    lignes = (
+        await s.scalars(
+            select(AppelLLM)
+            .where(AppelLLM.agent == nom, AppelLLM.mission.is_not(None))
+            .order_by(AppelLLM.id.desc())
+            .limit(FENETRE)
+        )
+    ).all()
+    groupes: dict[str, list[AppelLLM]] = {}  # du plus récent au plus ancien
+    for a in lignes:
+        groupes.setdefault(a.mission, []).append(a)
+    missions = []
+    for mission, g in list(groupes.items())[:MISSIONS]:
+        # la ligne est inscrite à la fin de l'appel : le début est `quand - duree_ms`
+        debut = min(a.quand - timedelta(milliseconds=a.duree_ms) for a in g)
+        libelle, lien = _libelle_et_lien(next((a for a in g if a.tache_id), g[0]))
+        missions.append(
+            MissionOut(
+                mission=mission,
+                debut=debut,
+                duree_ms=int((max(a.quand for a in g) - debut).total_seconds() * 1000),
+                appels=len(g),
+                jetons_entree=sum(a.jetons_entree or 0 for a in g),
+                jetons_sortie=sum(a.jetons_sortie or 0 for a in g),
+                issue=g[0].issue,  # le dernier appel : une erreur suivie d'un succès est un succès
+                libelle=libelle,
+                lien=lien,
+            )
+        )
+    return PosteDetail(
+        nom=nom,
+        description=agent.description,
+        modele=agent.modele,
+        modele_si_meme=agent.modele_si_meme,
+        outils=list(agent.outils),
+        tours_max=agent.tours_max,
+        contexte_max=agent.contexte_max,
+        missions=missions,
+    )

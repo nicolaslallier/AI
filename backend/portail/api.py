@@ -78,6 +78,7 @@ from portail.schemas import (
     PipelineDetail,
     PipelineIn,
     PipelineResume,
+    PosteDetail,
     ProjetDetail,
     ProjetIn,
     ProjetOut,
@@ -890,6 +891,10 @@ def create_app(
     @app.get("/api/bureau", response_model=Bureau)
     async def lire_le_bureau(request: Request, s: Session):
         return await bureau.lire_bureau(s, request.app.state.catalogue, datetime.now(UTC))
+
+    @app.get("/api/bureau/{agent}", response_model=PosteDetail)
+    async def lire_un_poste(agent: str, request: Request, s: Session):
+        return await bureau.lire_poste(s, request.app.state.catalogue, agent)
 
     @app.get("/api/evenements")
     async def evenements():

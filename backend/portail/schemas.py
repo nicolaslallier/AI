@@ -356,3 +356,28 @@ class Groupe(BaseModel):
 class Bureau(BaseModel):
     groupes: list[Groupe]
     postes: dict[str, Poste]
+
+
+class MissionOut(BaseModel):
+    mission: str
+    debut: datetime
+    duree_ms: int
+    appels: int
+    jetons_entree: int
+    jetons_sortie: int
+    issue: str  # ok | erreur | delai
+    libelle: str | None  # fait d'identifiants, comme `Travail.libelle`
+    lien: str | None
+
+
+class PosteDetail(BaseModel):
+    """Ce que le catalogue dit d'un poste, et ses dernières missions. Aucun prompt ni consigne."""
+
+    nom: str
+    description: str
+    modele: str
+    modele_si_meme: str | None
+    outils: list[str]
+    tours_max: int
+    contexte_max: int
+    missions: list[MissionOut]

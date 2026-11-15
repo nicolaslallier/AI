@@ -320,3 +320,74 @@ async def test_avis_tour_par_pipeline(client, sessions):
         s.add(Avis(document_id=d.id, version=1, agent="a", etat="en_cours"))
     await _appels(sessions, "a", "m", 2, pipeline_id=pid)
     assert (await _bureau(client))["postes"]["a"]["travaux"][0]["tour"] == 2
+
+
+# --- détail d'un poste -------------------------------------------------
+
+
+async def test_detail_modele_et_outils(client):
+    r = await client.get("/api/bureau/spec")
+    assert r.status_code == 200
+    d = r.json()
+    assert (d["nom"], d["modele"], d["outils"]) == ("spec", "m", ["lister", "lire", "chercher"])
+    assert d["contexte_max"] == 32768 and d["missions"] == []
+
+
+async def test_detail_sans_prompt(client, sessions):
+    await _appels(sessions, "spec", "m1")
+    r = await client.get("/api/bureau/spec")
+    assert "prompt_systeme" not in r.json()
+    assert not {"consigne_redaction", "consigne_avis"} & r.json().keys()
+    assert "Tu es spec." not in r.text and "Rédige la spec." not in r.text
+
+
+async def test_agent_inconnu_404(client):
+    r = await client.get(f"/api/bureau/{MARQUEUR}")
+    assert r.status_code == 404 and MARQUEUR not in r.text
+
+
+async def _ligne(sessions, mission, quand, duree_ms=1000, issue="ok", **kw):
+    async with sessions() as s, s.begin():
+        s.add(
+            AppelLLM(
+                agent="a", modele="m", mission=mission, quand=quand, duree_ms=duree_ms,
+                issue=issue, **kw,
+            )
+        )  # fmt: skip
+
+
+async def test_dernieres_missions(client, sessions):
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    sec = lambda n: t0 + timedelta(seconds=n)
+    await _ligne(sessions, "m1", sec(10), 4000, "erreur", tache_id=7, pipeline_id=3,
+                 jetons_entree=100, jetons_sortie=10)  # fmt: skip
+    await _ligne(sessions, "m1", sec(30), 2000, "ok", tache_id=7, pipeline_id=3,
+                 jetons_entree=None, jetons_sortie=None)  # fmt: skip
+    await _ligne(sessions, "m1", sec(40), 500, "ok", tache_id=7, pipeline_id=3,
+                 jetons_entree=50, jetons_sortie=5)  # fmt: skip
+    await _ligne(sessions, "m2", sec(100), conversation_id=9)
+    await _ligne(sessions, "m3", sec(200), issue="delai")
+    ms = (await client.get("/api/bureau/a")).json()["missions"]
+    assert [m["mission"] for m in ms] == ["m3", "m2", "m1"]
+    m1 = ms[2]
+    assert (m1["appels"], m1["jetons_entree"], m1["jetons_sortie"]) == (3, 150, 15)
+    assert m1["issue"] == "ok" and (m1["libelle"], m1["lien"]) == ("T7", "/pipelines/3")
+    debut = sec(10) - timedelta(milliseconds=4000)
+    assert datetime.fromisoformat(m1["debut"]) == debut
+    assert m1["duree_ms"] == int((sec(40) - debut).total_seconds() * 1000)
+    assert (ms[1]["libelle"], ms[1]["lien"]) == ("conversation #9", "/chat/9")
+    assert ms[0]["lien"] is None and ms[0]["libelle"] is None and ms[0]["issue"] == "delai"
+
+
+async def test_missions_limitees_a_dix(client, sessions):
+    for i in range(12):
+        await _appels(sessions, "a", f"m{i}")
+    ms = (await client.get("/api/bureau/a")).json()["missions"]
+    assert [m["mission"] for m in ms] == [f"m{i}" for i in range(11, 1, -1)]
+
+
+async def test_lignes_sans_mission_ignorees(client, sessions):
+    await _appels(sessions, "a", None, 3)
+    await _appels(sessions, "a", "m1")
+    ms = (await client.get("/api/bureau/a")).json()["missions"]
+    assert [m["mission"] for m in ms] == ["m1"]
