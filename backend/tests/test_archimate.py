@@ -408,7 +408,7 @@ def test_xml_retire_les_caracteres_interdits_en_xml_1_0():
             Element(
                 id="app-a",
                 type="ApplicationComponent",
-                nom="a\x0bb￾",
+                nom="a\x0bb\ufffe\ud800",
                 description="d\x01e￿f\tg\nh\ri",
             )
         ],
@@ -416,6 +416,7 @@ def test_xml_retire_les_caracteres_interdits_en_xml_1_0():
         vues=[Vue(nom="v\x1fw", elements=["app-a"])],
     )
     texte = xml_echange(m, "P\x0cQ")
+    texte.encode("utf-8")  # pas de substitut isolé
     racine = ET.fromstring(texte)
     SCHEMA.validate(io.StringIO(texte))
     assert racine.find("a:name", NS).text == "PQ"

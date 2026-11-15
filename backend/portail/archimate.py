@@ -184,8 +184,8 @@ def _noeud(parent: ET.Element, balise: str, type_: str, ident: str, **attrs: str
     )
 
 
-# Caractères interdits en XML 1.0 (tabulation, saut de ligne et retour chariot sont permis).
-_INTERDITS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+# Hors de la production Char de XML 1.0, substituts isolés compris (tab, LF et CR sont permis).
+_INTERDITS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
 
 
 def _texte(parent: ET.Element, balise: str, texte: str) -> None:
