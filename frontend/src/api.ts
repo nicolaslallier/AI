@@ -163,23 +163,25 @@ export class ErreurApi extends Error {
   }
 }
 
+async function erreurDe(r: Response): Promise<ErreurApi> {
+  let detail = r.statusText
+  try {
+    const d = (await r.json()).detail
+    if (typeof d === 'string') detail = d
+    else if (d !== undefined) detail = JSON.stringify(d)
+  } catch {
+    /* corps non JSON : on garde le statut */
+  }
+  return new ErreurApi(r.status, detail)
+}
+
 async function appel<T>(methode: string, chemin: string, corps?: unknown): Promise<T> {
   const r = await fetch('/api' + chemin, {
     method: methode,
     headers: corps === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: corps === undefined ? undefined : JSON.stringify(corps),
   })
-  if (!r.ok) {
-    let detail = r.statusText
-    try {
-      const d = (await r.json()).detail
-      if (typeof d === 'string') detail = d
-      else if (d !== undefined) detail = JSON.stringify(d)
-    } catch {
-      /* corps non JSON : on garde le statut */
-    }
-    throw new ErreurApi(r.status, detail)
-  }
+  if (!r.ok) throw await erreurDe(r)
   if (r.status === 204) return undefined as T
   return (await r.json()) as T
 }
@@ -336,3 +338,11 @@ export interface PosteDetail {
 export const lireBureau = () => appel<Bureau>('GET', '/bureau')
 export const lirePoste = (nom: string) =>
   appel<PosteDetail>('GET', `/bureau/${encodeURIComponent(nom)}`)
+
+export async function lireArchitecture(pipelineId: number): Promise<string> {
+  const r = await fetch(`/api/pipelines/${pipelineId}/architecture.md`)
+  if (!r.ok) throw await erreurDe(r)
+  return r.text()
+}
+export const urlDocumentArchitecture = (pipelineId: number) => `/api/pipelines/${pipelineId}/architecture.md`
+export const urlModeleArchimate = (pipelineId: number) => `/api/pipelines/${pipelineId}/architecture.xml`

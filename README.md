@@ -61,14 +61,41 @@ flowchart LR
     g2_challenger --> g2_securite
     g2_securite --> g2_doc
   end
-  subgraph g3["hors pipeline"]
-    g3_orchestrateur["orchestrateur"]
-    g3_architecte["architecte"]
-    g3_pm["pm"]
-    g3_tri["tri"]
+  subgraph g3["architecture"]
+    g3_archi_entreprise["archi-entreprise"]
+    g3_archi_affaires["archi-affaires"]
+    g3_archi_donnees["archi-donnees"]
+    g3_archi_applicatif["archi-applicatif"]
+    g3_archi_techno["archi-techno"]
+    g3_archi_securite["archi-securite"]
+    g3_archi_solution["archi-solution"]
+    g3_archi_entreprise_synthese["archi-entreprise-synthese"]
+    g3_archi_entreprise --> g3_archi_affaires
+    g3_archi_affaires --> g3_archi_donnees
+    g3_archi_donnees --> g3_archi_applicatif
+    g3_archi_applicatif --> g3_archi_techno
+    g3_archi_techno --> g3_archi_securite
+    g3_archi_securite --> g3_archi_solution
+    g3_archi_solution --> g3_archi_entreprise_synthese
+  end
+  subgraph g4["hors pipeline"]
+    g4_orchestrateur["orchestrateur"]
+    g4_architecte["architecte"]
+    g4_pm["pm"]
+    g4_tri["tri"]
   end
 ```
 <!-- schema-pipelines:fin -->
+
+## Bureau d'architectes (pipeline `architecture`)
+
+Pour un projet, le pipeline `architecture` produit un document d'architecture (TOGAF, modèle ArchiMate 3.2) à partir d'une vision. Huit étapes, dans l'ordre : `archi-entreprise` (discussion avec Nicolas, qui rédige la vision), puis les volets `archi-affaires`, `archi-donnees`, `archi-applicatif`, `archi-techno`, `archi-securite` et `archi-solution`, enfin `archi-entreprise-synthese` (sommaire, registres des décisions, dérogations et dette, modèle fusionné). Deux validations seulement : la vision, puis l'architecture ; les six volets s'enchaînent sans attendre. Deux téléchargements : le document d'architecture et le modèle ArchiMate (fichier d'échange importable dans Archi).
+
+- **Modèles** : ces huit agents seuls utilisent `cloud-anthropic`, `cloud-openai` et `cloud-gemini` (les trois noms déclarés dans LiteLLM, ajoutés à `modeles_permis`) ; tous les autres agents gardent leur modèle local.
+- **Clé LiteLLM** : réémettre `PORTAIL_LITELLM_CLE` limitée aux nouveaux `modeles_permis`, et vérifier que l'équipe de la clé a le droit d'appeler les modèles `cloud-*`. Le LiteLLM de Nicolas applique la barrière `cloud_pii` : permission par équipe et masquage des données personnelles avant qu'une requête quitte la maison ; les noms d'une vision peuvent donc arriver masqués au modèle.
+- **Sortie** : champ facultatif `sortie_max` d'un agent (entier > 0), envoyé au modèle comme `max_tokens` ; les huit agents `archi-*` le fixent à 16000, les autres n'en envoient pas. Un agent dont le modèle refuse la température (`cloud-openai`) ne déclare pas `temperature`.
+- **Secrets** : huit `PORTAIL_AGENT_SECRET_ARCHI_*` à créer dans OpenBao (`infra/portail`, 32 caractères au moins), voir « Étapes manuelles ».
+- **Confidentialité** : ces agents envoient le contenu des visions, des architectures et des fichiers du dépôt qu'ils lisent à Anthropic, à OpenAI et à Google.
 
 ## Agents en conteneur
 
@@ -132,6 +159,7 @@ Le dépôt est public : rien de secret n'y entre, tout passe par OpenBao.
 10. Dans Settings > Actions > General du dépôt, exiger l'approbation des workflows pour TOUS les contributeurs externes (« Require approval for all outside collaborators » ; le réglage par défaut ne couvre que les nouveaux contributeurs), et relire le diff de `.github/` avant d'approuver.
 11. Rendre le runner auto-hébergé `ai` éphémère (un job, puis il est recréé). Le dépôt est public : une PR de fork peut AJOUTER son propre workflow `on: pull_request` avec `runs-on: [self-hosted, ai]`, donc le contenu des workflows de `main` ne protège pas le runner ; seuls l'approbation de tout fork et l'éphémérité le font.
 12. **Avant la fusion du lot I** : ranger dans OpenBao, dans le secret `infra/portail`, une clé par agent `PORTAIL_AGENT_SECRET_<NOM>` : `SPEC`, `ORCHESTRATEUR`, `PLAN`, `TACHES`, `TESTS`, `CODE`, `REVUE`, `ARCHITECTE`, `CHALLENGER`, `SECURITE`, `DOC`, `PM`, `TRI` (13 clés, chacune tirée de `openssl rand -hex 32`). Sans elles, le déploiement s'arrête proprement sur « clé absente ».
+    **Bureau d'architectes** : huit clés de plus dans le même secret, `PORTAIL_AGENT_SECRET_ARCHI_ENTREPRISE`, `…_ARCHI_AFFAIRES`, `…_ARCHI_DONNEES`, `…_ARCHI_APPLICATIF`, `…_ARCHI_TECHNO`, `…_ARCHI_SECURITE`, `…_ARCHI_SOLUTION` et `…_ARCHI_ENTREPRISE_SYNTHESE` (32 caractères au moins chacune), à créer avant le déploiement : sans elles la pile ne démarre pas.
 13. Ajouter le contrôle `agents` à la protection de `main` (avec `backend`, `frontend`, `lanceur` et `securite`).
 14. **Après la fusion** : ouvrir la PR Infra du lot I (`deploy/infra/README.md`).
 15. **Avant le premier `service:`** : vérifier que le réseau `portail_portail-agents` n'ouvre pas l'hôte (`nc -zv 10.250.250.1 22` depuis un conteneur de test doit échouer) et que le paquet GHCR `ai-agents` peut être tiré par Portainer et Trivy (voir `deploy/infra/README.md`).

@@ -19,9 +19,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from portail import bureau, journal, metriques, resume
+from portail import architecture, bureau, journal, metriques, resume
 from portail.agents import Catalogue, agent_effectif, charger_catalogue
 from portail.arbitre import Arbitre, LLMArbitre
+from portail.archimate import BlocInvalide, xml_echange
 from portail.audit import auteur_de, inscrire
 from portail.avis import ServiceAvis
 from portail.chat import Diffuseur, ServiceChat, annexes
@@ -178,7 +179,7 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
         agent = agent_effectif(catalogue, e.agent, e.modele)
         j = None
         if agent:
-            a = await annexes(session, agent, e, pipeline.projet_id)
+            a = await annexes(session, catalogue, agent, e, pipeline.projet_id)
             j = jauge(agent, construire(agent, e.messages, e.document, annexes=a))
         etapes.append(
             EtapeOut.model_validate(
@@ -673,6 +674,30 @@ def create_app(
     @app.get("/api/pipelines/{pipeline_id}", response_model=PipelineDetail)
     async def lire_pipeline(pipeline_id: int, request: Request, s: Session):
         return await _detail(s, request.app.state.catalogue, pipeline_id)
+
+    @app.get("/api/pipelines/{pipeline_id}/architecture.md")
+    async def architecture_md(pipeline_id: int, request: Request, s: Session):
+        try:
+            texte = await architecture.assembler(s, request.app.state.catalogue, pipeline_id)
+        except BlocInvalide as e:
+            raise Refus(409, str(e)) from e
+        return Response(texte, media_type="text/markdown; charset=utf-8")
+
+    @app.get("/api/pipelines/{pipeline_id}/architecture.xml")
+    async def architecture_xml(pipeline_id: int, request: Request, s: Session):
+        try:
+            modele = await architecture.modele_fusionne(s, request.app.state.catalogue, pipeline_id)
+        except BlocInvalide as e:
+            raise Refus(409, str(e)) from e
+        pipeline = await s.get(Pipeline, pipeline_id)
+        projet = await s.get(Projet, pipeline.projet_id)
+        return Response(
+            xml_echange(modele, projet.nom),
+            media_type="application/xml",
+            headers={
+                "Content-Disposition": f'attachment; filename="architecture-{pipeline_id}.xml"'
+            },
+        )
 
     @app.post("/api/pipelines/{pipeline_id}/annuler", response_model=PipelineDetail)
     async def annuler(pipeline_id: int, request: Request, s: Session):

@@ -9,6 +9,7 @@ import { duree, emplacement, extrait, lienPrSur, numeroPr } from '../dev'
 import EtatBadge from '../components/EtatBadge.vue'
 import ChatEtape from '../components/ChatEtape.vue'
 import EditeurDocument from '../components/EditeurDocument.vue'
+import DocumentArchitecture from '../components/DocumentArchitecture.vue'
 import PanneauAvis from '../components/PanneauAvis.vue'
 
 const props = defineProps<{ id: string }>()
@@ -29,9 +30,11 @@ function desabonner(etapeId: number) {
 
 function abonner(etapeId: number) {
   if (demonte || abonnements.has(etapeId)) return
-  const fini = () => {
+  // à la fin d'une étape, on écoute la suivante si elle s'enchaîne seule (volets d'architecture) ;
+  // sur une erreur de flux on ne se réabonne pas, pour ne pas boucler sur un serveur tombé
+  const fini = (suivre: boolean) => {
     desabonner(etapeId)
-    charger(false)
+    charger(suivre)
   }
   abonnements.set(
     etapeId,
@@ -39,8 +42,8 @@ function abonner(etapeId: number) {
       partiel: (t) => (partiels[etapeId] = t),
       delta: (t) => (partiels[etapeId] = (partiels[etapeId] ?? '') + t),
       outil: (l) => (outils[etapeId] = [...(outils[etapeId] ?? []), l]),
-      fin: fini,
-      erreur: fini,
+      fin: () => fini(true),
+      erreur: () => fini(false),
     }),
   )
 }
@@ -165,12 +168,21 @@ onBeforeUnmount(() => {
         <pre>{{ c.sortie }}</pre>
       </details>
       <template v-if="e.etat !== 'a_faire'">
+        <DocumentArchitecture
+          v-if="e.document && e.produit === 'architecture'"
+          :pipeline-id="pipeline.id"
+          :etape="e"
+          :etapes="pipeline.etapes"
+          :message="message"
+          @enregistrer="(c) => action(() => enregistrerDocument(e.id, c), false)"
+          @valider="action(() => valider(e.id))"
+        />
         <EditeurDocument
-          v-if="e.document"
+          v-else-if="e.document"
           :etape="e"
           :message="message"
           @enregistrer="(c) => action(() => enregistrerDocument(e.id, c), false)"
-          @valider="action(() => valider(e.id), false)"
+          @valider="action(() => valider(e.id))"
         />
         <PanneauAvis
           v-if="e.document && (e.produit === 'spec' || e.produit === 'plan')"

@@ -69,9 +69,15 @@ class LLMArbitre:
     def __init__(self, llm, arbitre: Arbitre, priorite: Priorite) -> None:
         self._llm, self._arbitre, self._priorite = llm, arbitre, priorite
 
-    async def flux(self, modele: str, messages: list[dict], temperature: float | None):
+    async def flux(
+        self,
+        modele: str,
+        messages: list[dict],
+        temperature: float | None,
+        sortie_max: int | None = None,
+    ):
         async with self._arbitre.tour(modele, self._priorite):
-            async for morceau in self._llm.flux(modele, messages, temperature):
+            async for morceau in self._llm.flux(modele, messages, temperature, sortie_max):
                 yield morceau
 
     async def completer(
@@ -81,6 +87,9 @@ class LLMArbitre:
         temperature: float | None,
         outils: list[dict] | None = None,
         response_format: dict | None = None,
+        sortie_max: int | None = None,
     ) -> dict:
         async with self._arbitre.tour(modele, self._priorite):
-            return await self._llm.completer(modele, messages, temperature, outils, response_format)
+            return await self._llm.completer(
+                modele, messages, temperature, outils, response_format, sortie_max
+            )

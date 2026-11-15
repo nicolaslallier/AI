@@ -14,9 +14,12 @@ def mermaid(cat: Catalogue) -> str:
     lignes = ["```mermaid", "flowchart LR"]
     for i, (nom, agents) in enumerate(rangement(cat)):
         lignes.append(f'  subgraph g{i}["{nom or "hors pipeline"}"]')
-        lignes += [f'    g{i}_{a}["{a}"]' for a in agents]
+        lignes += [f'    g{i}_{a.replace("-", "_")}["{a}"]' for a in agents]
         if nom is not None:
-            lignes += [f"    g{i}_{x} --> g{i}_{y}" for x, y in pairwise(agents)]
+            lignes += [
+                f"    g{i}_{x.replace('-', '_')} --> g{i}_{y.replace('-', '_')}"
+                for x, y in pairwise(agents)
+            ]
         lignes.append("  end")
     return "\n".join([*lignes, "```"])
 

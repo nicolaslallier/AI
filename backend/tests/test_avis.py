@@ -31,10 +31,10 @@ CATALOGUE_AVIS = Catalogue(
 class LLMAvis(FauxLLM):
     """Sans réponse préparée, l'avis dit quel modèle l'a donné."""
 
-    async def completer(self, modele, messages, temperature, outils=None, response_format=None):
+    async def completer(self, modele, messages, *args, **kw):
         if not self.reponses:
             self.reponses.append({"content": f"avis {modele}"})
-        return await super().completer(modele, messages, temperature, outils, response_format)
+        return await super().completer(modele, messages, *args, **kw)
 
 
 @pytest_asyncio.fixture

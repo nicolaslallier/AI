@@ -16,7 +16,13 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "ruff", "asgi-lifespan"]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "asgi-lifespan",
+    "xmlschema>=4.3.2",
+]
 
 [build-system]
 requires = ["hatchling"]

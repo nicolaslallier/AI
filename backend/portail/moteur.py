@@ -32,6 +32,24 @@ async def dernier_valide(session: AsyncSession, projet_id: int, type_: str) -> D
     )
 
 
+# types dont un seul pipeline peut être actif par projet (noms féminins : « une … »)
+UN_SEUL_ACTIF = ("planification", "architecture")
+
+
+async def autre_actif(
+    session: AsyncSession, projet_id: int, type_: str, sauf: int | None = None
+) -> bool:
+    """True si un pipeline `type_` du projet, autre que `sauf`, n'est ni terminé ni échoué."""
+    q = select(Pipeline.id).where(
+        Pipeline.projet_id == projet_id,
+        Pipeline.type == type_,
+        Pipeline.etat.not_in([Etat.TERMINEE, Etat.ECHOUEE]),
+    )
+    if sauf is not None:
+        q = q.where(Pipeline.id != sauf)
+    return await session.scalar(q.limit(1)) is not None
+
+
 async def creer_pipeline(
     session: AsyncSession, catalogue: Catalogue, projet_id: int, type_: str
 ) -> tuple[Pipeline, Etape | None]:
@@ -40,22 +58,13 @@ async def creer_pipeline(
         raise Refus(422, "un pipeline dev se lance depuis une tâche Prête du kanban")
     if type_ not in catalogue.pipelines:
         raise Refus(404, f"type de pipeline inconnu : {type_}")
-    if type_ == "planification":
-        # verrou de ligne : deux planifications simultanées du même projet se sérialisent
+    if type_ in UN_SEUL_ACTIF:
+        # verrou de ligne : deux pipelines simultanés du même projet se sérialisent
         await session.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
-        if await spec_courante(session, projet_id) is None:
+        if type_ == "planification" and await spec_courante(session, projet_id) is None:
             raise Refus(409, "aucune spec validée pour ce projet")
-        actif = await session.scalar(
-            select(Pipeline.id)
-            .where(
-                Pipeline.projet_id == projet_id,
-                Pipeline.type == "planification",
-                Pipeline.etat.not_in([Etat.TERMINEE, Etat.ECHOUEE]),
-            )
-            .limit(1)
-        )
-        if actif is not None:
-            raise Refus(409, "une planification est déjà en cours pour ce projet")
+        if await autre_actif(session, projet_id, type_):
+            raise Refus(409, f"une {type_} est déjà en cours pour ce projet")
     pipeline = Pipeline(projet_id=projet_id, type=type_)
     pipeline.etapes = [
         Etape(ordre=i, agent=a, etat=Etat.A_FAIRE) for i, a in enumerate(catalogue.pipelines[type_])

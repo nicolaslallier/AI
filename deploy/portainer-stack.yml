@@ -46,6 +46,14 @@ services:
       PORTAIL_AGENT_SECRET_DOC: ${PORTAIL_AGENT_SECRET_DOC:?}
       PORTAIL_AGENT_SECRET_PM: ${PORTAIL_AGENT_SECRET_PM:?}
       PORTAIL_AGENT_SECRET_TRI: ${PORTAIL_AGENT_SECRET_TRI:?}
+      PORTAIL_AGENT_SECRET_ARCHI_ENTREPRISE: ${PORTAIL_AGENT_SECRET_ARCHI_ENTREPRISE:?}
+      PORTAIL_AGENT_SECRET_ARCHI_AFFAIRES: ${PORTAIL_AGENT_SECRET_ARCHI_AFFAIRES:?}
+      PORTAIL_AGENT_SECRET_ARCHI_DONNEES: ${PORTAIL_AGENT_SECRET_ARCHI_DONNEES:?}
+      PORTAIL_AGENT_SECRET_ARCHI_APPLICATIF: ${PORTAIL_AGENT_SECRET_ARCHI_APPLICATIF:?}
+      PORTAIL_AGENT_SECRET_ARCHI_TECHNO: ${PORTAIL_AGENT_SECRET_ARCHI_TECHNO:?}
+      PORTAIL_AGENT_SECRET_ARCHI_SECURITE: ${PORTAIL_AGENT_SECRET_ARCHI_SECURITE:?}
+      PORTAIL_AGENT_SECRET_ARCHI_SOLUTION: ${PORTAIL_AGENT_SECRET_ARCHI_SOLUTION:?}
+      PORTAIL_AGENT_SECRET_ARCHI_ENTREPRISE_SYNTHESE: ${PORTAIL_AGENT_SECRET_ARCHI_ENTREPRISE_SYNTHESE:?}
     volumes:
       - portail-donnees-2:/donnees
       - portail-espaces:/espaces
@@ -192,6 +200,70 @@ services:
     entrypoint: [tri]
     environment:
       AGENT_SECRET: ${PORTAIL_AGENT_SECRET_TRI:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-archi-entreprise:
+    <<: *agent
+    entrypoint: [archi-entreprise]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_ARCHI_ENTREPRISE:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-archi-affaires:
+    <<: *agent
+    entrypoint: [archi-affaires]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_ARCHI_AFFAIRES:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-archi-donnees:
+    <<: *agent
+    entrypoint: [archi-donnees]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_ARCHI_DONNEES:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-archi-applicatif:
+    <<: *agent
+    entrypoint: [archi-applicatif]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_ARCHI_APPLICATIF:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-archi-techno:
+    <<: *agent
+    entrypoint: [archi-techno]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_ARCHI_TECHNO:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-archi-securite:
+    <<: *agent
+    entrypoint: [archi-securite]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_ARCHI_SECURITE:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-archi-solution:
+    <<: *agent
+    entrypoint: [archi-solution]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_ARCHI_SOLUTION:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-archi-entreprise-synthese:
+    <<: *agent
+    entrypoint: [archi-entreprise-synthese]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_ARCHI_ENTREPRISE_SYNTHESE:?}
       AGENT_PORTAIL_URL: http://portail:8000
       AGENT_VERSION: ${IMAGE_TAG:-latest}
 

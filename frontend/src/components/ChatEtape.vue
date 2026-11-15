@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { Etape } from '../api'
 import { rendreMarkdown } from '../markdown'
 import JaugeContexte from './JaugeContexte.vue'
@@ -14,6 +14,13 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ envoyer: [contenu: string, vider: () => void, modele?: string]; rediger: []; reessayer: [] }>()
 const saisie = ref('')
+// Les volets tournent seuls ; l'architecture aussi, jusqu'à son premier jet : ensuite Nicolas peut demander des retouches.
+const automatique = computed(
+  () =>
+    props.etape.produit === 'volet' ||
+    (props.etape.produit === 'architecture' && !['en_attente', 'echouee'].includes(props.etape.etat)),
+)
+const livrable: Record<string, string> = { vision: 'la vision', plan: 'le plan', architecture: 'l’architecture' }
 const modele = ref(props.etape.modele ?? '')
 watch(() => props.etape.modele, (m) => (modele.value = m ?? ''))
 // même règle que le serveur : spec, modèle pas encore figé, aucun message
@@ -44,7 +51,7 @@ function surEntree(e: KeyboardEvent) {
     <p v-if="message" class="erreur">{{ message }}</p>
   </section>
   <section v-else class="pile">
-    <JaugeContexte v-if="etape.jauge" :jauge="etape.jauge" />
+    <JaugeContexte v-if="etape.jauge" :jauge="etape.jauge" :produit="etape.produit" />
     <div class="messages">
       <div v-for="m in etape.messages" :key="m.id" :class="['bulle', m.role === 'user' ? 'moi' : 'agent', { systeme: m.role === 'system' }]">
         <details v-if="m.role === 'tool'"><summary>🔎 {{ m.outil }}</summary><pre>{{ m.contenu }}</pre></details>
@@ -67,18 +74,19 @@ function surEntree(e: KeyboardEvent) {
     </label>
     <span v-else-if="etape.produit === 'spec'" class="discret">IA : {{ etape.modele }}</span>
     <textarea
+      v-if="!automatique"
       v-model="saisie"
       rows="3"
       placeholder="Écris ton message… (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)"
       :disabled="etape.etat !== 'en_attente' || etape.jauge?.niveau === 'plein'"
       @keydown.enter.exact="surEntree"
     ></textarea>
-    <div class="rangee">
+    <div v-if="!automatique" class="rangee">
       <button :disabled="!saisie.trim() || etape.etat !== 'en_attente' || etape.jauge?.niveau === 'plein'" @click="envoyer">
         Envoyer
       </button>
       <button class="primaire pousse" :disabled="etape.etat !== 'en_attente'" @click="emit('rediger')">
-        Rédiger {{ etape.produit === 'plan' ? 'le plan' : 'la spec' }}
+        Rédiger {{ livrable[etape.produit ?? ''] ?? 'la spec' }}
       </button>
     </div>
   </section>

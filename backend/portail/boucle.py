@@ -99,7 +99,9 @@ async def _boucle(
     ids: set[str] = set()
     for _ in range(agent.tours_max):
         elaguer_resultats_outils(messages, agent.contexte_max)
-        reponse = await llm.completer(agent.modele, messages, agent.temperature, outils=schemas)
+        reponse = await llm.completer(
+            agent.modele, messages, agent.temperature, outils=schemas, sortie_max=agent.sortie_max
+        )
         appels = reponse.get("tool_calls")
         if not isinstance(appels, list) or not appels:
             return ResultatBoucle(texte=_texte(reponse), limite_atteinte=False)
@@ -167,9 +169,13 @@ async def _boucle(
         if getattr(outils, "arret", False):
             # une action est proposée : le modèle conclut sans outils, Nicolas décide
             elaguer_resultats_outils(messages, agent.contexte_max)
-            reponse = await llm.completer(agent.modele, messages, agent.temperature)
+            reponse = await llm.completer(
+                agent.modele, messages, agent.temperature, sortie_max=agent.sortie_max
+            )
             return ResultatBoucle(texte=_texte(reponse), limite_atteinte=False)
     messages.append({"role": "user", "content": _LIMITE})
     elaguer_resultats_outils(messages, agent.contexte_max)
-    reponse = await llm.completer(agent.modele, messages, agent.temperature)
+    reponse = await llm.completer(
+        agent.modele, messages, agent.temperature, sortie_max=agent.sortie_max
+    )
     return ResultatBoucle(texte=_texte(reponse), limite_atteinte=True)

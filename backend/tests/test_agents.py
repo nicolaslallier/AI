@@ -308,6 +308,7 @@ def test_rangement():
         ("double", ["a", "b"]),
         ("petit", ["petit"]),
         ("planification", ["plan", "taches"]),
+        ("architecture", ["vision", "volet", "synthese"]),
         (None, ["orchestrateur", "pm"]),
     ]
 
@@ -367,6 +368,194 @@ def test_service_adresse_invalide(tmp_path, adresse):
     texte = VALIDE.replace("prompt_systeme: p", f"prompt_systeme: p\n    service: {adresse}")
     with pytest.raises(CatalogueInvalide, match="« spec »"):
         charger_catalogue(ecrire(tmp_path, texte))
+
+
+def _agent_yaml(nom: str, lignes: str) -> str:
+    return (
+        f"  {nom}:\n    description: d\n    modele: m\n    contexte_max: 1000\n"
+        f"    prompt_systeme: p\n{lignes}"
+    )
+
+
+def _architecture(agents: dict[str, str], etapes: list[str]) -> str:
+    corps = "".join(_agent_yaml(n, lignes) for n, lignes in agents.items())
+    return (
+        f"modeles_permis: [m]\nagents:\n{corps}pipelines:\n  architecture: [{', '.join(etapes)}]\n"
+    )
+
+
+VISION = "    produit: vision\n    prefixe: mot-\n    consigne_redaction: c\n"
+VOLET = "    produit: volet\n    prefixe: aff-\n    volet: affaires\n    auto: true\n    consigne_redaction: c\n"
+FINALE = "    produit: architecture\n    prefixe: sol-\n    auto: true\n    consigne_redaction: c\n"
+TROIS = {"vision": VISION, "volet": VOLET, "finale": FINALE}
+
+
+def test_catalogue_architecture_accepte(tmp_path):
+    texte = _architecture(
+        {"vision": VISION, "volet": VOLET + "    sans_validation: true\n", "finale": FINALE},
+        ["vision", "volet", "finale"],
+    )
+    a = charger_catalogue(ecrire(tmp_path, texte)).agents
+    assert (a["vision"].produit, a["vision"].auto, a["vision"].prefixe) == ("vision", False, "mot-")
+    assert (a["volet"].volet, a["volet"].sans_validation) == ("affaires", True)
+    assert a["finale"].outils == [] and a["finale"].sans_validation is False
+
+
+@pytest.mark.parametrize(
+    ("agents", "etapes", "fragment"),
+    [
+        (
+            {"vision": VISION.replace("    prefixe: mot-\n", "")},
+            ["vision"],
+            "l'agent « vision » produit vision : prefixe requis",
+        ),
+        (
+            {"vision": VISION.replace("    consigne_redaction: c\n", "")},
+            ["vision"],
+            "l'agent « vision » produit vision : consigne_redaction requise",
+        ),
+        (
+            {"vision": VISION.replace("mot-", "mot")},
+            ["vision"],
+            "prefixe",
+        ),
+        (
+            {"vision": "    prefixe: mot-\n"},
+            ["vision"],
+            "l'agent « vision » ne produit pas d'architecture : prefixe interdit",
+        ),
+        (
+            {"vision": VISION, "volet": VOLET.replace("    volet: affaires\n", "")},
+            ["vision", "volet"],
+            "l'agent « volet » produit un volet : volet requis",
+        ),
+        (
+            {"vision": VISION + "    volet: x\n", "autre": "    volet: x\n"},
+            ["vision"],
+            "l'agent « autre » ne produit pas un volet : volet interdit",
+        ),
+        (
+            {"vision": VISION + "    auto: true\n"},
+            ["vision"],
+            "l'agent « vision » est une discussion : pas auto",
+        ),
+        (
+            {"vision": VISION + "    sans_validation: true\n"},
+            ["vision"],
+            "l'agent « vision » : sans_validation réservé aux volets auto",
+        ),
+        (
+            {"vision": VISION, "volet": VOLET.replace("    auto: true\n", "")},
+            ["vision", "volet"],
+            "l'agent « volet » produit un volet : auto requis",
+        ),
+        (
+            {"vision": VISION, "finale": FINALE.replace("    auto: true\n", "")},
+            ["vision", "finale"],
+            "l'agent « finale » produit l'architecture : auto requis",
+        ),
+        (
+            {"vision": VISION, "finale": FINALE + "    outils: [lire]\n"},
+            ["vision", "finale"],
+            "l'agent « finale » produit l'architecture : pas d'outils",
+        ),
+        (
+            {"vision": VISION, "volet": VOLET, "dup": VOLET.replace("affaires", "données")},
+            ["vision", "volet", "dup"],
+            "pipeline « architecture » : le préfixe « aff- » est utilisé par « volet » et « dup »",
+        ),
+        (
+            {"volet": VOLET, "vision": VISION},
+            ["volet", "vision"],
+            "pipeline « architecture » : l'agent « volet » n'est pas précédé d'un agent vision",
+        ),
+        (
+            {"vision": VISION, "finale": FINALE, "volet": VOLET},
+            ["vision", "finale", "volet"],
+            "pipeline « architecture » : l'agent « finale » doit être la dernière étape",
+        ),
+        (
+            {"vision": VISION, "autre": VISION.replace("mot-", "aff-")},
+            ["vision", "autre"],
+            "pipeline « architecture » : un seul agent vision est permis",
+        ),
+        (
+            {"vision": VISION, "finale": FINALE, "autre": FINALE.replace("sol-", "ent-")},
+            ["vision", "finale", "autre"],
+            "pipeline « architecture » : un seul agent architecture est permis",
+        ),
+    ],
+)
+def test_agent_architecture_refuse(tmp_path, agents, etapes, fragment):
+    with pytest.raises(CatalogueInvalide) as exc:
+        charger_catalogue(ecrire(tmp_path, _architecture(agents, etapes)))
+    assert fragment in str(exc.value)
+
+
+RACINE = Path(__file__).parents[2]
+
+
+def test_agents_yaml_reel_bureau_d_architectes():
+    cat = charger_catalogue(RACINE / "agents.yaml")
+    assert cat.pipelines["architecture"] == [
+        "archi-entreprise",
+        "archi-affaires",
+        "archi-donnees",
+        "archi-applicatif",
+        "archi-techno",
+        "archi-securite",
+        "archi-solution",
+        "archi-entreprise-synthese",
+    ]
+    assert [cat.agents[a].prefixe for a in cat.pipelines["architecture"]] == [
+        "mot-",
+        "aff-",
+        "don-",
+        "app-",
+        "tec-",
+        "sec-",
+        "sol-",
+        "ent-",
+    ]
+    locaux = {"qwen3.8:27b-mlx", "mlx-community/GLM-4.7-Flash-8bit"}
+    for nom, a in cat.agents.items():
+        assert nom.startswith("archi-") or a.modele in locaux, nom
+    for a in cat.pipelines["architecture"][1:]:
+        assert "Règles communes du bureau d'architectes" in cat.agents[a].prompt_systeme
+    volets = cat.pipelines["architecture"][1:7]
+    assert [cat.agents[a].volet for a in volets] == [
+        "affaires",
+        "données",
+        "applicatif",
+        "technologique",
+        "sécurité",
+        "solution",
+    ]
+    assert cat.agents["archi-entreprise-synthese"].outils == []
+    nuage = {"cloud-anthropic", "cloud-openai", "cloud-gemini"}
+    for a in cat.pipelines["architecture"]:
+        assert cat.agents[a].modele in nuage, a
+    synthese = cat.agents["archi-entreprise-synthese"].consigne_redaction
+    assert "Ne recopie pas les éléments des volets" in synthese
+    assert "le modèle complet, fusionné" not in synthese
+    assert synthese.count("Réponds uniquement avec le document") == 1
+
+
+def test_agents_yaml_sortie_max_et_temperature_du_bureau_d_architectes():
+    cat = charger_catalogue(RACINE / "agents.yaml")
+    for nom in cat.pipelines["architecture"]:
+        a = cat.agents[nom]
+        assert a.sortie_max == 16000
+        if a.modele == "cloud-openai":
+            assert a.temperature is None
+    assert cat.agents["orchestrateur"].sortie_max is None
+
+
+def test_sortie_max_doit_etre_positive():
+    with pytest.raises(ValueError):
+        Agent(
+            nom="a", description="d", modele="m", prompt_systeme="p", contexte_max=1, sortie_max=0
+        )
 
 
 def test_agent_effectif():
