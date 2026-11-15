@@ -52,3 +52,24 @@ Sans cette PR, `/metrics` répond sur `infra-net` sans être lu : rien ne casse.
      pas l'usage en flux) ;
    - cAdvisor expose bien `name=~"portail-.*"` ; sinon corriger le filtre des panneaux mémoire et
      CPU du tableau `portail-sante`.
+
+# Lot I (un conteneur par agent) : étapes manuelles
+
+À faire AVANT de fusionner la tâche 11 dans `main` (sinon le déploiement échoue sur les `:?`) :
+
+1. Ranger dans OpenBao, au chemin de la pile (`infra/data/portail`), une clé par agent
+   `PORTAIL_AGENT_SECRET_<NOM>` : `SPEC`, `ORCHESTRATEUR`, `PLAN`, `TACHES`, `TESTS`, `CODE`,
+   `REVUE`, `ARCHITECTE`, `CHALLENGER`, `SECURITE`, `DOC`, `PM`, `TRI` (13 clés). Chacune
+   vient de `openssl rand -hex 32` (le script de rendu refuse un secret de moins de 32 caractères).
+2. Ajouter le contrôle `agents` à la protection de la branche `main` (réglage GitHub, non
+   modifié par le dépôt).
+3. Après la fusion, ouvrir la PR Infra : recopier `deploy/nginx/portail.conf` (bloc
+   `location ^~ /interne/ { return 404; }`). Sans elle, `/interne/` passe par `location /`
+   derrière oauth2-proxy : pas exposé sans session, mais le 404 voulu manque.
+   Vérifier ensuite : `curl -sk -o /dev/null -w '%{http_code}' https://<hôte du portail>/interne/x` rend `404`.
+4. Décider, agent par agent, de poser `service:` dans `agents.yaml` (aucun agent ne migre
+   dans ce lot).
+
+Les services `agent-<nom>` sont tous sur le réseau `portail-agents` (interne) : ils voient le
+portail, pas l'Infra, ni la base, ni LiteLLM, ni le lanceur, ni Internet. Ils partagent ce
+réseau entre eux ; seul le secret propre à chaque agent les empêche de se parler utilement.

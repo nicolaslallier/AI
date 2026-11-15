@@ -1,3 +1,14 @@
+# Socle commun des agents : un conteneur par agent, une seule image, aucun accès hors portail.
+x-agent: &agent
+  image: ghcr.io/nicolaslallier/ai-agents:${IMAGE_TAG:-latest}@${AGENTS_DIGEST:?}
+  networks: [portail-agents]
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  mem_limit: 64m
+  pids_limit: 64
+  restart: unless-stopped
+
 services:
   portail:
     image: ghcr.io/nicolaslallier/ai-portail:${IMAGE_TAG:-latest}
@@ -19,10 +30,23 @@ services:
       PORTAIL_NTFY_SUJET: portail
       PORTAIL_URL_PUBLIQUE: https://portail.infra.famillelallier.net
       PORTAIL_NTFY_JETON: ${PORTAIL_NTFY_JETON:-}
+      PORTAIL_AGENT_SECRET_SPEC: ${PORTAIL_AGENT_SECRET_SPEC:?}
+      PORTAIL_AGENT_SECRET_ORCHESTRATEUR: ${PORTAIL_AGENT_SECRET_ORCHESTRATEUR:?}
+      PORTAIL_AGENT_SECRET_PLAN: ${PORTAIL_AGENT_SECRET_PLAN:?}
+      PORTAIL_AGENT_SECRET_TACHES: ${PORTAIL_AGENT_SECRET_TACHES:?}
+      PORTAIL_AGENT_SECRET_TESTS: ${PORTAIL_AGENT_SECRET_TESTS:?}
+      PORTAIL_AGENT_SECRET_CODE: ${PORTAIL_AGENT_SECRET_CODE:?}
+      PORTAIL_AGENT_SECRET_REVUE: ${PORTAIL_AGENT_SECRET_REVUE:?}
+      PORTAIL_AGENT_SECRET_ARCHITECTE: ${PORTAIL_AGENT_SECRET_ARCHITECTE:?}
+      PORTAIL_AGENT_SECRET_CHALLENGER: ${PORTAIL_AGENT_SECRET_CHALLENGER:?}
+      PORTAIL_AGENT_SECRET_SECURITE: ${PORTAIL_AGENT_SECRET_SECURITE:?}
+      PORTAIL_AGENT_SECRET_DOC: ${PORTAIL_AGENT_SECRET_DOC:?}
+      PORTAIL_AGENT_SECRET_PM: ${PORTAIL_AGENT_SECRET_PM:?}
+      PORTAIL_AGENT_SECRET_TRI: ${PORTAIL_AGENT_SECRET_TRI:?}
     volumes:
       - portail-donnees-2:/donnees
       - portail-espaces:/espaces
-    networks: [infra-net, portail-lanceur]
+    networks: [infra-net, portail-lanceur, portail-agents]
     healthcheck:
       test:
         - CMD
@@ -63,6 +87,111 @@ services:
     mem_limit: 128m
     restart: unless-stopped
 
+  # Un service par agent de agents.yaml, tous sur portail-agents : le portail est leur seul voisin.
+  agent-spec:
+    <<: *agent
+    entrypoint: [spec]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_SPEC:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-orchestrateur:
+    <<: *agent
+    entrypoint: [orchestrateur]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_ORCHESTRATEUR:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-plan:
+    <<: *agent
+    entrypoint: [plan]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_PLAN:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-taches:
+    <<: *agent
+    entrypoint: [taches]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_TACHES:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-tests:
+    <<: *agent
+    entrypoint: [tests]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_TESTS:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-code:
+    <<: *agent
+    entrypoint: [code]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_CODE:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-revue:
+    <<: *agent
+    entrypoint: [revue]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_REVUE:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-architecte:
+    <<: *agent
+    entrypoint: [architecte]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_ARCHITECTE:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-challenger:
+    <<: *agent
+    entrypoint: [challenger]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_CHALLENGER:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-securite:
+    <<: *agent
+    entrypoint: [securite]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_SECURITE:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-doc:
+    <<: *agent
+    entrypoint: [doc]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_DOC:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-pm:
+    <<: *agent
+    entrypoint: [pm]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_PM:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
+  agent-tri:
+    <<: *agent
+    entrypoint: [tri]
+    environment:
+      AGENT_SECRET: ${PORTAIL_AGENT_SECRET_TRI:?}
+      AGENT_PORTAIL_URL: http://portail:8000
+      AGENT_VERSION: ${IMAGE_TAG:-latest}
+
 volumes:
   # ponytail: l'ancien volume portail-donnees reste orphelin, à supprimer à la main
   portail-donnees-2:
@@ -74,4 +203,7 @@ networks:
   infra-net:
     external: true
   portail-lanceur:
+    internal: true
+  # Portail et agents seulement : ni Infra, ni base, ni LiteLLM, ni lanceur, ni Internet.
+  portail-agents:
     internal: true
