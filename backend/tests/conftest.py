@@ -131,6 +131,7 @@ CATALOGUE_TEST = Catalogue(
         "petit": ["petit"],
         "planification": ["plan", "taches"],
     },
+    modeles_permis=["m", "g"],
 )
 
 

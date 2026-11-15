@@ -282,3 +282,41 @@ async def test_taches_en_conteneur_relance(client_conteneur, faux_llm, sessions)
             await s.scalars(select(Proposition).where(Proposition.etape_id == etape_taches))
         ).all()
     assert [p.cle for p in props] == ["n1"]
+
+
+async def test_modele_choisi_au_premier_message(client, faux_llm):
+    pid, eid = await _etape(client)
+    e = await _etat(client, pid)
+    assert (e["modele"], e["modeles"]) == ("m", ["m", "g"])
+    r = await client.post(f"/api/etapes/{eid}/messages", json={"contenu": "A", "modele": "g"})
+    assert r.status_code == 202
+    await _attendre(client, eid)
+    assert faux_llm.appels[-1]["modele"] == "g"
+    await client.post(f"/api/etapes/{eid}/messages", json={"contenu": "B", "modele": "m"})
+    await _attendre(client, eid)
+    assert faux_llm.appels[-1]["modele"] == "g"  # figé
+    assert (await _etat(client, pid))["modele"] == "g"
+
+
+async def test_modele_non_permis_422(client):
+    _, eid = await _etape(client)
+    r = await client.post(f"/api/etapes/{eid}/messages", json={"contenu": "A", "modele": "x"})
+    assert r.status_code == 422
+
+
+async def test_modele_non_enregistre_si_refus(client):
+    pid, eid = await _etape(client)
+    r = await client.post(f"/api/etapes/{eid}/messages", json={"contenu": "  ", "modele": "g"})
+    assert r.status_code == 422
+    assert (await _etat(client, pid))["modele"] == "m"
+
+
+async def test_rediger_utilise_le_modele_choisi(client, faux_llm):
+    _, eid = await _etape(client)
+    faux_llm.morceaux = ["r"]
+    await client.post(f"/api/etapes/{eid}/messages", json={"contenu": "A", "modele": "g"})
+    await _attendre(client, eid)
+    faux_llm.morceaux = ["# Spec"]
+    assert (await client.post(f"/api/etapes/{eid}/rediger")).status_code == 202
+    await _attendre(client, eid)
+    assert faux_llm.appels[-1]["modele"] == "g"

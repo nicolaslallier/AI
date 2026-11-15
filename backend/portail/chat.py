@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from portail import journal
-from portail.agents import Agent, Catalogue
+from portail.agents import Agent, Catalogue, agent_effectif
 from portail.avis import ServiceAvis
 from portail.contexte import construire, jauge
 from portail.db import (
@@ -174,7 +174,7 @@ class ServiceChat:
         return etape
 
     def _agent(self, etape: Etape):
-        agent = self._catalogue.agents.get(etape.agent)
+        agent = agent_effectif(self._catalogue, etape.agent, etape.modele)
         if agent is None:
             raise Refus(409, f"agent « {etape.agent} » absent de agents.yaml")
         return agent
@@ -203,7 +203,7 @@ class ServiceChat:
             agent, messages, doc, consigne, await annexes(s, agent, etape, pipeline.projet_id)
         )
 
-    async def envoyer(self, etape_id: int, contenu: str) -> None:
+    async def envoyer(self, etape_id: int, contenu: str, modele: str | None = None) -> None:
         async with self._sessions() as s:
             etape = await self._etape_relancable(s, etape_id)
             self._agent_conversation(etape)
@@ -214,6 +214,12 @@ class ServiceChat:
             contenu = contenu.strip()
             if not contenu:
                 raise Refus(422, "le message est vide")
+            if modele and not await s.scalar(
+                select(Message.id).where(Message.etape_id == etape_id)
+            ):
+                if modele not in self._catalogue.modeles_permis:  # figé dès le premier message
+                    raise Refus(422, f"modèle non permis : {modele}")
+                etape.modele = modele
             agent = self._agent(etape)
             avec = await self._demande(s, etape, agent) + [{"role": "user", "content": contenu}]
             if jauge(agent, avec).niveau == "plein":
