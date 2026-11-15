@@ -1,9 +1,18 @@
 import asyncio
+import io
 import json
+import re
 
+from asgi_lifespan import LifespanManager
+from conftest import CATALOGUE_TEST, _agent
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import update
+from test_archimate import SCHEMA
 from test_chat import _chat, _poll
 
+from portail.agents import Catalogue
+from portail.api import create_app
+from portail.architecture import descendre_titres, sections
 from portail.db import Document
 from portail.llm import ErreurLLM
 
@@ -183,3 +192,193 @@ def test_apercu_borne():
     assert budget_apercu(200_000) == 8192
     assert budget_apercu(32_768) == 8192
     assert budget_apercu(16_000) == 4000
+
+
+# --- document assemblé et fichier d'échange -------------------------------------------------
+
+SOMMAIRE = "## Sommaire exécutif et portée\n\nPhrase du sommaire.\n\n### Portée\n\nDétail.\n\n"
+REGISTRES = (
+    "## Registre des décisions\n\nADR-1 retenu.\n\n"
+    "## Registre des dérogations\n\nAucune dérogation.\n\n"
+    "## Registre de la dette\n\nDette modeste.\n\n"
+    "## Risques, hypothèses et questions ouvertes\n\nRisque unique.\n\n"
+)
+
+
+def _morceau(prefixe, corps, cites=(), fusions=()):
+    modele = {
+        "elements": [{"id": f"{prefixe}a", "type": "BusinessActor", "nom": "A"}],
+        "vues": [{"nom": "V", "elements": [f"{prefixe}a", *cites]}],
+        "fusions": [{"garder": g, "retirer": r} for g, r in fusions],
+    }
+    return f"{corps}\n\n```json\n{json.dumps(modele)}\n```"
+
+
+VOLET_TEXTE = "# Volet affaires\n\nLes processus métier restent inchangés.\n\n## Détail\n\n```\n# pas un titre\n```"
+SYNTHESE_COMPLETE = _morceau("ent-", SOMMAIRE + REGISTRES, ["aff-a"])
+
+
+async def _architecture_redigee(client, faux_llm, synthese=SYNTHESE_COMPLETE, volet=VOLET_TEXTE):
+    pid, (vision, *_) = await _vision_redigee(
+        client, faux_llm, [_morceau("aff-", volet, ["mot-a"])], [synthese]
+    )
+    await client.post(f"/api/etapes/{vision}/valider")
+    await _attendre_tout(client)
+    return pid
+
+
+def _titres(md):
+    return re.findall(r"^# (\d+\. .+)$", md, re.MULTILINE)
+
+
+async def test_document_assemble_aux_sections_numerotees(client, faux_llm):
+    pid = await _architecture_redigee(client, faux_llm)
+    r = await client.get(f"/api/pipelines/{pid}/architecture.md")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "text/markdown; charset=utf-8"
+    assert _titres(r.text) == [
+        "1. Sommaire exécutif et portée",
+        "2. Vision",
+        "3. Architecture d'affaires",
+        "4. Registre des décisions (ADR)",
+        "5. Registre des dérogations",
+        "6. Registre de la dette",
+        "7. Risques, hypothèses et questions ouvertes",
+        "8. Annexe : catalogues",
+    ]
+    assert "\n### Portée" not in r.text and "\n#### Portée\n" in r.text
+    assert "| ent-a | BusinessActor | A | synthèse |" in r.text
+    assert "| aff-a | BusinessActor | A | affaires |" in r.text
+
+
+async def test_document_assemble_a_treize_sections_dans_l_ordre(moteur, reglages, faux_llm):
+    volets = ["affaires", "données", "applicatif", "technologique", "sécurité", "solution"]
+    prefixes = ["aff-", "don-", "app-", "tec-", "sec-", "sol-"]
+    agents = {
+        "vision": CATALOGUE_TEST.agents["vision"],
+        "synthese": CATALOGUE_TEST.agents["synthese"],
+        **{
+            f"v{i}": _agent(
+                f"v{i}", produit="volet", prefixe=p, volet=v, auto=True, sans_validation=True,
+                consigne_redaction="Rédige.",
+            )
+            for i, (v, p) in enumerate(zip(volets, prefixes, strict=True))
+        },
+    }  # fmt: skip
+    cat = Catalogue(
+        agents=agents,
+        pipelines={"architecture": ["vision", *(f"v{i}" for i in range(6)), "synthese"]},
+    )
+    app = create_app(reglages=reglages, llm=faux_llm, catalogue=cat)
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        p = await _architecture(c)
+        faux_llm.file = [
+            [VISION],
+            *([_morceau(pre, f"Volet {v}.", ["mot-a"])] for v, pre in zip(volets, prefixes)),
+            [SYNTHESE_COMPLETE],
+        ]
+        await c.post(f"/api/etapes/{p['etapes'][0]['id']}/rediger")
+        await _attendre_tout(c)
+        await c.post(f"/api/etapes/{p['etapes'][0]['id']}/valider")
+        await _attendre_tout(c)
+        md = (await c.get(f"/api/pipelines/{p['id']}/architecture.md")).text
+    assert _titres(md) == [
+        "1. Sommaire exécutif et portée",
+        "2. Vision",
+        "3. Architecture d'affaires",
+        "4. Architecture de données",
+        "5. Architecture applicative",
+        "6. Architecture technologique",
+        "7. Architecture de sécurité",
+        "8. Écarts, options de solution et feuille de route",
+        "9. Registre des décisions (ADR)",
+        "10. Registre des dérogations",
+        "11. Registre de la dette",
+        "12. Risques, hypothèses et questions ouvertes",
+        "13. Annexe : catalogues",
+    ]
+
+
+async def test_document_assemble_sans_bloc_json(client, faux_llm):
+    pid = await _architecture_redigee(client, faux_llm)
+    md = (await client.get(f"/api/pipelines/{pid}/architecture.md")).text
+    assert "```json" not in md
+    # le stockage, lui, garde la partie du modèle de synthèse avec son bloc
+    assert "```json" in (await _pipeline(client, pid))["etapes"][2]["document"]["contenu"]
+
+
+async def test_volet_recopie_tel_quel(client, faux_llm):
+    pid = await _architecture_redigee(client, faux_llm)
+    md = (await client.get(f"/api/pipelines/{pid}/architecture.md")).text
+    assert "Les processus métier restent inchangés." in md
+    assert "\n## Volet affaires\n" in md and "\n### Détail\n" in md
+    assert "\n# pas un titre\n" in md  # le code reste intact
+
+
+async def test_section_absente_de_la_synthese(client, faux_llm):
+    synthese = _morceau("ent-", SOMMAIRE + "## Registre des décisions\n\nADR-1.\n", ["aff-a"])
+    pid = await _architecture_redigee(client, faux_llm, synthese)
+    md = (await client.get(f"/api/pipelines/{pid}/architecture.md")).text
+    assert "# 5. Registre des dérogations\n\nsection absente de la synthèse" in md
+    assert "# 4. Registre des décisions (ADR)\n\nADR-1." in md
+
+
+async def test_xml_telecharge_contient_tous_les_volets(client, faux_llm):
+    pid = await _architecture_redigee(client, faux_llm)
+    r = await client.get(f"/api/pipelines/{pid}/architecture.xml")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/xml")
+    assert r.headers["content-disposition"] == f'attachment; filename="architecture-{pid}.xml"'
+    for ident in ("id-mot-a", "id-aff-a", "id-ent-a"):
+        assert f'identifier="{ident}"' in r.text
+    assert '<name xml:lang="fr">P</name>' in r.text
+    SCHEMA.validate(io.StringIO(r.text))
+
+
+async def test_fusion_de_la_synthese_appliquee_au_xml(client, faux_llm):
+    synthese = _morceau("ent-", SOMMAIRE + REGISTRES, ["aff-a"], [("aff-a", "mot-a")])
+    pid = await _architecture_redigee(client, faux_llm, synthese)
+    xml = (await client.get(f"/api/pipelines/{pid}/architecture.xml")).text
+    assert 'identifier="id-mot-a"' not in xml and 'identifier="id-aff-a"' in xml
+    SCHEMA.validate(io.StringIO(xml))
+
+
+async def test_routes_409_avant_la_synthese(client, faux_llm):
+    pid, _ = await _vision_redigee(client, faux_llm)
+    for fin in ("md", "xml"):
+        r = await client.get(f"/api/pipelines/{pid}/architecture.{fin}")
+        assert r.status_code == 409
+        assert r.json()["detail"] == "l'architecture n'est pas encore rédigée"
+
+
+async def test_routes_409_si_un_bloc_stocke_est_illisible(client, faux_llm, sessions):
+    pid = await _architecture_redigee(client, faux_llm)
+    async with sessions() as s:
+        await s.execute(
+            update(Document).where(Document.pipeline_id == pid).values(contenu="sans bloc")
+        )
+        await s.commit()
+    for fin in ("md", "xml"):
+        r = await client.get(f"/api/pipelines/{pid}/architecture.{fin}")
+        assert (r.status_code, r.json()["detail"]) == (409, "bloc de modèle absent")
+
+
+async def test_routes_404_pipeline_spec(client):
+    projet = await _projet(client)
+    r = await client.post("/api/pipelines", json={"projet_id": projet, "type": "spec"})
+    for pid in (r.json()["id"], 99999):
+        for fin in ("md", "xml"):
+            assert (await client.get(f"/api/pipelines/{pid}/architecture.{fin}")).status_code == 404
+
+
+def test_descendre_titres_laisse_le_code():
+    texte = "# A\ntexte # non\n```md\n# B\n```\n### C"
+    assert descendre_titres(texte) == "## A\ntexte # non\n```md\n# B\n```\n#### C"
+
+
+def test_sections_par_titre_exact():
+    texte = "avant\n## Un\na\n```\n## faux\n```\n## Deux\nb"
+    assert sections(texte) == {"Un": "a\n```\n## faux\n```", "Deux": "b"}
