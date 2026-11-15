@@ -35,6 +35,8 @@ Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolas
 
 Schéma généré depuis `agents.yaml` ; après un changement, lancer `cd backend && uv run python -m portail.schema_pipelines`.
 
+La page Bureau (`/bureau`) montre en direct l'état de chaque agent, rangé comme ce schéma.
+
 <!-- schema-pipelines:debut -->
 ```mermaid
 flowchart LR

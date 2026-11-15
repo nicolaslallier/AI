@@ -283,3 +283,52 @@ export interface ActionConversation {
 }
 export const confirmerAction = (id: number) => appel<object>('POST', `/actions/${id}/confirmer`)
 export const refuserAction = (id: number) => appel<object>('POST', `/actions/${id}/refuser`)
+
+export type EtatPoste = 'libre' | 'au_travail' | 'en_attente' | 'en_erreur'
+export interface Travail {
+  sorte: 'etape' | 'conversation' | 'avis'
+  etat: Exclude<EtatPoste, 'libre'>
+  libelle: string
+  lien: string
+  tour: number | null
+  jauge: Jauge | null
+}
+export interface Poste {
+  nom: string
+  etat: EtatPoste
+  travaux: Travail[]
+  appels_jour: number
+  jetons_jour: number
+}
+export interface Groupe {
+  nom: string | null
+  agents: string[]
+}
+export interface Bureau {
+  groupes: Groupe[]
+  postes: Record<string, Poste>
+}
+export interface MissionAgent {
+  mission: string
+  debut: string
+  duree_ms: number
+  appels: number
+  jetons_entree: number
+  jetons_sortie: number
+  issue: string
+  libelle: string | null
+  lien: string | null
+}
+export interface PosteDetail {
+  nom: string
+  description: string
+  modele: string
+  modele_si_meme: string | null
+  outils: string[]
+  tours_max: number
+  contexte_max: number
+  missions: MissionAgent[]
+}
+export const lireBureau = () => appel<Bureau>('GET', '/bureau')
+export const lirePoste = (nom: string) =>
+  appel<PosteDetail>('GET', `/bureau/${encodeURIComponent(nom)}`)
