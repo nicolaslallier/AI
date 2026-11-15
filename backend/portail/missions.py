@@ -6,6 +6,7 @@ autorise (messages, drapeau `outils`, `response_format`, `flux`, nom et argument
 
 import asyncio
 import json
+import logging
 import secrets
 import time
 import uuid
@@ -20,8 +21,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from portail import journal
 from portail.agents import Agent, Catalogue, CatalogueInvalide
-from portail.boucle import ErreurOutils
+from portail.boucle import (
+    _IGNORE,
+    _MAL_FORMES_MAX,
+    _MAX_APPELS_PAR_TOUR,
+    ErreurOutils,
+    _libelle,
+    _outil_mesure,
+)
 from portail.llm import ErreurLLM, FiltreReflexion, retirer_reflexion
+
+logger = logging.getLogger(__name__)
 
 CONTRAT = "v1"
 
@@ -407,3 +417,68 @@ async def modele(request: Request):
             _noter_erreur(m, e)
             return _erreur(502, "modèle indisponible")
     return {"message": _message_rendu(message)}
+
+
+def _compter(m: Mission, mal_forme: bool) -> JSONResponse | None:
+    """Trois appels mal formés de suite arrêtent la mission, comme dans `boucle_outils`."""
+    m.mal_formes = m.mal_formes + 1 if mal_forme else 0
+    if m.mal_formes < _MAL_FORMES_MAX:
+        return None
+    _noter_erreur(
+        m, ErreurOutils(f"le modèle {m.agent.modele} ne gère pas correctement les outils")
+    )
+    if m.tache is not None:
+        m.tache.cancel()
+    return _arretee()
+
+
+@ROUTEUR_INTERNE.post("/outils")
+async def outils(request: Request):
+    missions: Missions = request.app.state.missions
+    m = _mission(request)
+    if m is None:
+        return _erreur(401, "jeton de mission invalide")
+    if m.fermee or m.erreur is not None:
+        return _arretee()
+    d = await lire_corps(request, DemandeOutil)
+    async with m.verrou:
+        if m.fermee or m.erreur is not None:
+            return _arretee()
+        if isinstance(d, JSONResponse):  # demande invalide : compte comme un appel mal formé
+            if d.status_code == 422:
+                _outil_mesure(None, m.agent, "", False)
+                return _compter(m, True) or d
+            return d
+        if getattr(m.outils, "arret", False):  # une action est proposée : rien ne s'exécute
+            return {"resultat": _IGNORE, "arret": True}
+        m.appels_tour += 1
+        if m.appels_tour > _MAX_APPELS_PAR_TOUR:
+            return {"resultat": "erreur : trop d'appels dans un même tour, ignoré", "arret": False}
+        if d.nom not in m.noms:  # pas offert à cette mission, même s'il est dans agent.outils
+            resultat, mal_forme, libelle = f"erreur : outil non autorisé : {d.nom}", True, d.nom
+        else:
+            _contexte_journal(m)
+            try:
+                resultat, mal_forme = await missions.en_vol(
+                    m, m.outils.executer(d.nom, d.arguments)
+                )
+            except ErreurMission:
+                return _arretee()
+            except Exception as e:  # noqa: BLE001 (un outil qui lève ne laisse pas de requête en 500)
+                journal.erreur(logger, "outil %s en échec", d.nom)
+                _noter_erreur(m, ErreurOutils(f"outil {d.nom} en échec ({type(e).__name__})"))
+                if m.tache is not None:
+                    m.tache.cancel()
+                return _arretee()
+            libelle = _libelle(d.nom, d.arguments)
+        _outil_mesure(d.nom, m.agent, resultat, True)
+        arret = _compter(m, mal_forme)
+        try:
+            await m.sur_appel(libelle, resultat)
+        except Exception as e:  # noqa: BLE001 (l'appel n'a pas pu être enregistré : on s'arrête)
+            journal.erreur(logger, "appel d'outil non enregistré")
+            _noter_erreur(m, ErreurOutils(f"appel d'outil non enregistré ({type(e).__name__})"))
+            if m.tache is not None:
+                m.tache.cancel()
+            return _arretee()
+        return arret or {"resultat": resultat, "arret": getattr(m.outils, "arret", False)}

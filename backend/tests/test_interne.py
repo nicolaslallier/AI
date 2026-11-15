@@ -1,9 +1,12 @@
 import asyncio
 import json
+import subprocess
 
 import httpx
+import pytest
 
 from portail import journal
+from portail.boucle import _IGNORE, ErreurOutils
 from portail.config import Reglages
 from portail.llm import ClientLLM, ErreurLLM
 from portail.missions import Missions
@@ -244,3 +247,174 @@ async def test_interne_avant_le_repli_spa(moteur, tmp_path, faux_llm):
         assert rep.status_code == 401
         assert rep.json() == {"erreur": "jeton de mission invalide"}
         assert isinstance(app.state.missions, Missions)
+
+
+# --- /interne/outils ---------------------------------------------------------------------
+
+
+@pytest.fixture
+def espace(tmp_path):
+    from portail.outils import OutilsEspace
+    from tests.test_missions import CFG
+
+    (tmp_path / "README.md").write_text("# Projet\n")
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    return OutilsEspace(tmp_path, "revue", CFG, None)
+
+
+def _outil(nom_, **args):
+    return {"nom": nom_, "arguments": json.dumps(args)}
+
+
+async def test_outil_execute_et_affiche(interne, espace):
+    vus = []
+
+    async def sur_appel(libelle, resultat):
+        vus.append((libelle, resultat))
+
+    m = interne.ouvrir(_agent("revue", outils=["lister", "lire"]), espace, sur_appel=sur_appel)
+    r = await interne.post("outils", m, _outil("lire", chemin="README.md"))
+    assert r.status_code == 200
+    assert "Projet" in r.json()["resultat"] and r.json()["arret"] is False
+    assert vus == [("lire(README.md)", r.json()["resultat"])]
+
+
+async def test_outil_non_offert_refuse(interne, espace, tmp_path):
+    m = interne.ouvrir(_agent("revue", outils=["lister", "lire", "ecrire"]), espace)
+    # `ecrire` est dans agent.outils mais le rôle revue ne l'offre pas : m.schemas fait foi
+    assert "ecrire" not in m.noms
+    avant = valeur("portail_outils_appels_total", agent="revue", outil="ecrire", issue="erreur")
+    r = await interne.post("outils", m, _outil("ecrire", chemin="x.txt", contenu="x"))
+    assert r.json()["resultat"] == "erreur : outil non autorisé : ecrire"
+    assert not (tmp_path / "x.txt").exists()
+    assert (
+        valeur("portail_outils_appels_total", agent="revue", outil="ecrire", issue="erreur")
+        == avant + 1
+    )
+
+
+async def test_outil_hors_liste_etiquette_fixe(interne, espace):
+    m = interne.ouvrir(_agent("revue", outils=["lister", "lire"]), espace)
+    avant = valeur(
+        "portail_outils_appels_total", agent="revue", outil="non_autorise", issue="refuse"
+    )
+    await interne.post("outils", m, _outil("zzz-inventé"))
+    assert (
+        valeur("portail_outils_appels_total", agent="revue", outil="non_autorise", issue="refuse")
+        == avant + 1
+    )
+
+
+async def test_huit_par_tour(interne, espace):
+    vus = []
+
+    async def sur_appel(libelle, resultat):
+        vus.append(libelle)
+
+    m = interne.ouvrir(_agent("revue", outils=["lire"]), espace, sur_appel=sur_appel)
+    interne.llm.reponses = [_reponse()]
+    for _ in range(8):
+        await interne.post("outils", m, _outil("lire", chemin="README.md"))
+    r = await interne.post("outils", m, _outil("lire", chemin="README.md"))
+    assert r.json() == {
+        "resultat": "erreur : trop d'appels dans un même tour, ignoré",
+        "arret": False,
+    }
+    assert len(vus) == 8
+    await interne.post("modele", m, MSG)
+    r = await interne.post("outils", m, _outil("lire", chemin="README.md"))
+    assert "Projet" in r.json()["resultat"]
+
+
+async def test_trois_mal_formes_arretent(interne, espace):
+    m = interne.ouvrir(_agent("revue", outils=["lire"]), espace)
+    m.tache = asyncio.create_task(asyncio.Event().wait())
+    avant = valeur(
+        "portail_outils_appels_total", agent="revue", outil="non_autorise", issue="refuse"
+    )
+    codes = [(await interne.post("outils", m, _outil("zzz"))).status_code for _ in range(3)]
+    assert codes == [200, 200, 409]
+    assert isinstance(m.erreur, ErreurOutils)
+    assert (await interne.post("outils", m, _outil("lire", chemin="README.md"))).status_code == 409
+    await asyncio.sleep(0)
+    assert m.tache.cancelled()
+    assert (
+        valeur("portail_outils_appels_total", agent="revue", outil="non_autorise", issue="refuse")
+        == avant + 3
+    )
+
+
+async def test_mal_forme_puis_valide_remet_a_zero(interne, espace):
+    m = interne.ouvrir(_agent("revue", outils=["lire"]), espace)
+    for corps in (_outil("zzz"), _outil("zzz"), _outil("lire", chemin="README.md"), _outil("zzz")):
+        assert (await interne.post("outils", m, corps)).status_code == 200
+    assert m.erreur is None
+
+
+async def test_demande_invalide_compte_comme_mal_formee(interne, espace):
+    m = interne.ouvrir(_agent("revue", outils=["lire"]), espace)
+    for _ in range(2):
+        r = await interne.post("outils", m, {"nom": "lire", "args": "{}"})
+        assert (r.status_code, r.json()) == (422, {"erreur": "demande invalide"})
+    r = await interne.post("outils", m, {"inconnu": 1})
+    assert r.status_code == 409
+    assert isinstance(m.erreur, ErreurOutils)
+
+
+async def test_outil_apres_fermeture_401(interne, espace):
+    m = interne.ouvrir(_agent("revue", outils=["lire"]), espace)
+    await interne.missions.fermer(m)
+    assert (await interne.post("outils", m, _outil("lire", chemin="README.md"))).status_code == 401
+
+
+async def test_outil_en_vol_annule_par_la_fermeture(interne):
+    class Lent:
+        def schemas(self):
+            return [{"type": "function", "function": {"name": "lire"}}]
+
+        async def executer(self, nom, arguments):
+            self.demarre.set()
+            await asyncio.Event().wait()
+
+    outils = Lent()
+    outils.demarre = asyncio.Event()
+    m = interne.ouvrir(_agent("revue", outils=["lire"]), outils)
+    tache = asyncio.create_task(interne.post("outils", m, _outil("lire")))
+    await outils.demarre.wait()
+    await interne.missions.fermer(m)
+    r = await tache
+    assert (r.status_code, r.json()) == (409, {"erreur": "mission arrêtée"})
+
+
+async def test_outil_qui_leve_arrete_la_mission(interne):
+    class Casse:
+        def schemas(self):
+            return [{"type": "function", "function": {"name": "lire"}}]
+
+        async def executer(self, nom, arguments):
+            raise RuntimeError("ZZ-secret-7731")
+
+    m = interne.ouvrir(_agent("revue", outils=["lire"]), Casse())
+    r = await interne.post("outils", m, _outil("lire"))
+    assert r.status_code == 409
+    assert "ZZ-secret" not in r.text and isinstance(m.erreur, ErreurOutils)
+
+
+async def test_arret_apres_proposition(interne, sessions):
+    from portail.db import Conversation
+    from portail.outils_portail import OutilsPortail
+
+    async with sessions() as s:
+        conv = Conversation()
+        s.add(conv)
+        await s.commit()
+        cid = conv.id
+    outils = OutilsPortail(sessions, ["creer_projet", "lister_projets"], CATALOGUE_TEST, cid)
+    m = interne.ouvrir(_agent("orchestrateur", outils=["creer_projet", "lister_projets"]), outils)
+    r = await interne.post("outils", m, _outil("creer_projet", nom="A"))
+    assert r.json()["arret"] is True and r.json()["resultat"].startswith("action n°")
+    r = await interne.post("outils", m, _outil("lister_projets"))
+    assert r.json() == {"resultat": _IGNORE, "arret": True}
+    interne.llm.reponses = [_reponse()]
+    await interne.post("modele", m, {**MSG, "outils": True})
+    assert interne.llm.appels[-1]["outils"] is None
