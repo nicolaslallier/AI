@@ -17,7 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from portail import journal, metriques, resume
+from portail import bureau, journal, metriques, resume
 from portail.agents import Catalogue, charger_catalogue
 from portail.arbitre import Arbitre, LLMArbitre
 from portail.audit import auteur_de, inscrire
@@ -59,6 +59,7 @@ from portail.schemas import (
     Acceptation,
     AuditOut,
     AvisOut,
+    Bureau,
     CommandeVue,
     CommentaireVue,
     ConversationDetail,
@@ -885,6 +886,10 @@ def create_app(
         if avant is not None:
             q = q.where(Audit.id < avant)
         return (await s.scalars(q)).all()
+
+    @app.get("/api/bureau", response_model=Bureau)
+    async def lire_le_bureau(request: Request, s: Session):
+        return await bureau.lire_bureau(s, request.app.state.catalogue, datetime.now(UTC))
 
     @app.get("/api/evenements")
     async def evenements():

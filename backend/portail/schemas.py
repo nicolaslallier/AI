@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -329,3 +329,30 @@ class AuditOut(BaseModel):
     action: str
     objet: str
     objet_id: int
+
+
+class Travail(BaseModel):
+    sorte: Literal["etape", "conversation", "avis"]
+    etat: Literal["au_travail", "en_attente", "en_erreur"]
+    libelle: str  # fait d'identifiants : jamais de titre ni de texte d'erreur
+    lien: str
+    tour: int | None = None
+    jauge: Jauge | None = None
+
+
+class Poste(BaseModel):
+    nom: str
+    etat: Literal["libre", "au_travail", "en_attente", "en_erreur"]
+    travaux: list[Travail]
+    appels_jour: int = 0
+    jetons_jour: int = 0
+
+
+class Groupe(BaseModel):
+    nom: str | None  # None : agents hors pipeline
+    agents: list[str]
+
+
+class Bureau(BaseModel):
+    groupes: list[Groupe]
+    postes: dict[str, Poste]
