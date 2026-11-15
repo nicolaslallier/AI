@@ -12,6 +12,23 @@ down_revision = "0006"
 
 
 def upgrade() -> None:
+    op.add_column("document", sa.Column("version", sa.Integer, nullable=False, server_default="1"))
+    op.create_table(
+        "avis",
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column(
+            "document_id", sa.Integer, sa.ForeignKey("document.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("version", sa.Integer, nullable=False),
+        sa.Column("agent", sa.String, nullable=False),
+        sa.Column("contenu", sa.Text, nullable=False, server_default=""),
+        sa.Column("etat", sa.String, nullable=False, server_default="en_cours"),
+        sa.Column(
+            "cree_le", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+    )  # fmt: skip
+    op.create_index("ix_avis_document_id", "avis", ["document_id"])
     op.add_column(
         "execution_dev",
         sa.Column("controle_courant", sa.Integer, nullable=False, server_default="0"),
@@ -25,6 +42,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index("ix_avis_document_id", table_name="avis")
+    op.drop_table("avis")
+    op.drop_column("document", "version")
     op.execute("UPDATE execution_dev SET phase = 'revue' WHERE phase = 'controles'")
     op.drop_column("execution_dev", "fichiers_rouge")
     op.drop_column("execution_dev", "lint_base_ok")

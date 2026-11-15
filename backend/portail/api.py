@@ -2,7 +2,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Request
@@ -15,13 +15,16 @@ from sqlalchemy.orm import selectinload
 
 from portail.agents import Catalogue, charger_catalogue
 from portail.arbitre import Arbitre, LLMArbitre
+from portail.avis import ServiceAvis
 from portail.chat import Diffuseur, ServiceChat, annexes
 from portail.config import Reglages
 from portail.contexte import construire, jauge
 from portail.conversations import ServiceConversation
 from portail.db import (
+    Avis,
     CommandeLancee,
     CommentairePris,
+    Document,
     Etape,
     ExecutionDev,
     Pipeline,
@@ -47,6 +50,7 @@ from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.schemas import (
     Acceptation,
+    AvisOut,
     CommandeVue,
     CommentaireVue,
     ConversationDetail,
@@ -106,6 +110,14 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
     if pipeline is None:
         raise Refus(404, "pipeline introuvable")
     projet = await session.get(Projet, pipeline.projet_id)
+    docs = {e.document.id: e.document for e in pipeline.etapes if e.document}
+    avis_par_doc: dict[int, list[AvisOut]] = {}
+    for a in await session.scalars(
+        select(Avis).where(Avis.document_id.in_(docs), Avis.etat != "abandonne").order_by(Avis.id)
+    ):
+        vue = AvisOut.model_validate(a, from_attributes=True)
+        vue.ancienne = a.version < docs[a.document_id].version
+        avis_par_doc.setdefault(a.document_id, []).append(vue)
     etapes = []
     for e in pipeline.etapes:
         agent = catalogue.agents.get(e.agent)
@@ -122,7 +134,14 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
                     },
                     "produit": agent.produit if agent else None,
                     "messages": e.messages,
-                    "document": e.document,
+                    "document": e.document
+                    and {
+                        **{
+                            k: getattr(e.document, k)
+                            for k in ("id", "contenu", "etat", "version", "maj_le")
+                        },
+                        "avis": avis_par_doc.get(e.document.id, []),
+                    },
                     "jauge": j,
                 },
                 from_attributes=True,
@@ -345,9 +364,14 @@ def create_app(
         arbitre = Arbitre()
         interactif = LLMArbitre(app.state.llm, arbitre, "interactif")
         app.state.diffuseur = Diffuseur()
+        app.state.avis = ServiceAvis(app.state.sessions, app.state.catalogue, interactif, depots)
         app.state.chat = ServiceChat(
-            app.state.sessions, app.state.catalogue, interactif, app.state.diffuseur, depots
-        )
+            app.state.sessions, app.state.catalogue, interactif, app.state.diffuseur, depots,
+            app.state.avis,
+        )  # fmt: skip
+        async with app.state.sessions() as s:
+            await app.state.avis.recuperer_interrompues(s)
+            await s.commit()
 
         async def annuler_tache(tache_id: int) -> None:
             async with app.state.sessions() as s:
@@ -381,7 +405,11 @@ def create_app(
                 asyncio.create_task(suivi.tourner()),
             ]
         yield
-        taches = [*app.state.chat.taches.values(), *app.state.conversations.taches.values()]
+        taches = [
+            *app.state.chat.taches.values(),
+            *app.state.conversations.taches.values(),
+            *app.state.avis.taches.values(),
+        ]
         if orch:
             taches += [*boucles, *orch.taches.values()]
         for t in taches:
@@ -638,6 +666,30 @@ def create_app(
     @app.put("/api/etapes/{etape_id}/document", response_model=DocumentOut)
     async def corriger_document(etape_id: int, corps: DocumentIn, request: Request):
         return await request.app.state.chat.corriger(etape_id, corps.contenu)
+
+    @app.post("/api/documents/{document_id}/avis", status_code=202)
+    async def relancer_avis(document_id: int, request: Request, s: Session):
+        doc = await s.get(Document, document_id)
+        if doc is None:
+            raise Refus(404, "document introuvable")
+        if doc.etat != "brouillon":
+            raise Refus(409, "document déjà validé")
+        await request.app.state.avis.lancer(document_id)
+
+    class AvisPatch(BaseModel):
+        etat: Literal["pris_en_compte", "ecarte", "ouvert"]
+
+    @app.patch("/api/avis/{avis_id}", response_model=AvisOut)
+    async def trier_avis(avis_id: int, corps: AvisPatch, s: Session):
+        avis = await s.get(Avis, avis_id)
+        if avis is None:
+            raise Refus(404, "avis introuvable")
+        avis.etat = corps.etat
+        doc = await s.get(Document, avis.document_id)
+        await s.commit()
+        return AvisOut.model_validate(avis, from_attributes=True).model_copy(
+            update={"ancienne": avis.version < doc.version}
+        )
 
     @app.post("/api/etapes/{etape_id}/valider", response_model=PipelineDetail)
     async def valider(etape_id: int, request: Request, s: Session):

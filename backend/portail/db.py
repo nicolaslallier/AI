@@ -141,9 +141,25 @@ class Document(Base):
     dernier_message_id: Mapped[int | None] = mapped_column(
         ForeignKey("message.id", ondelete="SET NULL")
     )
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     maj_le: Mapped[datetime] = _horodatage(onupdate=func.now())
 
     etape: Mapped[Etape] = relationship(back_populates="document")
+
+
+class Avis(Base):
+    __tablename__ = "avis"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("document.id", ondelete="CASCADE"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer)  # version du document lue par l'agent
+    agent: Mapped[str] = mapped_column(String)
+    contenu: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # en_cours | ouvert | pris_en_compte | ecarte | abandonne
+    etat: Mapped[str] = mapped_column(String, default="en_cours", server_default="en_cours")
+    cree_le: Mapped[datetime] = _horodatage()
 
 
 class Tache(Base):

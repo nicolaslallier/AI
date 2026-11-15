@@ -132,11 +132,22 @@ class ConversationPatch(BaseModel):
     titre: str = Field(max_length=200)
 
 
+class AvisOut(BaseModel):
+    id: int
+    agent: str
+    contenu: str
+    etat: str
+    version: int
+    ancienne: bool = False
+
+
 class DocumentOut(BaseModel):
     id: int
     contenu: str
     etat: str
+    version: int
     maj_le: datetime
+    avis: list[AvisOut] = []
 
 
 class EtapeOut(BaseModel):
