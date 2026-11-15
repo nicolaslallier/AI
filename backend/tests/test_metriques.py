@@ -8,7 +8,8 @@ from httpx import ASGITransport, AsyncClient
 
 from portail.api import _flux, create_app
 from portail.config import Reglages
-from portail.db import ExecutionDev, Pipeline, Projet, Tache
+from portail.db import Etape, ExecutionDev, Pipeline, Projet, Tache
+from portail.etats import ANNULE, REPRISE_ABANDONNEE
 from portail.metriques import BASE_JOIGNABLE, rafraichir
 from tests.conftest import CATALOGUE_TEST, URL, FauxLLM, valeur
 
@@ -250,6 +251,30 @@ async def test_collecte_age_et_echecs_consecutifs(moteur, sessions, tmp_path):
     )
     assert 10_800 <= age < 11_400
     assert "portail_base_joignable 1.0" in texte
+
+
+async def test_annulations_et_reprises_abandonnees_ne_comptent_pas_comme_echecs(
+    moteur, sessions, tmp_path
+):
+    maintenant = datetime.now(UTC)
+    async with sessions() as s, s.begin():
+        p = Projet(nom="p")
+        s.add(p)
+        await s.flush()
+        erreurs = ["boom", ANNULE, REPRISE_ABANDONNEE, ANNULE]  # du plus ancien au plus récent
+        for i, erreur in enumerate(erreurs):
+            pl = Pipeline(
+                projet_id=p.id,
+                type="dev",
+                etat="echouee",
+                maj_le=maintenant - timedelta(hours=9 - i),
+            )
+            s.add(pl)
+            await s.flush()
+            s.add(Etape(pipeline_id=pl.id, ordre=0, agent="portail", action="x",
+                        etat="echouee", erreur=erreur))  # fmt: skip
+    texte = await _metrics(await _client(tmp_path))
+    assert "portail_echecs_dev_consecutifs 1.0" in texte  # seul « boom » est un vrai échec
 
 
 async def test_collecte_base_injoignable():

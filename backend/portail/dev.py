@@ -40,7 +40,7 @@ from portail.db import (
 )
 from portail.depots import ErreurDepot, git
 from portail.espace import BASE_FUSIONNEE, Espace
-from portail.etats import Etat
+from portail.etats import ANNULE, REPRISE_ABANDONNEE, Etat
 from portail.execution import (
     ConfigExecution,
     commande,
@@ -319,7 +319,7 @@ class Orchestrateur:
             session.add(
                 Etape(
                     pipeline_id=pipeline.id, ordre=0, agent="portail", action="preparation",
-                    etat=Etat.ECHOUEE, erreur="tâche déplacée avant la reprise",
+                    etat=Etat.ECHOUEE, erreur=REPRISE_ABANDONNEE,
                 )
             )  # fmt: skip
             pipeline.etat, pipeline.maj_le = Etat.ECHOUEE, self._horloge()
@@ -375,7 +375,7 @@ class Orchestrateur:
             await s.execute(
                 update(Etape)
                 .where(Etape.pipeline_id == pipeline_id, Etape.etat == Etat.EN_COURS)
-                .values(etat=Etat.ECHOUEE, erreur="annulé")
+                .values(etat=Etat.ECHOUEE, erreur=ANNULE)
             )
             await s.execute(
                 update(Pipeline)

@@ -5,12 +5,12 @@ import logging
 from datetime import UTC, datetime
 
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 
 from portail import journal
 from portail.config import Reglages
-from portail.db import ExecutionDev, Pipeline, Tache
-from portail.etats import Etat
+from portail.db import Etape, ExecutionDev, Pipeline, Tache
+from portail.etats import ANNULE, REPRISE_ABANDONNEE, Etat
 from portail.schemas import COLONNES
 
 logger = logging.getLogger(__name__)
@@ -92,7 +92,13 @@ async def _lire(sessions):
         )
         derniers = (await s.scalars(
             select(Pipeline.etat)
-            .where(Pipeline.type == "dev", Pipeline.etat.in_((Etat.TERMINEE, Etat.ECHOUEE)))
+            .where(
+                Pipeline.type == "dev",
+                Pipeline.etat.in_((Etat.TERMINEE, Etat.ECHOUEE)),
+                ~exists().where(  # annulation ou reprise abandonnée : pas un échec du code
+                    Etape.pipeline_id == Pipeline.id, Etape.erreur.in_((ANNULE, REPRISE_ABANDONNEE))
+                ),
+            )
             .order_by(Pipeline.maj_le.desc(), Pipeline.id.desc())
             .limit(10)
         )).all()  # fmt: skip

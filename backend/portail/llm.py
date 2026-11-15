@@ -95,37 +95,45 @@ class ClientLLM:
             corps["temperature"] = temperature
         debut, usage = time.monotonic(), None
         try:
-            async with (
-                httpx.AsyncClient(
-                    timeout=httpx.Timeout(300, connect=10), transport=self._transport
-                ) as client,
-                client.stream(
-                    "POST",
-                    f"{self._url}/v1/chat/completions",
-                    json=corps,
-                    headers={"Authorization": f"Bearer {self._cle}"} if self._cle else {},
-                ) as reponse,
-            ):
-                if not reponse.is_success:
-                    extrait = (await reponse.aread()).decode(errors="replace")[:300]
-                    raise ErreurLLM(f"LiteLLM a répondu {reponse.status_code} : {extrait}")
-                async for ligne in reponse.aiter_lines():
-                    if not ligne.startswith("data: "):
+            for essai in (1, 2):
+                async with (
+                    httpx.AsyncClient(
+                        timeout=httpx.Timeout(300, connect=10), transport=self._transport
+                    ) as client,
+                    client.stream(
+                        "POST",
+                        f"{self._url}/v1/chat/completions",
+                        json=corps,
+                        headers={"Authorization": f"Bearer {self._cle}"} if self._cle else {},
+                    ) as reponse,
+                ):
+                    if reponse.status_code == 400 and essai == 1:
+                        del corps["stream_options"]  # LiteLLM sans usage en flux : on s'en passe
                         continue
-                    donnees = ligne[6:].strip()
-                    if donnees == "[DONE]":
-                        await self._noter(modele, "ok", usage, debut)
-                        return
-                    try:
-                        morceau = json.loads(donnees)
-                        usage = morceau.get("usage") or usage
-                        choix = morceau.get("choices")  # absent sur le morceau d'usage de certains
-                        contenu = choix[0]["delta"].get("content") if choix else None
-                    except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
-                        raise ErreurLLM(f"Réponse de LiteLLM illisible : {donnees[:200]}") from e
-                    if contenu:
-                        yield contenu
-                raise ErreurLLM("flux interrompu")
+                    if not reponse.is_success:
+                        extrait = (await reponse.aread()).decode(errors="replace")[:300]
+                        raise ErreurLLM(f"LiteLLM a répondu {reponse.status_code} : {extrait}")
+                    async for ligne in reponse.aiter_lines():
+                        if not ligne.startswith("data: "):
+                            continue
+                        donnees = ligne[6:].strip()
+                        if donnees == "[DONE]":
+                            await self._noter(modele, "ok", usage, debut)
+                            return
+                        try:
+                            morceau = json.loads(donnees)
+                            if "error" in morceau:  # message fixe : jamais le texte amont
+                                raise ErreurLLM("LiteLLM a renvoyé une erreur dans le flux")
+                            usage = morceau.get("usage") or usage
+                            choix = morceau.get("choices")  # absent sur le morceau d'usage
+                            contenu = choix[0]["delta"].get("content") if choix else None
+                        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
+                            raise ErreurLLM(
+                                f"Réponse de LiteLLM illisible : {donnees[:200]}"
+                            ) from e
+                        if contenu:
+                            yield contenu
+                    raise ErreurLLM("flux interrompu")
         except httpx.TimeoutException as e:
             await self._noter(modele, "delai", None, debut)
             raise ErreurLLM(f"LiteLLM : délai dépassé ({e.__class__.__name__})") from e

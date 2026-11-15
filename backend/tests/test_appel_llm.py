@@ -92,6 +92,34 @@ async def test_flux_demande_l_usage(sessions):
     assert (ligne.jetons_entree, ligne.jetons_sortie, ligne.issue) == (10, 5, "ok")
 
 
+async def test_flux_morceau_d_erreur_leve_sans_le_texte_amont(sessions):
+    texte = 'data: {"error": {"message": "contenu secret"}}\n\ndata: [DONE]\n\n'
+    client = _client(lambda r: httpx.Response(200, text=texte), sessions)
+    with pytest.raises(ErreurLLM) as e:
+        [m async for m in client.flux("m", MSG, None)]
+    assert "secret" not in str(e.value)
+    (ligne,) = await _lignes(sessions)
+    assert ligne.issue == "erreur"
+
+
+async def test_flux_reessaie_sans_stream_options_sur_400(sessions):
+    corps = []
+
+    def handler(requete: httpx.Request) -> httpx.Response:
+        corps.append(json.loads(requete.content))
+        if "stream_options" in corps[-1]:
+            return httpx.Response(400, text="stream_options non géré")
+        return httpx.Response(
+            200, text='data: {"choices": [{"delta": {"content": "ok"}}]}\n\ndata: [DONE]\n\n'
+        )
+
+    texte = "".join([m async for m in _client(handler, sessions).flux("m", MSG, None)])
+    assert texte == "ok"
+    assert len(corps) == 2
+    (ligne,) = await _lignes(sessions)  # une seule inscription, sans jetons
+    assert (ligne.jetons_entree, ligne.jetons_sortie, ligne.issue) == (None, None, "ok")
+
+
 @pytest.mark.parametrize(
     ("handler", "issue"),
     [
