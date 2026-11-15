@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from asgi_lifespan import LifespanManager
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine, text
 
@@ -18,6 +19,7 @@ from portail.config import Reglages
 from portail.db import Base, creer_moteur, fabrique_sessions
 from portail.github import CommentaireGitHub
 from portail.lanceur import Resultat
+from portail.missions import ROUTEUR_INTERNE, Missions
 
 URL = os.environ.get(
     "PORTAIL_TEST_DATABASE_URL", "postgresql+psycopg://portail:portail@localhost:5433/portail_test"
@@ -147,6 +149,41 @@ async def client(moteur, reglages, faux_llm):
         AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
     ):
         yield c
+
+
+# --- routes /interne/ ----------------------------------------------------
+
+
+class Interne:
+    """Une `FastAPI` nue avec les routes `/interne/`, sans base ni lifespan."""
+
+    def __init__(self, faux_llm):
+        self.llm = faux_llm
+        self.missions = Missions({}, 60)
+        app = FastAPI()
+        app.state.missions = self.missions
+        app.include_router(ROUTEUR_INTERNE)
+        self.client = AsyncClient(transport=ASGITransport(app), base_url="http://t")
+
+    def ouvrir(self, agent=None, outils=None, llm=None, sur_appel=None, version="v0"):
+        async def rien(libelle, resultat):
+            return None
+
+        return self.missions.ouvrir(
+            llm or self.llm, agent or _agent("revue"), outils, sur_appel or rien, version
+        )
+
+    async def post(self, chemin, m, corps, **kw):
+        return await self.client.post(
+            f"/interne/{chemin}", json=corps, headers={"Authorization": f"Bearer {m.jeton}"}, **kw
+        )
+
+
+@pytest_asyncio.fixture
+async def interne(faux_llm):
+    i = Interne(faux_llm)
+    yield i
+    await i.client.aclose()
 
 
 # --- dépôt -------------------------------------------------------------

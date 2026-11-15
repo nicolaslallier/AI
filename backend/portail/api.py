@@ -51,6 +51,7 @@ from portail.execution import lire_config
 from portail.github import ErreurGitHub, GitHubApp
 from portail.lanceur import ClientLanceur
 from portail.llm import ClientLLM
+from portail.missions import ROUTEUR_INTERNE, Missions
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
 from portail.notifications import Notifieur
 from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
@@ -391,6 +392,7 @@ def create_app(
     llm: ClientLLM | None = None,
     catalogue: Catalogue | None = None,
     orchestrateur: Orchestrateur | None = None,
+    missions: Missions | None = None,
 ) -> FastAPI:
     r = reglages or Reglages()
 
@@ -399,6 +401,7 @@ def create_app(
         app.state.reglages = r
         metriques.initialiser(r)
         app.state.catalogue = catalogue or charger_catalogue(r.agents_fichier)
+        app.state.missions = missions or Missions({}, r.duree_mission_s)
         moteur = creer_moteur(r.database_url)
         app.state.sessions = fabrique_sessions(moteur)
         app.state.llm = llm or ClientLLM(
@@ -904,6 +907,9 @@ def create_app(
     async def metrics(request: Request):
         await metriques.rafraichir(request.app.state.sessions)
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    # Avant le repli SPA ; hors /api/ : le jeton de mission remplace l'en-tête d'utilisateur.
+    app.include_router(ROUTEUR_INTERNE)
 
     if r.static_dir:
         racine = r.static_dir.resolve()
