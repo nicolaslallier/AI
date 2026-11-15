@@ -138,6 +138,13 @@ def _texte_tache(t: Tache) -> str:
     return "\n\n".join(blocs)
 
 
+def _texte_reponse(c: CommentairePris, court: str | None) -> str:
+    """`court` : SHA court du push, None si rien n'a été poussé."""
+    if c.tri == "reponse":
+        return c.consigne
+    return f"Fait dans {court} : {c.consigne}" if court else f"Aucun changement fait : {c.consigne}"
+
+
 def _citer(pris: list[CommentairePris], champs: list[str]) -> str:
     """Commentaires de Nicolas en annexe : des données citées, jamais des instructions."""
     cites = [{k: getattr(c, k) for k in champs} for c in pris]
@@ -657,27 +664,30 @@ class Orchestrateur:
             await ctx.espace.pousser(jeton, ctx.ex.branche)
         court = commits[-1][:7] if commits else None
         pris = [c for c in await self._commentaires(ctx) if c.repondu_le is None]
-        textes = {
-            c.id: c.consigne if c.tri == "reponse" else f"Fait dans {court} : {c.consigne}"
-            if court else f"Aucun changement fait : {c.consigne}"
-            for c in pris
-        }  # fmt: skip
         pr = ctx.ex.pr_numero
-        try:  # au mieux : un commentaire sans réponse n'est pas relancé
-            for c in (c for c in pris if c.type == "ligne"):
-                await self._github.repondre_ligne(ctx.depot, pr, c.github_id, textes[c.id])
+        # au mieux, commentaire par commentaire : celui qui échoue reste sans `repondu_le`
+        for c in (c for c in pris if c.type == "ligne"):
+            try:
+                await self._github.repondre_ligne(
+                    ctx.depot, pr, c.github_id, _texte_reponse(c, court)
+                )
                 await self._repondu([c.id])
-            autres = [c for c in pris if c.type != "ligne"]
-            blocs = [
-                "> " + c.texte[:200].replace("\n", "\n> ") + "\n\n" + textes[c.id] for c in autres
-            ]
-            if ctx.ex.remarques and pris:
-                blocs.append(_liste("Remarques non résolues de la revue :", ctx.ex.remarques))
-            if blocs:
+            except ErreurGitHub as e:
+                logger.warning("reprise %s : réponse impossible (%s)", ctx.pipeline_id, e)
+        autres = [c for c in pris if c.type != "ligne"]
+        blocs = [
+            "> " + c.texte[:200].replace("\n", "\n> ") + "\n\n" + _texte_reponse(c, court)
+            for c in autres
+        ]
+        if ctx.ex.remarques and pris:
+            blocs.append(_liste("Remarques non résolues de la revue :", ctx.ex.remarques))
+        if blocs:
+            try:
                 await self._github.commenter(ctx.depot, pr, "\n\n".join(blocs))
+                # ponytail: un redémarrage entre `commenter` et `_repondu` reposte ce commentaire
                 await self._repondu([c.id for c in autres])
-        except ErreurGitHub as e:
-            logger.warning("reprise %s : réponse impossible (%s)", ctx.pipeline_id, e)
+            except ErreurGitHub as e:
+                logger.warning("reprise %s : commentaire impossible (%s)", ctx.pipeline_id, e)
         await self._terminer(ctx)
         await self._au_mieux(
             "notifier", self.notifier(ctx.tache.titre, "Reprise terminée", ctx.ex.pr_url)

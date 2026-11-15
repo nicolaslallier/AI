@@ -222,7 +222,7 @@ class ExecutionDev(Base):
     base: Mapped[str] = mapped_column(String)  # branche de référence résolue
     base_sha: Mapped[str] = mapped_column(String)
     # preparation | tests | rouge | code | verification | revue | pr | fini
-    # (reprise : attente | tri | reponses)
+    # (reprise : attente | preparation | tri | tests | code | verification | revue | reponses | fini)
     phase: Mapped[str] = mapped_column(String)
     renvois: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     interruptions: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

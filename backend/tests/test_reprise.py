@@ -496,3 +496,30 @@ async def test_reponse_github_en_panne_termine_quand_meme(monde):
     _ex, tache, pipeline = await monde.etat(pid)
     assert (tache.colonne, tache.verrou, pipeline.etat) == ("en_revue", pid, "terminee")
     assert [c.repondu_le for c in await pris(monde)] == [None]
+
+
+async def test_une_reponse_en_echec_n_arrete_pas_les_autres(monde):
+    await en_revue(monde)
+
+    async def une_sur_deux(numero, cid, texte_):
+        if cid == 10:
+            raise ErreurGitHub("commentaire supprimé", 404)
+        monde.github.reponses.append((numero, cid, texte_))
+
+    async def repondre(_depot, numero, cid, texte_):
+        await une_sur_deux(numero, cid, texte_)
+
+    monde.github.repondre_ligne = repondre
+    monde.llm.reponses = [tri((1, "reponse", "a"), (2, "reponse", "b"), (3, "reponse", "c"))]
+    lot = [
+        commentaire("ligne", 10, chemin="src/x.py", ligne=1),
+        commentaire("ligne", 11, chemin="src/x.py", ligne=1),
+        commentaire("revue", 12, texte="Vu"),
+    ]
+    pid = await reprendre(monde, lot)
+    _ex, _tache, pipeline = await monde.etat(pid)
+    assert pipeline.etat == "terminee"
+    assert [(c, t) for _n, c, t in monde.github.reponses] == [(11, "b")]
+    ((_n, corps),) = monde.github.commentaires
+    assert "> Vu" in corps and "c" in corps
+    assert [c.repondu_le is not None for c in await pris(monde)] == [False, True, True]
