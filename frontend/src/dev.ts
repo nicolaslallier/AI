@@ -11,3 +11,8 @@ export function numeroPr(url: string): string {
 
 // Un pr_url vient de la base : on ne le rend en lien que s'il pointe vers GitHub.
 export const lienPrSur = (url: string | null): url is string => !!url && url.startsWith('https://github.com/')
+
+export const extrait = (texte: string, max = 280): string => (texte.length > max ? `${texte.slice(0, max)}…` : texte)
+
+export const emplacement = (c: { type: string; chemin: string | null; ligne: number | null }): string =>
+  c.chemin ? (c.ligne ? `${c.chemin}:${c.ligne}` : c.chemin) : c.type === 'revue' ? 'revue' : 'conversation'

@@ -5,7 +5,7 @@ import {
   type PipelineDetail, type Proposition,
 } from '../api'
 import { ecouterFlux } from '../flux'
-import { duree, lienPrSur, numeroPr } from '../dev'
+import { duree, emplacement, extrait, lienPrSur, numeroPr } from '../dev'
 import EtatBadge from '../components/EtatBadge.vue'
 import ChatEtape from '../components/ChatEtape.vue'
 import EditeurDocument from '../components/EditeurDocument.vue'
@@ -117,6 +117,20 @@ onBeforeUnmount(() => {
         numeroPr(pipeline.execution.pr_url)
       }}</a>
     </p>
+    <section v-if="pipeline.execution?.mode === 'reprise'" class="carte pile">
+      <h2>Commentaires pris en charge</h2>
+      <article v-for="c in pipeline.commentaires" :key="c.id" class="pile">
+        <div class="rangee">
+          <strong>{{ c.auteur }}</strong>
+          <code>{{ emplacement(c) }}</code>
+          <span v-if="c.tri" class="badge">{{ c.tri }}</span>
+          <span v-if="c.repondu_le" class="badge">répondu</span>
+          <a v-if="lienPrSur(c.url)" :href="c.url" target="_blank" rel="noopener noreferrer">voir sur GitHub</a>
+        </div>
+        <pre>{{ extrait(c.texte) }}</pre>
+        <p v-if="c.consigne" class="discret">Consigne : {{ c.consigne }}</p>
+      </article>
+    </section>
     <section v-for="(e, i) in pipeline.etapes" :key="e.id" class="carte pile">
       <div class="titre">
         <h2>{{ i + 1 }}. {{ e.agent }}</h2>

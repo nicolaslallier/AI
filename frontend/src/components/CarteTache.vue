@@ -29,6 +29,7 @@ function choisir(e: Event) {
     <strong><span class="discret">#{{ tache.id }}</span> {{ tache.titre }}</strong>
     <div>
       <span v-if="tache.verrou !== null" class="badge">🔒 pipeline {{ tache.verrou }}</span>
+      <span v-if="tache.reprise" class="badge">🔁 reprise en cours</span>
       <span v-if="tache.protegee" class="badge">✋ protégée</span>
     </div>
     <div v-if="lienPrSur(tache.pr_url)">

@@ -57,6 +57,7 @@ export interface Tache {
   dependances_non_terminees: number[]
   pr_url: string | null
   resume_blocage: string | null
+  reprise: boolean
 }
 export interface DonneesTache {
   titre: string
@@ -113,8 +114,21 @@ export interface PipelineDetail {
   etat: string
   maj_le: string
   etapes: Etape[]
-  execution: { branche: string; phase: string; renvois: number; pr_url: string | null } | null
+  execution: { branche: string; phase: string; renvois: number; pr_url: string | null; mode: string } | null
   commandes: Commande[]
+  commentaires: CommentairePris[]
+}
+export interface CommentairePris {
+  id: number
+  type: string
+  auteur: string
+  texte: string
+  url: string
+  chemin: string | null
+  ligne: number | null
+  tri: string | null
+  consigne: string | null
+  repondu_le: string | null
 }
 export interface Commande {
   etape_id: number
