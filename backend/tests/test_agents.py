@@ -546,8 +546,8 @@ def test_agents_yaml_sortie_max_et_temperature_du_bureau_d_architectes():
     for nom in cat.pipelines["architecture"]:
         a = cat.agents[nom]
         assert a.sortie_max == 16000
-        if a.modele == "cloud-openai":
-            assert a.temperature is None
+        if a.modele in ("cloud-openai", "cloud-anthropic"):
+            assert a.temperature is None, nom
     assert cat.agents["orchestrateur"].sortie_max is None
 
 
@@ -561,9 +561,12 @@ def test_sortie_max_doit_etre_positive():
 def test_agent_effectif():
     from conftest import _agent
 
-    cat = Catalogue(modeles_permis=["m", "g"], agents={"spec": _agent("spec")}, pipelines={})
-    assert agent_effectif(cat, "spec", None).modele == "m"
-    assert agent_effectif(cat, "spec", "g").modele == "g"
+    spec = _agent("spec").model_copy(update={"temperature": 0.3})
+    cat = Catalogue(modeles_permis=["m", "g"], agents={"spec": spec}, pipelines={})
+    assert agent_effectif(cat, "spec", None).temperature == 0.3
+    assert agent_effectif(cat, "spec", "m").temperature == 0.3
+    autre = agent_effectif(cat, "spec", "g")
+    assert (autre.modele, autre.temperature) == ("g", None)  # cloud-anthropic refuse la température
     assert cat.agents["spec"].modele == "m"  # le catalogue n'est pas modifié
     assert agent_effectif(cat, "spec", "retire").modele == "m"  # retiré d'agents.yaml : repli
     assert agent_effectif(cat, "absent", "g") is None
