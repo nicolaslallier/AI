@@ -68,7 +68,9 @@ class Agent(BaseModel):
     modele_si_meme: str | None = None
     consigne_avis: str | None = None
     # adresse du conteneur de l'agent sur le réseau portail-agents ; absent : l'agent tourne dans le portail
-    service: str | None = Field(default=None, pattern=r"^http://[a-z0-9-]+:[0-9]+$")
+    service: str | None = Field(
+        default=None, pattern=r"^http://agent-[a-z][a-z0-9-]{0,40}:[0-9]{1,5}$"
+    )
 
     @model_validator(mode="after")
     def _coherent(self):

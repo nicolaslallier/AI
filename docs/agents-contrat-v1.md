@@ -6,6 +6,10 @@ Les exemples de chaque message sont dans `docs/agents-contrat-v1.json` ; la bibl
 
 Le portail autorise, l'agent raisonne. Le portail garde le modèle, la température, les schémas d'outils offerts, les compteurs, les limites et la fin de la mission. L'agent ne choisit que le contenu de ses messages, s'il veut offrir les outils, le format de réponse et le flux, puis le nom et les arguments des outils qu'il appelle. Toute demande venue d'un agent est refusée si elle porte un champ inconnu (422).
 
+## Messages
+
+Un message (`MessageLLM`) a pour champs `role` (`system`, `user`, `assistant`, `tool`), `content` (texte ou nul), et, facultatifs, `tool_calls` (liste, 64 au plus), `tool_call_id` et `name`. Tout autre champ est refusé (422). Bornes : 2000 messages par demande, 500 000 caractères par `content`, 128 caractères pour le nom d'un outil, 200 000 pour ses arguments. Le portail mesure le contexte sur la taille du message entier (JSON), pas sur `content` seul, et il ne rend à l'agent que `role`, `content` et `tool_calls`.
+
 ## `POST /missions` (portail vers agent)
 
 - En-tête `Authorization: Bearer <secret de l'agent>`. Corps : `DemandeMission` (exemple `mission`).
@@ -24,11 +28,11 @@ En-tête `Authorization: Bearer <jeton de mission>`.
 - `/interne/modele` : corps `DemandeModele`, réponse `ReponseModele`.
 - `/interne/outils` : corps `DemandeOutil`, réponse `ReponseOutil` ; `arret` demande à l'agent de conclure.
 - Codes : 401 jeton invalide ou expiré, 409 mission arrêtée, 413 contexte dépassé, 422 demande invalide, 429 limite d'appels au modèle, 502 modèle indisponible.
-- Corps d'erreur : `{"erreur": "<texte fixe>"}`. Le texte ne reprend jamais un contenu venu de l'agent ou du modèle.
+- Corps d'erreur : `ReponseErreur`, `{"erreur": "<texte fixe>"}`. Le texte ne reprend jamais un contenu venu de l'agent ou du modèle.
 
 ### Option `flux` de `/interne/modele`
 
-Permise seulement avec `outils: false`. La réponse est en lignes JSON : `{"type": "texte", "texte"}` zéro ou plusieurs fois, puis `{"type": "fin", "message": {"role": "assistant", "content"}}` ou `{"type": "erreur", "erreur"}`.
+Permise seulement avec `outils: false`. Les lignes sont distinctes de celles de `/missions` (modèles `LigneFluxTexte`, `LigneFluxFin`, `LigneErreur`). La réponse est en lignes JSON : `{"type": "texte", "texte"}` zéro ou plusieurs fois, puis `{"type": "fin", "message": {"role": "assistant", "content"}}` ou `{"type": "erreur", "erreur"}`.
 
 ## Limites tenues par le portail
 

@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,7 +33,9 @@ class Reglages(BaseSettings):
     resume_heure: str = "07:00"  # HH:MM à Toronto ; "" désactive le résumé du matin
     delai_commentaires_s: int = 600
     version: str = ""  # PORTAIL_VERSION : tag de l'image déployée
-    duree_mission_s: int = 3600  # PORTAIL_DUREE_MISSION_S : durée de vie d'une mission en conteneur
+    duree_mission_s: int = Field(
+        default=3600, gt=0
+    )  # PORTAIL_DUREE_MISSION_S : durée de vie d'une mission en conteneur
     deploye_le: int = 0  # PORTAIL_DEPLOYE_LE : secondes Unix du déploiement
 
     @field_validator("resume_heure")

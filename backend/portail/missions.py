@@ -26,10 +26,18 @@ class _Forbid(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class MessageLLM(BaseModel):
-    model_config = ConfigDict(extra="allow")
+MESSAGES_MAX = 2000
+CONTENU_MAX = 500_000
+
+
+class MessageLLM(_Forbid):
+    """Un message de la conversation : champs explicites, rien d'inventé ne passe au modèle."""
+
     role: Literal["system", "user", "assistant", "tool"]
-    content: str | None = None
+    content: str | None = Field(default=None, max_length=CONTENU_MAX)
+    tool_calls: list[dict] | None = Field(default=None, max_length=64)
+    tool_call_id: str | None = Field(default=None, max_length=200)
+    name: str | None = Field(default=None, max_length=200)
 
 
 class ParametresAgent(BaseModel):
@@ -45,8 +53,8 @@ class DemandeMission(BaseModel):
     contrat: Literal["v1"]
     mission: str
     agent: str
-    jeton: str
-    messages: list[MessageLLM]
+    jeton: str = Field(repr=False)
+    messages: list[MessageLLM] = Field(max_length=MESSAGES_MAX)
     outils: list[dict]
     parametres: ParametresAgent
     response_format: dict | None = None
@@ -61,7 +69,7 @@ class LigneTexte(BaseModel):
 class LigneFin(BaseModel):
     type: Literal["fin"]
     texte: str
-    messages: list[MessageLLM]
+    messages: list[MessageLLM] = Field(max_length=MESSAGES_MAX)
     limite_atteinte: bool
 
 
@@ -73,8 +81,27 @@ class LigneErreur(BaseModel):
 LigneMission = Annotated[LigneTexte | LigneFin | LigneErreur, Field(discriminator="type")]
 
 
+class LigneFluxTexte(BaseModel):
+    type: Literal["texte"]
+    texte: str
+
+
+class LigneFluxFin(BaseModel):
+    type: Literal["fin"]
+    message: MessageLLM
+
+
+LigneFluxMission = Annotated[
+    LigneFluxTexte | LigneFluxFin | LigneErreur, Field(discriminator="type")
+]
+
+
+class ReponseErreur(BaseModel):
+    erreur: str
+
+
 class DemandeModele(_Forbid):
-    messages: list[MessageLLM]
+    messages: list[MessageLLM] = Field(max_length=MESSAGES_MAX)
     outils: bool = False
     response_format: dict | None = None
     flux: bool = False
@@ -85,8 +112,8 @@ class ReponseModele(BaseModel):
 
 
 class DemandeOutil(_Forbid):
-    nom: str
-    arguments: str  # JSON en chaîne, comme OpenAI
+    nom: str = Field(max_length=128)
+    arguments: str = Field(max_length=200_000)  # JSON en chaîne, comme OpenAI
 
 
 class ReponseOutil(BaseModel):
@@ -104,10 +131,10 @@ class ErreurMission(ErreurOutils):
     """Mission qui ne se termine pas proprement (agent injoignable, contrat, flux coupé, durée)."""
 
 
-@dataclass
+@dataclass(eq=False)
 class Mission:
     id: str
-    jeton: str
+    jeton: str = field(repr=False)
     agent: Agent
     llm: object
     outils: object | None
@@ -120,6 +147,7 @@ class Mission:
     appels_tour: int = 0
     mal_formes: int = 0
     limite_atteinte: bool = False
+    fermee: bool = False
     erreur: Exception | None = None
     tache: asyncio.Task | None = None  # lecture du flux de l'agent
     verrou: asyncio.Lock = field(default_factory=asyncio.Lock)  # une demande /interne/ à la fois
@@ -149,6 +177,7 @@ class Missions:
         self._en_cours: list[Mission] = []
 
     def ouvrir(self, llm, agent: Agent, outils, sur_appel, version: str) -> Mission:
+        self._en_cours = [x for x in self._en_cours if self.horloge() <= x.echeance]
         contexte = dict(journal.contexte.get())
         offerts = {s["function"]["name"]: s for s in outils.schemas()} if outils else {}
         m = Mission(
@@ -179,6 +208,7 @@ class Missions:
         return trouvee
 
     async def fermer(self, m: Mission) -> None:
+        m.fermee = True  # avant d'annuler : plus aucun appel ne peut démarrer
         if m in self._en_cours:
             self._en_cours.remove(m)
         taches = list(m.en_vol)
@@ -187,20 +217,36 @@ class Missions:
         await asyncio.gather(*taches, return_exceptions=True)
 
     async def en_vol[T](self, m: Mission, attente: Awaitable[T]) -> T:
+        """Exécute un appel comme tâche de la mission : annulé à sa fermeture, refusé après."""
+        if m.fermee:
+            if hasattr(attente, "close"):
+                attente.close()  # coroutine jamais démarrée
+            raise ErreurMission("mission arrêtée")
         tache = asyncio.ensure_future(attente)
         m.en_vol.add(tache)
         tache.add_done_callback(m.en_vol.discard)
-        return await tache
+        try:
+            return await tache
+        except asyncio.CancelledError:
+            # annulé par `fermer`, pas la requête elle-même : l'appelant apprend l'arrêt
+            if m.fermee and asyncio.current_task().cancelling() == 0:
+                raise ErreurMission("mission arrêtée") from None
+            raise
 
 
 def lire_secrets(catalogue: Catalogue, environ: Mapping[str, str]) -> dict[str, str]:
     """Le secret de chaque agent à `service:` ; le message nomme la variable, jamais la valeur."""
-    resultat = {}
+    resultat, variables = {}, set()
     for nom, agent in catalogue.agents.items():
         if agent.service is None:
             continue
         variable = "PORTAIL_AGENT_SECRET_" + nom.upper().replace("-", "_")
-        valeur = environ.get(variable, "")
+        if variable in variables:
+            raise CatalogueInvalide(
+                f"agent « {nom} » : {variable} est partagée avec un autre agent"
+            )
+        variables.add(variable)
+        valeur = environ.get(variable, "").strip()
         if len(valeur) < 32:
             raise CatalogueInvalide(
                 f"agent « {nom} » : {variable} doit faire au moins 32 caractères"

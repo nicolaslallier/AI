@@ -12,8 +12,12 @@ from portail.missions import (
     DemandeMission,
     DemandeModele,
     DemandeOutil,
+    ErreurMission,
+    LigneFluxMission,
     LigneMission,
+    MessageLLM,
     Missions,
+    ReponseErreur,
     ReponseModele,
     ReponseOutil,
     Sante,
@@ -25,18 +29,48 @@ EXEMPLES = json.loads((Path(__file__).parents[2] / "docs/agents-contrat-v1.json"
 
 
 def test_exemples_du_contrat():
-    DemandeMission.model_validate(EXEMPLES["mission"])
-    lignes = TypeAdapter(LigneMission)
+    def aller_retour(modele, exemple):
+        valide = modele.model_validate(exemple)
+        assert valide.model_dump(mode="json", exclude_unset=True) == exemple
+
+    aller_retour(DemandeMission, EXEMPLES["mission"])
+    lignes, flux = TypeAdapter(LigneMission), TypeAdapter(LigneFluxMission)
     for cle in ("ligne_texte", "ligne_fin", "ligne_erreur"):
-        lignes.validate_python(EXEMPLES[cle])
-    DemandeModele.model_validate(EXEMPLES["demande_modele"])
-    ReponseModele.model_validate(EXEMPLES["reponse_modele"])
+        assert (
+            lignes.dump_python(lignes.validate_python(EXEMPLES[cle]), exclude_unset=True)
+            == (EXEMPLES[cle])
+        )
+    aller_retour(DemandeModele, EXEMPLES["demande_modele"])
+    aller_retour(ReponseModele, EXEMPLES["reponse_modele"])
     for ligne in EXEMPLES["demande_modele_flux_lignes"]:
-        assert ligne["type"] in ("texte", "fin", "erreur")
-    DemandeOutil.model_validate(EXEMPLES["demande_outil"])
-    ReponseOutil.model_validate(EXEMPLES["reponse_outil"])
-    Sante.model_validate(EXEMPLES["sante"])
-    assert isinstance(EXEMPLES["erreur"]["erreur"], str)
+        assert flux.dump_python(flux.validate_python(ligne), exclude_unset=True) == ligne
+    aller_retour(DemandeOutil, EXEMPLES["demande_outil"])
+    aller_retour(ReponseOutil, EXEMPLES["reponse_outil"])
+    aller_retour(Sante, EXEMPLES["sante"])
+    aller_retour(ReponseErreur, EXEMPLES["erreur"])
+
+
+def test_faute_de_frappe_dans_un_exemple_echoue():
+    with pytest.raises(ValidationError):
+        DemandeModele.model_validate({**EXEMPLES["demande_modele"], "outil": True})
+
+
+def test_message_refuse_les_champs_inventes():
+    with pytest.raises(ValidationError):
+        MessageLLM.model_validate({"role": "user", "content": "x", "inventé": "y" * 10})
+    MessageLLM.model_validate({"role": "assistant", "content": None, "tool_calls": [{"id": "a"}]})
+    MessageLLM.model_validate({"role": "tool", "content": "r", "tool_call_id": "a", "name": "lire"})
+
+
+def test_bornes_des_demandes():
+    with pytest.raises(ValidationError):
+        DemandeModele.model_validate({"messages": [{"role": "user", "content": "x" * 600_000}]})
+    with pytest.raises(ValidationError):
+        DemandeModele.model_validate({"messages": [{"role": "user", "content": "x"}] * 2001})
+    with pytest.raises(ValidationError):
+        DemandeOutil.model_validate({"nom": "n" * 200, "arguments": "{}"})
+    with pytest.raises(ValidationError):
+        DemandeOutil.model_validate({"nom": "lire", "arguments": "x" * 300_000})
 
 
 @pytest.mark.parametrize("extra", [{"model": "gpt-x"}, {"tools": []}])
@@ -143,14 +177,71 @@ def test_schemas_offerts(tmp_path):
 async def test_outil_en_vol_annule_a_la_fermeture():
     missions = _missions()
     m = _ouvrir(missions)
-    bloque = asyncio.Event()
-    tache = asyncio.create_task(missions.en_vol(m, bloque.wait()))
-    await asyncio.sleep(0)
+    demarre, bloque, nettoye = asyncio.Event(), asyncio.Event(), []
+
+    async def outil():
+        demarre.set()
+        try:
+            await bloque.wait()
+        finally:
+            await asyncio.sleep(0)
+            nettoye.append(True)
+
+    tache = asyncio.create_task(missions.en_vol(m, outil()))
+    await demarre.wait()
     assert len(m.en_vol) == 1
     await missions.fermer(m)
+    assert nettoye == [True]  # annulé et terminé avant le retour de fermer
+    assert not m.en_vol
+    with pytest.raises(ErreurMission):  # la requête n'est pas annulée : elle apprend l'arrêt
+        await tache
+
+
+async def test_en_vol_apres_fermeture_n_execute_rien():
+    missions = _missions()
+    m = _ouvrir(missions)
+    await missions.fermer(m)
+    lance = []
+
+    async def outil():
+        lance.append(True)
+
+    with pytest.raises(ErreurMission):
+        await missions.en_vol(m, outil())
+    assert lance == [] and not m.en_vol
+
+
+async def test_annulation_de_la_requete_reste_une_annulation():
+    missions = _missions()
+    m = _ouvrir(missions)
+    demarre = asyncio.Event()
+
+    async def outil():
+        demarre.set()
+        await asyncio.Event().wait()
+
+    tache = asyncio.create_task(missions.en_vol(m, outil()))
+    await demarre.wait()
+    tache.cancel()
     with pytest.raises(asyncio.CancelledError):
         await tache
-    assert not m.en_vol
+
+
+def test_jeton_absent_du_repr():
+    m = _ouvrir(_missions())
+    assert m.jeton not in repr(m)
+    corps = {**EXEMPLES["mission"], "jeton": "JETON-SECRET-ZZ"}
+    assert "JETON-SECRET-ZZ" not in repr(DemandeMission.model_validate(corps))
+
+
+def test_ouvrir_purge_les_expirees():
+    horloge = Horloge()
+    missions = _missions(horloge)
+    vieille = _ouvrir(missions)
+    horloge.t = 100
+    neuve = _ouvrir(missions)
+    assert missions._en_cours == [neuve]
+    assert vieille not in missions._en_cours
 
 
 async def test_en_vol_rend_le_resultat():
@@ -181,3 +272,15 @@ def test_lire_secrets_refuse_absent_ou_court(environ):
     assert "PORTAIL_AGENT_SECRET_REVUE" in str(e.value)
     for v in environ.values():
         assert v not in str(e.value)
+
+
+def test_lire_secrets_refuse_un_secret_blanc():
+    cat = _catalogue(revue="http://agent-revue:8080")
+    with pytest.raises(CatalogueInvalide, match="revue"):
+        lire_secrets(cat, {"PORTAIL_AGENT_SECRET_REVUE": " " * 40})
+
+
+def test_lire_secrets_refuse_une_variable_partagee():
+    cat = _catalogue(**{"a-b": "http://agent-a:8080", "a_b": "http://agent-b:8080"})
+    with pytest.raises(CatalogueInvalide, match="PORTAIL_AGENT_SECRET_A_B"):
+        lire_secrets(cat, {"PORTAIL_AGENT_SECRET_A_B": "x" * 32})

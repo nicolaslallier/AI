@@ -355,6 +355,10 @@ def test_service_adresse_valide(tmp_path):
         "http://agent-revue",
         "http://10.0.0.1:8080/x",
         "agent-revue:8080",
+        "http://10.0.0.1:8080",
+        "http://localhost:8080",
+        "http://litellm:4000",
+        "http://postgres:5432",
     ],
 )
 def test_service_adresse_invalide(tmp_path, adresse):
