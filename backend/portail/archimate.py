@@ -1,9 +1,10 @@
 import json
 import re
+import xml.etree.ElementTree as ET
 
 from pydantic import BaseModel, ValidationError
 
-from portail.archimate_types import ELEMENTS, RELATIONS
+from portail.archimate_types import ELEMENTS, POINTS_DE_VUE, RELATIONS
 
 BLOC = re.compile(r"```json[ \t]*\n(.*?)\n```", re.DOTALL)
 
@@ -168,3 +169,84 @@ def catalogues_markdown(modele: Modele, origine: dict[str, str]) -> str:
         *(_ligne(v.nom, v.point_de_vue, str(len(v.elements))) for v in modele.vues),
     ]
     return "\n".join(lignes) + "\n"
+
+
+_NS = "http://www.opengroup.org/xsd/archimate/3.0/"
+_XSI = "http://www.w3.org/2001/XMLSchema-instance"
+_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
+ET.register_namespace("", _NS)
+ET.register_namespace("xsi", _XSI)
+
+
+def _noeud(parent: ET.Element, balise: str, type_: str, ident: str, **attrs: str) -> ET.Element:
+    return ET.SubElement(
+        parent, f"{{{_NS}}}{balise}", {"identifier": ident, f"{{{_XSI}}}type": type_, **attrs}
+    )
+
+
+def _texte(parent: ET.Element, balise: str, texte: str) -> None:
+    ET.SubElement(parent, f"{{{_NS}}}{balise}", {_LANG: "fr"}).text = texte
+
+
+def xml_echange(modele: Modele, nom: str) -> str:
+    """Fichier d'échange ArchiMate 3 (Open Group) : éléments, relations, un diagramme par vue."""
+    racine = ET.Element(f"{{{_NS}}}model", {"identifier": "id-modele"})
+    _texte(racine, "name", nom)
+    if modele.elements:
+        conteneur = ET.SubElement(racine, f"{{{_NS}}}elements")
+        for e in modele.elements:
+            noeud = _noeud(conteneur, "element", e.type, f"id-{e.id}")
+            _texte(noeud, "name", e.nom)
+            if e.description:
+                _texte(noeud, "documentation", e.description)
+    if modele.relations:
+        conteneur = ET.SubElement(racine, f"{{{_NS}}}relationships")
+        for n, r in enumerate(modele.relations, 1):
+            noeud = _noeud(
+                conteneur,
+                "relationship",
+                r.type,
+                f"id-rel-{n}",
+                source=f"id-{r.source}",
+                target=f"id-{r.cible}",
+            )
+            if r.nom:
+                _texte(noeud, "name", r.nom)
+    if modele.vues:
+        diagrammes = ET.SubElement(ET.SubElement(racine, f"{{{_NS}}}views"), f"{{{_NS}}}diagrams")
+        for n, v in enumerate(modele.vues, 1):
+            attrs = {"viewpoint": v.point_de_vue} if v.point_de_vue in POINTS_DE_VUE else {}
+            vue = _noeud(diagrammes, "view", "Diagram", f"id-vue-{n}", **attrs)
+            _texte(vue, "name", v.nom)
+            noeuds: dict[str, str] = {}
+            for k, ident in enumerate(v.elements):
+                noeuds[ident] = f"id-vue-{n}-n{k + 1}"
+                _noeud(
+                    vue,
+                    "node",
+                    "Element",
+                    noeuds[ident],
+                    elementRef=f"id-{ident}",
+                    x=str(40 + 200 * (k % 4)),
+                    y=str(40 + 100 * (k // 4)),
+                    w="160",
+                    h="60",
+                )
+            internes = [
+                (i, r)
+                for i, r in enumerate(modele.relations, 1)
+                if {r.source, r.cible} <= noeuds.keys()
+            ]
+            for c, (i, r) in enumerate(internes, 1):
+                _noeud(
+                    vue,
+                    "connection",
+                    "Relationship",
+                    f"id-vue-{n}-c{c}",
+                    relationshipRef=f"id-rel-{i}",
+                    source=noeuds[r.source],
+                    target=noeuds[r.cible],
+                )
+    ET.indent(racine)
+    corps = ET.tostring(racine, encoding="unicode")
+    return f'<?xml version="1.0" encoding="UTF-8"?>\n{corps}\n'
