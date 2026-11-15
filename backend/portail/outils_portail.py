@@ -1,6 +1,7 @@
 """Outils de lecture du portail (projets, pipelines, kanban) pour l'agent orchestrateur."""
 
 import json
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select
@@ -9,13 +10,23 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from portail.actions import ACTIONS, valider_action
 from portail.agents import Catalogue
 from portail.boucle import _IGNORE
-from portail.db import ActionConversation, Etape, Pipeline, Projet, Tache
+from portail.db import (
+    ActionConversation,
+    Etape,
+    ExecutionDev,
+    Pipeline,
+    Projet,
+    Proposition,
+    Tache,
+    TacheEvenement,
+)
 from portail.moteur import Refus, spec_courante
 from portail.outils import _fonction
 from portail.schemas import COLONNES, Id
 
 _MAX_SORTIE = 8_000
 _MAX_SPEC = 3_000
+_MAX_BLOCAGE = 300
 
 
 class _Args(BaseModel):
@@ -39,12 +50,18 @@ class _Pipelines(_Args):
     etat: str | None = None
 
 
+class _Activite(_Args):
+    depuis: datetime
+
+
 _ARGS: dict[str, type[_Args]] = {
     "lister_projets": _Vide,
     "lire_projet": _ProjetId,
     "lister_pipelines": _Pipelines,
     "lire_pipeline": _PipelineId,
     "lire_kanban": _ProjetId,
+    "en_attente_de_nicolas": _Vide,
+    "activite": _Activite,
 }
 
 _PROJET_ID = {"projet_id": {"type": "integer", "description": "Identifiant du projet."}}
@@ -78,6 +95,20 @@ SCHEMAS_PORTAIL: dict[str, dict] = {
         _PROJET_ID,
         ["projet_id"],
     ),
+    "en_attente_de_nicolas": _fonction(
+        "en_attente_de_nicolas",
+        "Liste ce qui attend Nicolas : étapes en attente, propositions ouvertes, tâches en "
+        "revue (avec leur PR) et tâches bloquées, avec leurs dates.",
+        {},
+        [],
+    ),
+    "activite": _fonction(
+        "activite",
+        "Liste l'activité (événements du kanban, pipelines mis à jour) depuis une date, "
+        "du plus récent au plus ancien.",
+        {"depuis": {"type": "string", "description": "Date et heure ISO 8601."}},
+        ["depuis"],
+    ),
 }
 
 
@@ -106,6 +137,40 @@ SCHEMAS_ACTIONS: dict[str, dict] = {
     }
     for nom, description in _DESCRIPTIONS_ACTIONS.items()
 }
+
+
+def _iso(d: datetime) -> str:
+    return d.isoformat(timespec="seconds")
+
+
+async def activite_depuis(s: AsyncSession, depuis: datetime, limite: int = 200) -> list[str]:
+    """Événements de tâches et pipelines mis à jour depuis `depuis`, du plus récent au plus ancien."""
+    if depuis.tzinfo is None:
+        depuis = depuis.replace(tzinfo=UTC)
+    evenements = await s.scalars(
+        select(TacheEvenement)
+        .where(TacheEvenement.cree_le >= depuis)
+        .order_by(TacheEvenement.cree_le.desc())
+        .limit(limite)
+    )
+    pipelines = await s.scalars(
+        select(Pipeline)
+        .where(Pipeline.maj_le >= depuis)
+        .order_by(Pipeline.maj_le.desc())
+        .limit(limite)
+    )
+    lignes = [
+        (
+            e.cree_le,
+            f"{_iso(e.cree_le)} tâche #{e.tache_id} projet {e.projet_id} : {e.type} ({e.auteur})",
+        )
+        for e in evenements
+    ] + [
+        (p.maj_le, f"{_iso(p.maj_le)} pipeline #{p.id} {p.type} projet {p.projet_id} : {p.etat}")
+        for p in pipelines
+    ]  # fmt: skip
+    lignes.sort(key=lambda x: x[0], reverse=True)
+    return [ligne for _, ligne in lignes[:limite]]
 
 
 def _borner(texte: str) -> str:
@@ -195,7 +260,10 @@ class OutilsPortail:
             req = req.where(Pipeline.etat == a.etat)
         pipelines = (await s.scalars(req)).all()
         return (
-            "\n".join(f"#{p.id} {p.type} projet {p.projet_id} : {p.etat}" for p in pipelines)
+            "\n".join(
+                f"#{p.id} {p.type} projet {p.projet_id} : {p.etat} (mis à jour {_iso(p.maj_le)})"
+                for p in pipelines
+            )
             or "aucun pipeline"
         )
 
@@ -206,7 +274,7 @@ class OutilsPortail:
         etapes = (
             await s.scalars(select(Etape).where(Etape.pipeline_id == p.id).order_by(Etape.ordre))
         ).all()
-        lignes = [f"#{p.id} {p.type} projet {p.projet_id} : {p.etat}"]
+        lignes = [f"#{p.id} {p.type} projet {p.projet_id} : {p.etat} (mis à jour {_iso(p.maj_le)})"]
         for e in etapes:
             erreur = f" — {e.erreur}" if e.erreur else ""
             lignes.append(f"{e.ordre}. {e.agent} : {e.etat}{erreur}")
@@ -229,3 +297,49 @@ class OutilsPortail:
                 )
                 lignes.append(f"#{t.id} {t.titre}{marques}")
         return "\n".join(lignes)
+
+    async def _en_attente_de_nicolas(self, s: AsyncSession, _: _Vide) -> str:
+        lignes = []
+        etapes = await s.execute(
+            select(Etape, Pipeline)
+            .join(Pipeline, Etape.pipeline_id == Pipeline.id)
+            .where(Etape.etat == "en_attente")
+            .order_by(Pipeline.maj_le.desc())
+        )
+        for e, p in etapes:
+            lignes.append(
+                f"étape en attente : pipeline #{p.id} {p.type} projet {p.projet_id}, "
+                f"étape {e.ordre} {e.agent} (pipeline mis à jour {_iso(p.maj_le)})"
+            )
+        for pr in await s.scalars(
+            select(Proposition).where(Proposition.etat == "ouverte").order_by(Proposition.id)
+        ):
+            lignes.append(
+                f"proposition ouverte n°{pr.id} ({pr.sorte}) : pipeline #{pr.pipeline_id} "
+                f"projet {pr.projet_id}, proposée {_iso(pr.cree_le)}"
+            )
+        taches = await s.scalars(
+            select(Tache).where(Tache.colonne.in_(("en_revue", "bloquee"))).order_by(Tache.id)
+        )
+        for t in taches:
+            if t.colonne == "en_revue":
+                pr_url = await s.scalar(
+                    select(ExecutionDev.pr_url)
+                    .where(ExecutionDev.tache_id == t.id)
+                    .order_by(ExecutionDev.n.desc())
+                    .limit(1)
+                )
+                lignes.append(
+                    f"tâche en revue #{t.id} {t.titre} (projet {t.projet_id}) : "
+                    f"PR {pr_url or '-'}, depuis {_iso(t.maj_le)}"
+                )
+            else:
+                resume = (t.resume_blocage or "-")[:_MAX_BLOCAGE]
+                lignes.append(
+                    f"tâche bloquée #{t.id} {t.titre} (projet {t.projet_id}) : "
+                    f"{resume}, depuis {_iso(t.maj_le)}"
+                )
+        return "\n".join(lignes) or "rien n'attend Nicolas"
+
+    async def _activite(self, s: AsyncSession, a: _Activite) -> str:
+        return "\n".join(await activite_depuis(s, a.depuis)) or "aucune activité depuis cette date"

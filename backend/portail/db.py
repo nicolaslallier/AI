@@ -93,6 +93,9 @@ class Conversation(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     titre: Mapped[str] = mapped_column(String(200), default="", server_default="")
     etat: Mapped[str] = mapped_column(String, default="pret", server_default="pret")
+    agent: Mapped[str] = mapped_column(
+        String, default="orchestrateur", server_default="orchestrateur"
+    )
     erreur: Mapped[str | None] = mapped_column(Text)
     cree_le: Mapped[datetime] = _horodatage()
     maj_le: Mapped[datetime] = _horodatage(onupdate=func.now())

@@ -1,7 +1,21 @@
-from portail.db import Document, Etape, Pipeline, Projet, Tache
-from portail.outils_portail import OutilsPortail
+from datetime import UTC, datetime
 
-TOUS = ["lister_projets", "lire_projet", "lister_pipelines", "lire_pipeline", "lire_kanban"]
+from sqlalchemy import event
+
+from portail.agents import OUTILS_LECTURE_PORTAIL
+from portail.db import (
+    Document,
+    Etape,
+    ExecutionDev,
+    Pipeline,
+    Projet,
+    Proposition,
+    Tache,
+    TacheEvenement,
+)
+from portail.outils_portail import OutilsPortail, activite_depuis
+
+TOUS = list(OUTILS_LECTURE_PORTAIL)
 
 
 async def _projet(sessions, nom="EA"):
@@ -88,3 +102,121 @@ async def test_ids_hors_bornes_mal_formes(sessions):
         assert (await o.executer("lire_projet", f'{{"projet_id": {arg}}}'))[1] is True
         assert (await o.executer("lire_pipeline", f'{{"pipeline_id": {arg}}}'))[1] is True
         assert (await o.executer("lister_pipelines", f'{{"projet_id": {arg}}}'))[1] is True
+
+
+async def _etat_du_suivi(sessions):
+    """Une étape en attente, une proposition ouverte, une tâche en revue, une tâche bloquée."""
+    pid = await _projet(sessions)
+    async with sessions() as s:
+        pl = Pipeline(projet_id=pid, type="spec")
+        s.add(pl)
+        await s.flush()
+        e = Etape(pipeline_id=pl.id, ordre=1, agent="redacteur", etat="en_attente")
+        revue = Tache(projet_id=pid, titre="À relire", colonne="en_revue", rang=1, origine="manuel")
+        bloquee = Tache(
+            projet_id=pid, titre="Coincée", colonne="bloquee", rang=1, origine="manuel",
+            resume_blocage="les tests rouges persistent " + "x" * 600,
+        )  # fmt: skip
+        s.add_all([e, revue, bloquee])
+        await s.flush()
+        s.add(Proposition(pipeline_id=pl.id, etape_id=e.id, projet_id=pid, sorte="nouvelle"))
+        dev = Pipeline(projet_id=pid, type="dev")
+        s.add(dev)
+        await s.flush()
+        s.add_all(
+            [
+                ExecutionDev(
+                    pipeline_id=pl.id, tache_id=revue.id, n=1, branche="b", espace="e", base="main",
+                    base_sha="0", phase="fini", pr_url="https://git.example/pr/ancienne",
+                ),
+                ExecutionDev(
+                    pipeline_id=dev.id, tache_id=revue.id, n=2, branche="b", espace="e",
+                    base="main", base_sha="0", phase="fini", pr_url="https://git.example/pr/7",
+                ),
+            ]
+        )  # fmt: skip
+        await s.commit()
+    return pid
+
+
+async def test_en_attente_de_nicolas(sessions):
+    await _etat_du_suivi(sessions)
+    texte, mal = await OutilsPortail(sessions, TOUS).executer("en_attente_de_nicolas", "{}")
+    assert not mal
+    assert "redacteur" in texte  # étape en attente
+    assert "proposition" in texte  # proposition ouverte
+    assert "À relire" in texte and "https://git.example/pr/7" in texte
+    assert "pr/ancienne" not in texte  # la dernière exécution seulement
+    assert "Coincée" in texte and "les tests rouges persistent" in texte
+    assert "x" * 600 not in texte  # résumé de blocage tronqué
+    assert "20" in texte  # datés
+
+
+async def test_en_attente_de_nicolas_vide(sessions):
+    texte, _ = await OutilsPortail(sessions, TOUS).executer("en_attente_de_nicolas", "{}")
+    assert texte == "rien n'attend Nicolas"
+
+
+async def test_activite_depuis(sessions):
+    pid = await _projet(sessions)
+    ancien, recent = datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 5, tzinfo=UTC)
+    async with sessions() as s:
+        s.add_all(
+            [
+                TacheEvenement(
+                    projet_id=pid, tache_id=1, type="creation", auteur="nicolas", cree_le=ancien
+                ),
+                TacheEvenement(
+                    projet_id=pid, tache_id=2, type="deplacement", auteur="nicolas", cree_le=recent
+                ),
+                Pipeline(projet_id=pid, type="spec", etat="termine", maj_le=recent),
+            ]
+        )
+        await s.commit()
+    async with sessions() as s:
+        lignes = await activite_depuis(s, datetime(2026, 1, 3, tzinfo=UTC))
+    assert len(lignes) == 2 and all(l.startswith("2026-01-05T00:00:00") for l in lignes)
+    assert any("deplacement" in l for l in lignes) and any("spec" in l for l in lignes)
+    texte, mal = await OutilsPortail(sessions, TOUS).executer(
+        "activite", '{"depuis": "2026-01-03T00:00:00+00:00"}'
+    )
+    assert not mal and texte.count("\n") == 1
+    assert (await OutilsPortail(sessions, TOUS).executer("activite", '{"depuis": "hier"}'))[1]
+
+
+async def test_pipelines_dates(sessions):
+    pid = await _projet(sessions)
+    async with sessions() as s:
+        pl = Pipeline(projet_id=pid, type="spec")
+        s.add(pl)
+        await s.commit()
+        plid = pl.id
+    o = OutilsPortail(sessions, TOUS)
+    assert "mis à jour 20" in (await o.executer("lister_pipelines", "{}"))[0]
+    assert "mis à jour 20" in (await o.executer("lire_pipeline", f'{{"pipeline_id": {plid}}}'))[0]
+
+
+async def test_outils_pm_lecture_seule(sessions):
+    await _etat_du_suivi(sessions)
+    ecritures = []
+
+    def surveiller(conn, cur, statement, *_):
+        if statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")):
+            ecritures.append(statement)
+
+    moteur = sessions.kw["bind"].sync_engine
+    event.listen(moteur, "before_cursor_execute", surveiller)
+    try:
+        o = OutilsPortail(sessions, list(OUTILS_LECTURE_PORTAIL))
+        args = {
+            "lire_projet": '{"projet_id": 1}',
+            "lire_kanban": '{"projet_id": 1}',
+            "lire_pipeline": '{"pipeline_id": 1}',
+            "activite": '{"depuis": "2020-01-01T00:00:00+00:00"}',
+        }
+        for nom in OUTILS_LECTURE_PORTAIL:
+            texte, mal = await o.executer(nom, args.get(nom, "{}"))
+            assert not mal, (nom, texte)
+    finally:
+        event.remove(moteur, "before_cursor_execute", surveiller)
+    assert ecritures == []

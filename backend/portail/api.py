@@ -54,6 +54,7 @@ from portail.schemas import (
     CommandeVue,
     CommentaireVue,
     ConversationDetail,
+    ConversationIn,
     ConversationPatch,
     ConversationResume,
     Deplacement,
@@ -718,9 +719,9 @@ def create_app(
         return await request.app.state.conversations.lister()
 
     @app.post("/api/conversations", status_code=201, response_model=ConversationDetail)
-    async def creer_conversation(request: Request):
+    async def creer_conversation(request: Request, corps: ConversationIn | None = None):
         service = request.app.state.conversations
-        return await service.detail((await service.creer()).id)
+        return await service.detail((await service.creer((corps or ConversationIn()).agent)).id)
 
     @app.get("/api/conversations/{conversation_id}", response_model=ConversationDetail)
     async def lire_conversation(conversation_id: int, request: Request):

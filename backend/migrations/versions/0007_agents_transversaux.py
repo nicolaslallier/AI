@@ -38,10 +38,15 @@ def upgrade() -> None:
     op.add_column(
         "execution_dev", sa.Column("fichiers_rouge", sa.JSON, nullable=False, server_default="[]")
     )
+    op.add_column(
+        "conversation",
+        sa.Column("agent", sa.String, nullable=False, server_default="orchestrateur"),
+    )
     op.execute("UPDATE execution_dev SET phase = 'controles' WHERE phase = 'revue'")
 
 
 def downgrade() -> None:
+    op.drop_column("conversation", "agent")
     op.drop_index("ix_avis_document_id", table_name="avis")
     op.drop_table("avis")
     op.drop_column("document", "version")

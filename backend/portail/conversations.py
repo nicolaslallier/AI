@@ -1,4 +1,4 @@
-"""Conversations libres avec l'agent orchestrateur, hors de tout projet (sur le modèle du chat)."""
+"""Conversations libres avec un agent de chat (orchestrateur ou PM), hors de tout projet (sur le modèle du chat)."""
 
 import asyncio
 import logging
@@ -21,7 +21,7 @@ from portail.schemas import ActionOut, ConversationDetail, MessageOut
 
 logger = logging.getLogger(__name__)
 
-AGENT = "orchestrateur"
+AGENTS = ("orchestrateur", "pm")
 
 
 def construire_conversation(agent: Agent, messages: list[MessageConversation]) -> list[dict]:
@@ -55,10 +55,10 @@ class ServiceConversation:
         self._reveiller = reveiller
         self.taches: dict[int, asyncio.Task] = {}
 
-    def _agent(self) -> Agent:
-        agent = self._catalogue.agents.get(AGENT)
+    def _agent(self, c: Conversation) -> Agent:
+        agent = self._catalogue.agents.get(c.agent)
         if agent is None:
-            raise Refus(409, f"agent « {AGENT} » absent de agents.yaml")
+            raise Refus(409, f"agent « {c.agent} » absent de agents.yaml")
         return agent
 
     async def _conversation(self, s: AsyncSession, cid: int) -> Conversation:
@@ -78,9 +78,13 @@ class ServiceConversation:
             ).all()
         )
 
-    async def creer(self) -> Conversation:
+    async def creer(self, agent: str = "orchestrateur") -> Conversation:
+        if agent not in AGENTS:
+            raise Refus(422, f"agent inconnu : {agent}")
+        if agent not in self._catalogue.agents:
+            raise Refus(409, f"agent « {agent} » absent de agents.yaml")
         async with self._sessions() as s:
-            c = Conversation()
+            c = Conversation(agent=agent)
             s.add(c)
             await s.commit()
             await s.refresh(c)
@@ -104,9 +108,10 @@ class ServiceConversation:
                     .order_by(ActionConversation.id)
                 )
             ).all()
-        agent = self._catalogue.agents.get(AGENT)
+        agent = self._catalogue.agents.get(c.agent)
         return ConversationDetail(
             id=c.id,
+            agent=c.agent,
             titre=c.titre,
             etat=c.etat,
             erreur=c.erreur,
@@ -148,7 +153,7 @@ class ServiceConversation:
     async def envoyer(self, cid: int, contenu: str) -> None:
         async with self._sessions() as s:
             c = await self._conversation(s, cid)
-            agent = self._agent()
+            agent = self._agent(c)
             if c.etat == "en_cours":
                 raise Refus(409, "une réponse est déjà en cours")
             contenu = contenu.strip()
@@ -170,7 +175,7 @@ class ServiceConversation:
             c = await self._conversation(s, cid)
             if c.etat != "erreur":
                 raise Refus(409, "rien à relancer")
-            self._agent()
+            self._agent(c)
             await self._perimer(s, cid)  # le tour relancé reproposera s'il le faut
             c.etat, c.erreur = "en_cours", None
             await s.commit()
@@ -322,8 +327,8 @@ class ServiceConversation:
     async def _tache(self, cid: int) -> None:
         d = self.diffuseur
         try:
-            agent = self._agent()
             async with self._sessions() as s:
+                agent = self._agent(await self._conversation(s, cid))
                 demande = construire_conversation(agent, await self._messages(s, cid))
             limite = False
             if agent.outils:

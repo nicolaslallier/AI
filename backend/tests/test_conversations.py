@@ -208,8 +208,7 @@ async def test_agent_absent_409(moteur, reglages):
         LifespanManager(app),
         AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
     ):
-        cid = await _creer(c)
-        r = await _envoyer(c, cid, "Salut")
+        r = await c.post("/api/conversations")
     assert r.status_code == 409
     assert r.json()["detail"] == "agent « orchestrateur » absent de agents.yaml"
 
@@ -603,3 +602,48 @@ async def test_reessayer_perime_l_action(client, faux_llm):
     assert a["etat"] == "perimee"
     r = await _confirmer(client, a["id"])
     assert r.status_code == 409 and r.json()["detail"] == "action périmée"
+
+
+async def test_conversation_pm(client, faux_llm):
+    r = await client.post("/api/conversations", json={"agent": "pm"})
+    assert r.status_code == 201 and r.json()["agent"] == "pm"
+    cid = r.json()["id"]
+    faux_llm.reponses = [_appel("en_attente_de_nicolas"), _texte("Rien n'attend.")]
+    await _envoyer(client, cid, "Où en est-on ?")
+    await _attendre(client, cid)
+    d = await _detail(client, cid)
+    assert d["agent"] == "pm"
+    assert [m["role"] for m in d["messages"]] == ["user", "tool", "assistant"]
+    assert d["messages"][1]["outil"].startswith("en_attente_de_nicolas")
+    assert faux_llm.appels[0]["messages"][0]["content"] == "Tu es pm."
+    assert [(c["id"], c["agent"]) for c in (await client.get("/api/conversations")).json()] == [
+        (cid, "pm")
+    ]
+
+
+async def test_pm_ne_peut_rien_proposer(client, faux_llm, sessions):
+    pid = (await client.post("/api/projets", json={"nom": "P"})).json()["id"]
+    cid = (await client.post("/api/conversations", json={"agent": "pm"})).json()["id"]
+    faux_llm.reponses = [
+        _appel("creer_tache", json.dumps({"projet_id": pid, "titre": "T"})),
+        _texte("Je ne peux pas."),
+    ]
+    await _envoyer(client, cid, "crée une tâche")
+    await _attendre(client, cid)
+    d = await _detail(client, cid)
+    assert d["actions"] == []
+    assert "non autorisé" in next(m for m in d["messages"] if m["role"] == "tool")["contenu"]
+    assert "creer_tache" not in {o["function"]["name"] for o in faux_llm.appels[0]["outils"]}
+    async with sessions() as s:
+        assert (await s.scalars(select(ActionConversation))).all() == []
+
+
+async def test_agent_inconnu_422(client):
+    r = await client.post("/api/conversations", json={"agent": "inconnu"})
+    assert r.status_code == 422
+
+
+async def test_conversation_par_defaut_orchestrateur(client):
+    d = (await client.post("/api/conversations")).json()
+    assert d["agent"] == "orchestrateur"
+    assert (await client.get("/api/conversations")).json()[0]["agent"] == "orchestrateur"

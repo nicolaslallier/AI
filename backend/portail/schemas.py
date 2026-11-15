@@ -101,8 +101,13 @@ class MessageOut(BaseModel):
     cree_le: datetime
 
 
+class ConversationIn(BaseModel):
+    agent: str = "orchestrateur"
+
+
 class ConversationResume(BaseModel):
     id: int
+    agent: str
     titre: str
     etat: str
     maj_le: datetime
@@ -120,6 +125,7 @@ class ActionOut(BaseModel):
 
 class ConversationDetail(BaseModel):
     id: int
+    agent: str
     titre: str
     etat: str
     erreur: str | None
