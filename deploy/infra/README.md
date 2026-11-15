@@ -2,9 +2,19 @@
 
 Ces éléments vivent côté Infra ; ce dossier en garde la source.
 
-1. **Règle Alloy** : recopier `alloy-journaux-prives.alloy` dans `discovery.relabel`
-   de `monitoring/alloy/config.alloy`.
+1. **Règle Alloy** : `alloy-journaux-prives.alloy` est un fragment, à recopier dans
+   le bloc `discovery.relabel` existant de `monitoring/alloy/config.alloy`, puis
+   recharger Alloy. La règle écarte tout conteneur qui porte le libellé
+   `portail.journaux=prives` : les exécutions comme leurs services (base, MinIO).
+   Un service déjà en cours ne porte le libellé qu'une fois recréé.
 2. **Vhost** du portail : voir la tâche 9 du plan du lot F.
-3. **Vérification après déploiement** : lancer une exécution, puis vérifier que
-   `{container=~"run-.*"}` ne renvoie rien dans Loki (adapter au préfixe réel
-   des conteneurs du lanceur).
+3. **Vérification après déploiement** : les conteneurs d'exécution n'ont pas de
+   nom stable, on cherche donc leur sortie et non leur nom. Lancer une exécution
+   dont une commande affiche un marqueur unique (par exemple
+   `echo fuite-loki-2f9c`), puis vérifier dans Loki que
+   `{container=~".+"} |= "fuite-loki-2f9c"` ne renvoie rien. Pour prouver que la
+   requête aurait vu une fuite, la refaire avec un marqueur affiché par un
+   conteneur sans le libellé : elle doit alors le trouver.
+4. **Lanceur durci** : il tourne avec `cap_drop: ALL` et `read_only`. Au premier
+   déploiement, vérifier que son `/health` répond et qu'une exécution démarre
+   (accès au socket Docker) ; sinon, retirer `cap_drop` du lanceur seul.
