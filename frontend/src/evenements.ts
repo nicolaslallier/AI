@@ -15,11 +15,13 @@ export function ecouterEvenements(rappels: RappelsEvenements): () => void {
   return () => source.close()
 }
 
-/** Un seul appel après une rafale de signaux. */
+/** Au plus un appel par fenêtre de `ms` : une rafale continue finit quand même par appeler. */
 export function regrouper(f: () => void, ms = 300): () => void {
   let minuteur: ReturnType<typeof setTimeout> | undefined
   return () => {
-    clearTimeout(minuteur)
-    minuteur = setTimeout(f, ms)
+    minuteur ??= setTimeout(() => {
+      minuteur = undefined
+      f()
+    }, ms)
   }
 }

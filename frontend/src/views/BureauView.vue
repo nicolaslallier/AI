@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { lireBureau, lirePoste, type Bureau, type EtatPoste, type PosteDetail } from '../api'
 import { ecouterEvenements, regrouper } from '../evenements'
 import JaugeContexte from '../components/JaugeContexte.vue'
@@ -16,11 +16,17 @@ const detail = ref<PosteDetail | null>(null)
 const erreur = ref('')
 let minuteur: ReturnType<typeof setInterval> | undefined
 let arreter: (() => void) | undefined
+let fini = false
 
 async function charger() {
+  if (fini) return
   try {
     bureau.value = await lireBureau()
     erreur.value = ''
+    if (ouvert.value && !bureau.value.postes[ouvert.value]) {
+      ouvert.value = null
+      detail.value = null
+    }
     if (ouvert.value) await chargerDetail(ouvert.value)
   } catch (e) {
     erreur.value = (e as Error).message
@@ -29,7 +35,13 @@ async function charger() {
 
 async function chargerDetail(nom: string) {
   const d = await lirePoste(nom)
-  if (ouvert.value === nom) detail.value = d // un autre clic a pu passer entre-temps
+  if (ouvert.value !== nom) return // un autre clic a pu passer entre-temps
+  const premier = !detail.value
+  detail.value = d
+  if (premier) {
+    await nextTick()
+    document.getElementById('detail-poste')?.scrollIntoView?.({ block: 'nearest' })
+  }
 }
 
 async function basculer(nom: string) {
@@ -58,6 +70,7 @@ onMounted(() => {
   arreter = ecouterEvenements({ pipelines: recharger, bureau: recharger })
 })
 onUnmounted(() => {
+  fini = true
   clearInterval(minuteur)
   arreter?.()
 })
@@ -70,10 +83,10 @@ onUnmounted(() => {
     <section v-for="(g, gi) in bureau.groupes" :key="gi" class="groupe">
       <h2>{{ g.nom ?? 'Hors pipeline' }}</h2>
       <div class="postes">
-        <template v-for="(nom, i) in g.agents" :key="nom">
+        <template v-for="(nom, i) in g.agents" :key="i">
           <span v-if="g.nom !== null && i > 0" class="fleche" aria-hidden="true">→</span>
           <div v-if="bureau.postes[nom]" class="carte poste" :class="bureau.postes[nom].etat">
-            <button class="nom" :aria-expanded="ouvert === nom" @click="basculer(nom)">
+            <button class="nom" :aria-expanded="ouvert === nom" aria-controls="detail-poste" @click="basculer(nom)">
               {{ nom }}
             </button>
             <span class="pastille" :class="bureau.postes[nom].etat">
@@ -95,7 +108,7 @@ onUnmounted(() => {
         </template>
       </div>
     </section>
-    <section v-if="ouvert && detail" class="carte detail" aria-live="polite">
+    <section v-if="ouvert && detail" id="detail-poste" class="carte detail">
       <h2>{{ detail.nom }}</h2>
       <p>{{ detail.description }}</p>
       <p>

@@ -63,3 +63,14 @@ it('regrouper : trois appels rapprochés, un seul', () => {
   vi.advanceTimersByTime(300)
   expect(f).toHaveBeenCalledOnce()
 })
+
+it('regrouper : une rafale continue finit quand même par appeler', () => {
+  vi.useFakeTimers()
+  const f = vi.fn()
+  const g = regrouper(f, 1000)
+  for (let t = 0; t < 5000; t += 500) {
+    g()
+    vi.advanceTimersByTime(500)
+  }
+  expect(f.mock.calls.length).toBeGreaterThanOrEqual(4)
+})

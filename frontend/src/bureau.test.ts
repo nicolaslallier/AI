@@ -130,15 +130,54 @@ it('un clic ouvre le détail, un second le ferme ; le détail suit les rechargem
   expect(racine.querySelector('.detail')).toBeNull()
 })
 
-it('démontage : flux fermé, plus de rechargement', async () => {
+it('démontage : flux fermé, plus de rechargement, même pour un signal déjà reçu', async () => {
   await monter()
   const source = FauxEventSource.derniere
   source.ecouteurs.bureau()
   app.unmount()
   expect(source.close).toHaveBeenCalled()
   await vi.advanceTimersByTimeAsync(120000)
-  // le signal en attente a été déjà armé avant le démontage : seul le filet 60 s doit être arrêté
-  expect(vi.mocked(lireBureau).mock.calls.length).toBeLessThanOrEqual(2)
+  expect(lireBureau).toHaveBeenCalledTimes(1)
   app = createApp({ template: '<i/>' }) // pour afterEach
   app.mount(document.createElement('div'))
+})
+
+it('un poste ouvert qui disparaît du bureau ferme le détail', async () => {
+  await monter()
+  ;(racine.querySelector('button.nom') as HTMLButtonElement).click()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(racine.querySelector('.detail')).not.toBeNull()
+  const { xx, ...reste } = bureau.postes
+  vi.mocked(lireBureau).mockResolvedValue({ groupes: [{ nom: null, agents: ['zz'] }], postes: reste })
+  FauxEventSource.derniere.ecouteurs.bureau()
+  await vi.advanceTimersByTimeAsync(1001)
+  expect(racine.querySelector('.detail')).toBeNull()
+  expect(lirePoste).toHaveBeenCalledTimes(1)
+})
+
+it('à l’ouverture le détail est amené en vue, pas aux rechargements ; aria-controls relie le bouton', async () => {
+  const scroll = vi.fn()
+  Element.prototype.scrollIntoView = scroll
+  await monter()
+  const bouton = racine.querySelector('button.nom') as HTMLButtonElement
+  bouton.click()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(scroll).toHaveBeenCalledTimes(1)
+  expect(scroll).toHaveBeenCalledWith({ block: 'nearest' })
+  const detail = racine.querySelector('.detail')!
+  expect(bouton.getAttribute('aria-controls')).toBe(detail.id)
+  expect(detail.hasAttribute('aria-live')).toBe(false)
+  FauxEventSource.derniere.ecouteurs.bureau()
+  await vi.advanceTimersByTimeAsync(1001)
+  expect(scroll).toHaveBeenCalledTimes(1)
+  delete (Element.prototype as any).scrollIntoView
+})
+
+it('lecture du bureau en échec : message affiché, postes déjà chargés conservés', async () => {
+  await monter()
+  vi.mocked(lireBureau).mockRejectedValue(new Error('panne bureau'))
+  FauxEventSource.derniere.ecouteurs.bureau()
+  await vi.advanceTimersByTimeAsync(1001)
+  expect(racine.querySelector('.erreur')!.textContent).toBe('panne bureau')
+  expect(racine.querySelectorAll('.poste')).toHaveLength(4)
 })
