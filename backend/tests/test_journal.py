@@ -5,7 +5,7 @@ import sys
 
 import httpx
 from asgi_lifespan import LifespanManager
-from conftest import CATALOGUE_TEST, FauxLLM
+from conftest import CATALOGUE_TEST, FauxLLM, _agent
 from httpx import ASGITransport, AsyncClient
 from prometheus_client import generate_latest
 from sqlalchemy import select
@@ -13,6 +13,7 @@ from test_conversations import _attendre, _creer, _envoyer
 from test_dev import CIBLES, CODE_OK, CONFIG, TESTS_OK, Monde, appel, texte, verdict
 
 from portail import journal
+from portail.agents import Catalogue
 from portail.api import create_app
 from portail.db import AppelLLM, Projet, Tache
 from portail.lanceur import Resultat
@@ -219,6 +220,46 @@ async def test_conversation_sans_contenu_nulle_part(moteur, sessions, reglages, 
         "http://l", "k", transport=httpx.MockTransport(h), sessions=sessions, version="sha-test"
     )
     app = create_app(reglages=reglages, llm=llm, catalogue=CATALOGUE_TEST)
+    caplog.set_level(logging.DEBUG)
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        cid = await _creer(c)
+        await _envoyer(c, cid, f"message {MARQUEUR}")
+        await _attendre(c, cid)
+        await _envoyer(c, cid, f"second {MARQUEUR}")
+        await _attendre(c, cid)
+        metriques = (await c.get("/metrics")).text
+    async with sessions() as s:
+        lignes = list((await s.scalars(select(AppelLLM))).all())
+    assert sorted(x.issue for x in lignes) == ["erreur", "ok"]
+    _sans_contenu(metriques, *_lignes_formatees(caplog), *(str(vars(x)) for x in lignes))
+
+
+async def test_conversation_en_flux_sans_contenu_nulle_part(moteur, sessions, reglages, caplog):
+    usage = {"prompt_tokens": 10, "completion_tokens": 5}
+
+    def h(requete: httpx.Request) -> httpx.Response:
+        corps = json.loads(requete.content)
+        if f"second {MARQUEUR}" in json.dumps(corps["messages"]):
+            return httpx.Response(500, text=f"panne {MARQUEUR}")
+        morceaux = [
+            {"choices": [{"delta": {"content": f"<think>{MARQUEUR}</think>réponse "}}]},
+            {"choices": [{"delta": {"content": MARQUEUR}}]},
+            {"choices": [], "usage": usage},
+        ]
+        flux = "".join(f"data: {json.dumps(m)}\n\n" for m in morceaux) + "data: [DONE]\n\n"
+        return httpx.Response(200, text=flux)
+
+    llm = ClientLLM(
+        "http://l", "k", transport=httpx.MockTransport(h), sessions=sessions, version="sha-test"
+    )
+    catalogue = Catalogue(
+        agents={**CATALOGUE_TEST.agents, "orchestrateur": _agent("orchestrateur")},  # sans outil
+        pipelines=CATALOGUE_TEST.pipelines,
+    )
+    app = create_app(reglages=reglages, llm=llm, catalogue=catalogue)
     caplog.set_level(logging.DEBUG)
     async with (
         LifespanManager(app),

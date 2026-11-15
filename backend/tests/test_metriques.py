@@ -73,7 +73,9 @@ async def test_requete_par_modele_de_route(moteur, tmp_path):
 
     app = await _client(tmp_path)
     etiq = {"methode": "DELETE", "route": "/api/taches/{tache_id}", "code": "404"}
+    duree = {"methode": "DELETE", "route": "/api/taches/{tache_id}"}
     avant = valeur(_REQ, **etiq)
+    avant_duree = valeur("portail_http_duree_secondes_count", **duree)
     async with (
         LifespanManager(app),
         AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
@@ -81,9 +83,7 @@ async def test_requete_par_modele_de_route(moteur, tmp_path):
         assert (await c.delete("/api/taches/987654")).status_code == 404
     assert valeur(_REQ, **etiq) == avant + 1
     assert "987654" not in generate_latest().decode()
-    assert valeur(
-        "portail_http_duree_secondes_count", methode="DELETE", route="/api/taches/{tache_id}"
-    )
+    assert valeur("portail_http_duree_secondes_count", **duree) == avant_duree + 1
 
 
 async def test_methode_inventee_rabattue_sur_autre(moteur, tmp_path):
@@ -256,6 +256,7 @@ async def test_collecte_base_injoignable():
     def casse():
         raise ConnectionError("base saturée")
 
+    BASE_JOIGNABLE.set(1)  # sinon 0 par défaut : l'affirmation ne prouverait rien seule
     await rafraichir(casse)
     assert valeur("portail_base_joignable") == 0.0
 
@@ -268,3 +269,45 @@ async def test_base_injoignable_journalisee_une_seule_fois(caplog):
     for _ in range(3):
         await rafraichir(casse)
     assert len([r for r in caplog.records if r.levelname == "ERROR"]) == 1
+
+
+async def test_metrics_repond_base_en_panne_et_garde_les_jauges(moteur, sessions, tmp_path):
+    async with sessions() as s, s.begin():
+        p = Projet(nom="p")
+        s.add(p)
+        await s.flush()
+        await _tache(s, p.id, "a_faire")
+    app = await _client(tmp_path)
+
+    def casse():
+        raise ConnectionError("base saturée")
+
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        assert 'portail_taches{colonne="a_faire"} 1.0' in (await c.get("/metrics")).text
+        app.state.sessions = casse
+        r = await c.get("/metrics")
+    assert r.status_code == 200
+    assert "portail_base_joignable 0.0" in r.text
+    assert 'portail_taches{colonne="a_faire"} 1.0' in r.text  # dernière valeur gardée
+
+
+async def test_metrics_repond_malgre_une_base_qui_ne_repond_pas(moteur, tmp_path, monkeypatch):
+    class Lente:
+        async def __aenter__(self):
+            await asyncio.sleep(60)
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr("portail.metriques.DELAI_COLLECTE_S", 0.05)
+    app = await _client(tmp_path)
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        app.state.sessions = Lente
+        r = await asyncio.wait_for(c.get("/metrics"), 5)
+    assert r.status_code == 200 and "portail_base_joignable 0.0" in r.text
