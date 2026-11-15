@@ -333,3 +333,31 @@ def test_rangement_agent_cite_seulement_dans_avis_est_hors_pipeline():
         }
     )
     assert rangement(cat) == [("x", ["a"]), (None, ["b"])]
+
+
+def test_service_adresse_valide(tmp_path):
+    cat = charger_catalogue(
+        ecrire(
+            tmp_path,
+            VALIDE.replace(
+                "prompt_systeme: p", "prompt_systeme: p\n    service: http://agent-revue:8080"
+            ),
+        )
+    )
+    assert cat.agents["spec"].service == "http://agent-revue:8080"
+    assert charger_catalogue(ecrire(tmp_path, VALIDE)).agents["spec"].service is None
+
+
+@pytest.mark.parametrize(
+    "adresse",
+    [
+        "https://agent-revue:8080",
+        "http://agent-revue",
+        "http://10.0.0.1:8080/x",
+        "agent-revue:8080",
+    ],
+)
+def test_service_adresse_invalide(tmp_path, adresse):
+    texte = VALIDE.replace("prompt_systeme: p", f"prompt_systeme: p\n    service: {adresse}")
+    with pytest.raises(CatalogueInvalide, match="« spec »"):
+        charger_catalogue(ecrire(tmp_path, texte))
