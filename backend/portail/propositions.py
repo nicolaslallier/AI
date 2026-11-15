@@ -254,6 +254,27 @@ async def accepter(
     await session.flush()
 
 
+async def tout_accepter(session: AsyncSession, etape_id: int) -> int:
+    """Accepte les propositions ouvertes de l'étape, dans l'ordre ; renvoie le nombre de périmées."""
+    ids = (
+        await session.scalars(
+            select(Proposition.id)
+            .where(Proposition.etape_id == etape_id, Proposition.etat == "ouverte")
+            .order_by(Proposition.id)
+        )
+    ).all()
+    perimees = 0
+    for i in ids:
+        p = await session.get(Proposition, i)
+        try:
+            await accepter(session, p, None)
+        except Refus:
+            if p.etat != "perimee":
+                raise
+            perimees += 1
+    return perimees
+
+
 async def rejeter(session: AsyncSession, proposition: Proposition) -> None:
     await _ouvrir(session, proposition)
     proposition.etat = "rejetee"

@@ -442,7 +442,7 @@ def test_catalogue_architecture_accepte(tmp_path):
         (
             {"vision": VISION + "    sans_validation: true\n"},
             ["vision"],
-            "l'agent « vision » : sans_validation réservé aux volets auto",
+            "l'agent « vision » : sans_validation réservé aux volets et tâches auto",
         ),
         (
             {"vision": VISION, "volet": VOLET.replace("    auto: true\n", "")},
