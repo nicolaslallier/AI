@@ -347,17 +347,41 @@ async def test_detail_modele_et_outils(client):
     assert d["contexte_max"] == 32768 and d["missions"] == []
 
 
-async def test_detail_sans_prompt(client, sessions):
+async def test_detail_sans_prompt(moteur, reglages, faux_llm, sessions):
+    from asgi_lifespan import LifespanManager
+    from httpx import ASGITransport, AsyncClient
+
+    from portail.agents import Agent, Catalogue
+    from portail.api import create_app
+
+    agent = Agent(
+        nom="spec", description="la description attendue", modele="m", contexte_max=32768,
+        prompt_systeme=f"prompt {MARQUEUR}", consigne_redaction=f"redaction {MARQUEUR}",
+        consigne_avis=f"avis {MARQUEUR}",
+    )  # fmt: skip
+    cat = Catalogue(agents={"spec": agent}, pipelines={"spec": ["spec"]})
     await _appels(sessions, "spec", "m1")
-    r = await client.get("/api/bureau/spec")
-    assert "prompt_systeme" not in r.json()
-    assert not {"consigne_redaction", "consigne_avis"} & r.json().keys()
-    assert "Tu es spec." not in r.text and "Rédige la spec." not in r.text
+    app = create_app(reglages=reglages, llm=faux_llm, catalogue=cat)
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        r = await c.get("/api/bureau/spec")
+    assert r.status_code == 200
+    assert MARQUEUR not in r.text
+    assert r.json()["description"] == "la description attendue"
 
 
 async def test_agent_inconnu_404(client):
     r = await client.get(f"/api/bureau/{MARQUEUR}")
     assert r.status_code == 404 and MARQUEUR not in r.text
+    assert r.json()["detail"] == "agent inconnu"
+
+
+async def test_mission_sans_pipeline_pas_de_lien(client, sessions):
+    await _ligne(sessions, "m1", datetime.now(UTC) - timedelta(hours=1), tache_id=7)
+    m = (await client.get("/api/bureau/a")).json()["missions"][0]
+    assert (m["libelle"], m["lien"]) == ("T7", None)
 
 
 async def _ligne(sessions, mission, quand, duree_ms=1000, issue="ok", **kw):

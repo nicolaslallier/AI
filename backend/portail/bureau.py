@@ -200,7 +200,7 @@ async def lire_bureau(s: AsyncSession, cat: Catalogue, maintenant: datetime) -> 
 
 def _libelle_et_lien(a: AppelLLM) -> tuple[str | None, str | None]:
     if a.tache_id:
-        return f"T{a.tache_id}", f"/pipelines/{a.pipeline_id}"
+        return f"T{a.tache_id}", f"/pipelines/{a.pipeline_id}" if a.pipeline_id else None
     if a.conversation_id:
         return f"conversation #{a.conversation_id}", f"/chat/{a.conversation_id}"
     if a.pipeline_id:
