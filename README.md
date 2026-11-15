@@ -31,6 +31,14 @@ Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolas
     - installer l'application Renovate sur le dépôt.
     - remplacer `PORTAIL_LITELLM_CLE` dans OpenBao par une clé LiteLLM limitée aux modèles de `modeles_permis` (`agents.yaml`), jamais la clé maîtresse.
 
+## Monitoring
+
+- **`/metrics`** : format Prometheus, lu par Prometheus sur `infra-net` (job `portail`) ; le frontal NGINX répond 404 (`location ^~ /metrics` de `deploy/nginx/portail.conf`).
+- **Tableaux de bord et alertes** : `deploy/grafana/` (`portail-sante`, `portail-boucle-dev`, `portail-agents`, `portail-lanceur`, et `alertes-portail.yml`), recopiés par la PR Infra du lot G (`deploy/infra/README.md`). `backend/tests/test_grafana.py` vérifie que chaque métrique citée existe.
+- **Table `appel_llm`** : une ligne par appel au modèle (agent, modèle, lieu, issue, jetons, durée), écrite par `ClientLLM`, sans aucun contenu.
+- **Journaux JSON** : un objet par ligne, avec les champs `pipeline`, `etape`, `tache`, `conversation`, `agent` et `mission` quand ils existent. Recherche Loki : `{container=~"portail-portail.*"} | json | mission="<id>"`.
+- **Aucun contenu** dans une métrique, une étiquette, un journal, une alerte ou un panneau : seulement identifiants, noms, compteurs, durées et codes.
+
 ## Sécurité
 
 Le dépôt est public : rien de secret n'y entre, tout passe par OpenBao.

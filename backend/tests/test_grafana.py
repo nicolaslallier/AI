@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 
+import yaml
 from prometheus_client import REGISTRY, generate_latest
 
 import portail.metriques  # noqa: F401 (déclare les métriques dans le registre)
@@ -50,3 +51,20 @@ def test_metriques_existantes():
     assert len(fichiers) >= 4
     cites = {_racine(m) for f in fichiers for m in re.findall(r"\bportail_\w+", f.read_text())}
     assert cites and cites <= exposees, cites - exposees
+
+
+def test_alertes_valides():
+    groupe = yaml.safe_load((DOSSIER / "alertes-portail.yml").read_text())["groups"][0]
+    assert groupe["name"] == "portail" and groupe["interval"] == "1m"
+    regles = {r["uid"]: r for r in groupe["rules"]}
+    assert set(regles) == {
+        "portail-erreurs-modele",
+        "portail-tache-trop-longue",
+        "portail-echecs-consecutifs",
+        "portail-deploiement-ancien",
+    }
+    for r in regles.values():
+        assert r["condition"] and "for" in r and r["noDataState"] == "OK", r["uid"]
+        assert r["annotations"]["summary"].strip()
+        for texte in r["annotations"].values():  # rien de variable dans la notification
+            assert "$values" not in texte and "$labels" not in texte
