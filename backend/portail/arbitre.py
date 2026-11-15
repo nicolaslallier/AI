@@ -32,7 +32,8 @@ class Arbitre:
                 await f
             except asyncio.CancelledError:
                 if f.cancelled():
-                    m.files[priorite].remove(f)
+                    if f in m.files[priorite]:  # sinon `_liberer` l'a déjà écartée
+                        m.files[priorite].remove(f)
                 else:  # le tour nous avait déjà été donné : le rendre
                     self._liberer(m)
                 raise
@@ -45,15 +46,19 @@ class Arbitre:
 
     @staticmethod
     def _liberer(m: _Modele) -> None:
+        for file in m.files.values():  # écarter les attentes annulées avant leur réveil
+            while file and file[0].done():
+                file.popleft()
         interactif, fond = m.files["interactif"], m.files["fond"]
         if fond and (m.rafale >= _RAFALE_MAX or not interactif):
             m.rafale = 0
             suivant = fond.popleft()
         elif interactif:
-            m.rafale += 1 if fond else 0
+            m.rafale = m.rafale + 1 if fond else 0
             suivant = interactif.popleft()
         else:
             m.occupe = False
+            m.rafale = 0
             return
         suivant.set_result(None)  # le modèle reste occupé : il passe au suivant
 
