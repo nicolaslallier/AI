@@ -533,3 +533,7 @@ def test_agents_yaml_reel_bureau_d_architectes():
     nuage = {"cloud-anthropic", "cloud-openai", "cloud-gemini"}
     for a in cat.pipelines["architecture"]:
         assert cat.agents[a].modele in nuage, a
+    synthese = cat.agents["archi-entreprise-synthese"].consigne_redaction
+    assert "Ne recopie pas les éléments des volets" in synthese
+    assert "le modèle complet, fusionné" not in synthese
+    assert synthese.count("Réponds uniquement avec le document") == 1

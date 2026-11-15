@@ -62,21 +62,21 @@ flowchart LR
     g2_securite --> g2_doc
   end
   subgraph g3["architecture"]
-    g3_archi-entreprise["archi-entreprise"]
-    g3_archi-affaires["archi-affaires"]
-    g3_archi-donnees["archi-donnees"]
-    g3_archi-applicatif["archi-applicatif"]
-    g3_archi-techno["archi-techno"]
-    g3_archi-securite["archi-securite"]
-    g3_archi-solution["archi-solution"]
-    g3_archi-entreprise-synthese["archi-entreprise-synthese"]
-    g3_archi-entreprise --> g3_archi-affaires
-    g3_archi-affaires --> g3_archi-donnees
-    g3_archi-donnees --> g3_archi-applicatif
-    g3_archi-applicatif --> g3_archi-techno
-    g3_archi-techno --> g3_archi-securite
-    g3_archi-securite --> g3_archi-solution
-    g3_archi-solution --> g3_archi-entreprise-synthese
+    g3_archi_entreprise["archi-entreprise"]
+    g3_archi_affaires["archi-affaires"]
+    g3_archi_donnees["archi-donnees"]
+    g3_archi_applicatif["archi-applicatif"]
+    g3_archi_techno["archi-techno"]
+    g3_archi_securite["archi-securite"]
+    g3_archi_solution["archi-solution"]
+    g3_archi_entreprise_synthese["archi-entreprise-synthese"]
+    g3_archi_entreprise --> g3_archi_affaires
+    g3_archi_affaires --> g3_archi_donnees
+    g3_archi_donnees --> g3_archi_applicatif
+    g3_archi_applicatif --> g3_archi_techno
+    g3_archi_techno --> g3_archi_securite
+    g3_archi_securite --> g3_archi_solution
+    g3_archi_solution --> g3_archi_entreprise_synthese
   end
   subgraph g4["hors pipeline"]
     g4_orchestrateur["orchestrateur"]

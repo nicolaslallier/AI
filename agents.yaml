@@ -763,12 +763,6 @@ agents:
         de tous les volets.
       Ne recopie pas les éléments des volets : le portail les fusionne.
       Réponds uniquement avec le document, sans préambule ni commentaire.
-      ```json {"elements": [...], "relations": [...], "vues": [...]} :
-      le modèle complet, fusionné à partir de la vision et des six volets. Garde les identifiants
-      d'origine ; retire un doublon en gardant un seul identifiant et en corrigeant les relations
-      et les vues qui le citaient. Garde les vues des volets et ajoute au moins une vue d'ensemble
-      en couches (point de vue « Layered »). Tes propres ajouts commencent par « ent- ».
-      Réponds uniquement avec le document, sans préambule ni commentaire.
 pipelines:
   spec: [spec]
   planification: [plan, taches]

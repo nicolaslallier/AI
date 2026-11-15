@@ -56,3 +56,13 @@ def test_readme_a_jour():
 def test_remplacer_refuse_un_marqueur_en_double():
     with pytest.raises(ValueError):
         remplacer(f"{DEBUT}\nx\n{FIN}\n{DEBUT}\ny\n{FIN}\n", "z")
+
+
+def test_identifiants_de_noeuds_sans_tiret():
+    import re
+
+    cat = charger_catalogue(RACINE / "agents.yaml")
+    texte = mermaid(cat)
+    ids = re.findall(r"^\s+(g\d+_\S+?)\[", texte, re.MULTILINE)
+    assert ids and all("-" not in i for i in ids)
+    assert '["archi-entreprise"]' in texte
