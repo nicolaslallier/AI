@@ -164,6 +164,7 @@ class ExecutionVue(BaseModel):
     renvois: int
     pr_url: str | None
     mode: str
+    notes: list[dict] = []
 
 
 class CommentaireVue(BaseModel):

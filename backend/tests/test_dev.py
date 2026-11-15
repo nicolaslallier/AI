@@ -54,6 +54,19 @@ CATALOGUE = Catalogue(
     pipelines={"dev": ["tests", "code", "revue"]},
 )
 
+LECTURE = ["lister", "lire", "chercher"]
+CATALOGUE_D = Catalogue(
+    agents={
+        **CATALOGUE.agents,
+        "challenger": _agent("challenger", "revue", LECTURE, "verdict").model_copy(
+            update={"modele_si_meme": "autre"}
+        ),
+        "securite": _agent("securite", "revue", [*LECTURE, "lancer"], "verdict"),
+        "doc": _agent("doc", "doc", [*LECTURE, "ecrire", "supprimer"]),
+    },
+    pipelines={"dev": ["tests", "code", "revue", "challenger", "securite", "doc"]},
+)
+
 _ids = itertools.count()
 
 
@@ -80,6 +93,10 @@ def verdict(decision, *remarques):
 
 TESTS_OK = [appel("ecrire", chemin="tests/test_x.py", contenu="def test_x(): ..."), texte("ok")]
 CODE_OK = [appel("ecrire", chemin="src/x.py", contenu="x = 1\n"), texte("fait")]
+
+
+# revue, challenger, sécurité : ok ; doc : rien à changer
+CONTROLES_OK = [verdict("ok"), verdict("ok"), verdict("ok"), texte("rien")]
 
 
 class Monde:
@@ -479,24 +496,39 @@ async def test_revue_renvoie_au_code_puis_ok(monde):
     ]  # fmt: skip
 
 
-async def test_revue_renvoie_aux_tests_saute_le_rouge(monde):
-    monde.lanceur.codes = {CIBLES: [1]}
+async def test_renvoi_aux_tests_rouge_sur_les_seuls_fichiers_du_renvoi(monde):
+    monde.lanceur.codes = {CIBLES: [1], "pytest tests/test_y.py": [1]}
     monde.llm.reponses = [
         *TESTS_OK,
         *CODE_OK,
         verdict("renvoyer_tests", "tester y"),
         appel("ecrire", chemin="tests/test_y.py", contenu="def test_y(): ..."),
         texte("ajouté"),
-        texte("rien à changer"),
+        texte("fait"),
         verdict("ok"),
     ]
     pid = await monde.lancer()
     ex, _tache, pipeline = await monde.etat(pid)
     assert pipeline.etat == "terminee"
     assert ex.fichiers_tests == ["tests/test_x.py", "tests/test_y.py"]
+    assert ex.fichiers_rouge == []
     async with monde.sessions() as s:
         actions = (await s.scalars(select(Etape.action).order_by(Etape.ordre))).all()
-    assert actions.count("rouge") == 1
+        rouges = (
+            await s.scalars(
+                select(CommandeLancee.nom)
+                .join(Etape, Etape.id == CommandeLancee.etape_id)
+                .where(Etape.action == "rouge")
+            )
+        ).all()
+    assert actions.count("rouge") == 2 and rouges == ["tests_cibles", "tests_cibles"]
+    lances = [
+        a["commande"] for a in monde.lanceur.appels if a.get("commande", "").startswith("pytest ")
+    ]
+    # rouge, vérification, rouge du renvoi (test_y seul), vérification
+    assert lances == [
+        CIBLES, CIBLES, "pytest tests/test_y.py", "pytest tests/test_x.py tests/test_y.py"
+    ]  # fmt: skip
 
 
 async def test_trois_renvois_ouvre_quand_meme_avec_remarques(monde):
@@ -518,14 +550,17 @@ async def test_trois_renvois_ouvre_quand_meme_avec_remarques(monde):
     assert "Remarques non résolues" in corps and "c toujours faux" in corps
 
 
-async def test_revue_illisible_ouvre_avec_remarque(monde):
+async def test_verdict_illisible_devient_note(monde):
     monde.lanceur.codes = {CIBLES: [1]}
     monde.llm.reponses = [*TESTS_OK, *CODE_OK, texte("bof"), texte("toujours pas du JSON")]
     pid = await monde.lancer()
-    _ex, _tache, pipeline = await monde.etat(pid)
+    ex, _tache, pipeline = await monde.etat(pid)
     assert pipeline.etat == "terminee"
     assert monde.llm.appels[-1]["response_format"]["type"] == "json_schema"
-    assert "revue automatique illisible" in monde.github.prs[1]["corps"]
+    assert ex.notes == [{"agent": "revue", "texte": "verdict illisible de revue"}]
+    corps = monde.github.prs[1]["corps"]
+    assert "## Notes des contrôles" in corps and "verdict illisible de revue" in corps
+    assert "Remarques non résolues" not in corps
 
 
 async def test_branche_non_protegee_bloque(monde):
@@ -652,3 +687,200 @@ async def test_ntfy_en_panne_n_arrete_rien(monde):
     monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok", "propre")]
     await monde.lancer()
     assert 1 in monde.github.prs
+
+
+CONFIG_D = CONFIG + '  securite: "audit"\n'
+
+
+@pytest.fixture
+async def monde_d(tmp_path, sessions):
+    m = Monde(tmp_path, sessions)
+    m.orch = Orchestrateur(
+        sessions, CATALOGUE_D, m.llm, m.lanceur, m.github, m.reglages,
+        depot_de=lambda url: "nicolas/projet", notifieur=m.notifieur,
+    )  # fmt: skip
+    await m.creer()
+    async with sessions() as s:
+        (await s.get(Projet, 1)).config_execution = CONFIG_D
+        await s.commit()
+    m.lanceur.codes = {CIBLES: [1]}
+    return m
+
+
+async def etapes_apres(monde, agent: str, action: str | None = None) -> list[str]:
+    """Agents (ou actions du portail) des étapes après la première `agent`/`action`."""
+    async with monde.sessions() as s:
+        etapes = (await s.scalars(select(Etape).order_by(Etape.id))).all()  # tous pipelines
+    noms = [e.action or e.agent for e in etapes]
+    return noms[noms.index(action or agent) + 1 :]
+
+
+def appels_de(monde, agent: str) -> list[dict]:
+    return [
+        a for a in monde.llm.appels if a["messages"][0]["content"].startswith(f"Tu es {agent}.")
+    ]
+
+
+async def test_tous_les_controles_tournent_dans_l_ordre(monde_d):
+    amont = monde_d.origine.parent / "amont"
+    (amont / "AGENTS.md").write_text("Toujours des docstrings.\n")
+    git(amont, "add", "-A")
+    git(amont, "commit", "-m", "règles")
+    git(amont, "push", "origin", "main")
+    monde_d.llm.reponses = [*TESTS_OK, *CODE_OK, *CONTROLES_OK]
+    pid = await monde_d.lancer()
+    _ex, _tache, pipeline = await monde_d.etat(pid)
+    assert pipeline.etat == "terminee"
+    assert await etapes_apres(monde_d, "verification") == [
+        "revue", "challenger", "securite", "doc", "pr"
+    ]  # fmt: skip
+    (challenger,) = appels_de(monde_d, "challenger")
+    annexes = "\n".join(m["content"] or "" for m in challenger["messages"])
+    assert "Toujours des docstrings." in annexes and "Diff de la tâche" in annexes
+    (revue,) = appels_de(monde_d, "revue")
+    assert "Toujours des docstrings." not in "\n".join(
+        m["content"] or "" for m in revue["messages"]
+    )
+
+
+async def test_renvoi_du_challenger_reprend_tout(monde_d):
+    monde_d.llm.reponses = [
+        *TESTS_OK, *CODE_OK,
+        verdict("ok"), verdict("renvoyer_code", "cas limite"),
+        texte("corrigé"),
+        *CONTROLES_OK,
+    ]  # fmt: skip
+    pid = await monde_d.lancer()
+    ex, _tache, pipeline = await monde_d.etat(pid)
+    assert pipeline.etat == "terminee" and ex.renvois == 1
+    assert await etapes_apres(monde_d, "challenger") == [
+        "code", "verification", "revue", "challenger", "securite", "doc", "pr"
+    ]  # fmt: skip
+    code2 = appels_de(monde_d, "code")[-1]["messages"]
+    assert any("cas limite" in (m["content"] or "") for m in code2)
+
+
+async def test_compteur_partage(monde_d):
+    monde_d.llm.reponses = [
+        *TESTS_OK, *CODE_OK,
+        verdict("renvoyer_code", "a"),
+        texte("rien"),
+        verdict("ok"), verdict("ok"), verdict("renvoyer_code", "b"),
+        texte("rien"),
+        verdict("ok"), verdict("renvoyer_code", "c toujours faux"), verdict("ok"), texte("rien"),
+    ]  # fmt: skip
+    pid = await monde_d.lancer()
+    ex, _tache, pipeline = await monde_d.etat(pid)
+    assert pipeline.etat == "terminee" and ex.renvois == 2
+    assert ex.remarques == ["c toujours faux"]
+    noms = await etapes_apres(monde_d, "securite")  # après le renvoi de la sécurité
+    assert noms[-4:] == ["challenger", "securite", "doc", "pr"]
+    corps = monde_d.github.prs[1]["corps"]
+    assert "Remarques non résolues" in corps and "c toujours faux" in corps
+
+
+async def test_modele_du_challenger(monde_d):
+    monde_d.llm.reponses = [*TESTS_OK, *CODE_OK, *CONTROLES_OK]
+    await monde_d.lancer()
+    assert {a["modele"] for a in appels_de(monde_d, "code")} == {"m"}
+    assert [a["modele"] for a in appels_de(monde_d, "challenger")] == ["autre"]
+    assert [a["modele"] for a in appels_de(monde_d, "revue")] == ["m"]
+
+
+async def test_modele_du_challenger_garde_pour_la_relance(monde_d):
+    monde_d.llm.reponses = [
+        *TESTS_OK, *CODE_OK, verdict("ok"), texte("bof"), texte("pas du JSON"), verdict("ok"),
+        texte("rien"),
+    ]  # fmt: skip
+    pid = await monde_d.lancer()
+    ex, _tache, _pipeline = await monde_d.etat(pid)
+    assert [a["modele"] for a in appels_de(monde_d, "challenger")] == ["autre", "autre"]
+    assert ex.notes == [{"agent": "challenger", "texte": "verdict illisible de challenger"}]
+
+
+async def test_securite_lance_en_lecture_seule(monde_d):
+    monde_d.llm.reponses = [
+        *TESTS_OK, *CODE_OK,
+        verdict("ok"), verdict("ok"),
+        appel("lancer", nom="securite"), verdict("ok"),
+        texte("rien"),
+    ]  # fmt: skip
+    pid = await monde_d.lancer()
+    _ex, _tache, pipeline = await monde_d.etat(pid)
+    assert pipeline.etat == "terminee"
+    (audit,) = [a for a in monde_d.lanceur.appels if a.get("commande") == "audit"]
+    assert audit["tout_lecture_seule"] is True
+    autres = [a for a in monde_d.lanceur.appels if a["route"] == "lancer" and a is not audit]
+    assert not any(a["tout_lecture_seule"] for a in autres)
+
+
+@pytest.mark.parametrize("ecrit", [True, False])
+async def test_doc_commit_seulement_si_changement(monde_d, ecrit):
+    doc = [appel("ecrire", chemin="README.md", contenu="# Équipe\n")] if ecrit else []
+    monde_d.llm.reponses = [
+        *TESTS_OK, *CODE_OK, verdict("ok"), verdict("ok"), verdict("ok"), *doc, texte("fait"),
+    ]  # fmt: skip
+    pid = await monde_d.lancer()
+    _ex, _tache, pipeline = await monde_d.etat(pid)
+    assert pipeline.etat == "terminee"
+    sujets = git(monde_d.origine, "log", "--format=%s", f"main..{BRANCHE}").splitlines()
+    if ecrit:
+        assert monde_d.auteurs()[0] == "agent-doc@portail.local"
+        assert sujets[0] == "docs: Ajouter l'équipe"
+    else:
+        assert "agent-doc@portail.local" not in monde_d.auteurs()
+
+
+async def test_doc_hors_chemins_restaure(monde_d):
+    vrai = monde_d.llm.completer
+    espace = monde_d.reglages.espaces_dir / "tache-1-1"
+
+    async def completer(modele, messages, *a, **k):
+        if messages[0]["content"].startswith("Tu es doc."):  # écrit hors des outils
+            (espace / "src" / "a.py").write_text("triche = 1\n")
+            (espace / "notes.txt").write_text("triche\n")
+        return await vrai(modele, messages, *a, **k)
+
+    monde_d.llm.completer = completer
+    monde_d.llm.reponses = [
+        *TESTS_OK, *CODE_OK, verdict("ok"), verdict("ok"), verdict("ok"),
+        appel("ecrire", chemin="docs/equipe.md", contenu="# Équipe\n"), texte("fait"),
+    ]  # fmt: skip
+    pid = await monde_d.lancer()
+    _ex, _tache, pipeline = await monde_d.etat(pid)
+    assert pipeline.etat == "terminee"
+    sha = git(monde_d.origine, "log", "-1", "--format=%H", "--author=agent-doc", BRANCHE)
+    assert git(monde_d.origine, "show", "--name-only", "--format=", sha).split() == [
+        "docs/equipe.md"
+    ]
+    assert git(monde_d.origine, "show", f"{BRANCHE}:src/a.py") == "a = 1"
+    async with monde_d.sessions() as s:
+        notes = (await s.scalars(select(Message.contenu).where(Message.role == "system"))).all()
+    assert any("src/a.py" in n and "notes.txt" in n for n in notes)
+
+
+async def test_relance_en_controles_reprend_au_bon_index(monde_d):
+    monde_d.llm.reponses = [
+        *TESTS_OK, *CODE_OK,
+        verdict("renvoyer_code", "a"), texte("rien"),
+        verdict("ok"), asyncio.Event(),  # arrêt pendant le challenger
+    ]  # fmt: skip
+    async with monde_d.sessions() as s:
+        pid = (await monde_d.orch.demarrer(s, await s.get(Tache, 1))).id
+        await s.commit()
+    tache = asyncio.create_task(monde_d.orch.executer(pid))
+    async with asyncio.timeout(15):
+        while len(appels_de(monde_d, "challenger")) < 1:
+            await asyncio.sleep(0.02)
+    tache.cancel()  # arrêt brutal du portail pendant le 2e contrôle
+    await asyncio.wait([tache])
+    ex, _tache, _pipeline = await monde_d.etat(pid)
+    assert (ex.phase, ex.controle_courant, ex.renvois) == ("controles", 1, 1)
+    monde_d.llm.reponses = [verdict("ok"), verdict("ok"), texte("rien")]
+    await monde_d.orch.executer(pid)
+    ex, _tache, pipeline = await monde_d.etat(pid)
+    assert pipeline.etat == "terminee" and ex.renvois == 1
+    assert await etapes_apres(monde_d, "portail", "reprise") == [
+        "challenger", "securite", "doc", "pr"
+    ]  # fmt: skip
+    assert len(appels_de(monde_d, "revue")) == 2  # rien de rejoué

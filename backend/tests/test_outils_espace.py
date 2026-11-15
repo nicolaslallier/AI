@@ -54,6 +54,25 @@ async def test_role_doc_ecrit_seulement_la_doc(tmp_path):
     assert res == ("supprimé : docs/a.md", False)
 
 
+async def test_role_doc_md_sous_chemin_protege_refuse(tmp_path):
+    _git(tmp_path, "init", "-q")
+    cfg = CFG.model_copy(update={"chemins_doc": ["**/*.md"]})
+    o = OutilsEspace(tmp_path, "doc", cfg, None)
+    res = await o.executer("ecrire", json.dumps({"chemin": "tests/notes.md", "contenu": "x"}))
+    assert res == ("erreur : écriture interdite pour le rôle doc", False)
+    res = await o.executer("ecrire", json.dumps({"chemin": "src/notes.md", "contenu": "x"}))
+    assert res == ("écrit : src/notes.md", False)
+    assert not (tmp_path / "tests").exists()
+
+
+async def test_role_doc_remontee_refusee(tmp_path):
+    o = _outils(tmp_path, "doc")
+    (tmp_path / "docs").mkdir()
+    res = await o.executer("ecrire", json.dumps({"chemin": "docs/../src/a.py", "contenu": "x"}))
+    assert res == ("erreur : écriture interdite pour le rôle doc", False)
+    assert not (tmp_path / "src").exists()
+
+
 def test_revue_lancer_seulement_securite(tmp_path):
     _git(tmp_path, "init", "-q")
     cfg = CFG.model_copy(update={"commandes": {**CFG.commandes, "securite": "audit"}})

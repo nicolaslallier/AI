@@ -221,8 +221,9 @@ class ExecutionDev(Base):
     espace: Mapped[str] = mapped_column(String)
     base: Mapped[str] = mapped_column(String)  # branche de référence résolue
     base_sha: Mapped[str] = mapped_column(String)
-    # preparation | tests | rouge | code | verification | revue | pr | fini
-    # (reprise : attente | preparation | tri | tests | code | verification | revue | reponses | fini)
+    # preparation | tests | rouge | code | verification | controles | pr | fini
+    # (reprise : attente | preparation | tri | tests | code | verification | controles | reponses
+    # | fini)
     phase: Mapped[str] = mapped_column(String)
     renvois: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     interruptions: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
@@ -233,6 +234,11 @@ class ExecutionDev(Base):
     pr_url: Mapped[str | None] = mapped_column(String)
     mode: Mapped[str] = mapped_column(String, default="normal", server_default="normal")
     depart_revue: Mapped[str | None] = mapped_column(String)  # HEAD après fusion de la base
+    # index, dans les contrôles de `pipelines.dev`, du prochain contrôle à faire tourner
+    controle_courant: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    notes: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")  # {agent, texte}
+    lint_base_ok: Mapped[bool | None] = mapped_column(Boolean)
+    fichiers_rouge: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
     debut: Mapped[datetime] = _horodatage()
 
 
@@ -253,7 +259,7 @@ class CommentairePris(Base):
     chemin: Mapped[str | None] = mapped_column(String)
     ligne: Mapped[int | None] = mapped_column(Integer)
     cree_le: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # date GitHub
-    tri: Mapped[str | None] = mapped_column(String)  # tests | code | reponse
+    tri: Mapped[str | None] = mapped_column(String)  # tests | code | doc | reponse
     consigne: Mapped[str | None] = mapped_column(Text)
     repondu_le: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

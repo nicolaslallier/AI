@@ -27,7 +27,7 @@ async def test_detail_pipeline_dev_execution_et_commandes(client, sessions):
     d = (await client.get(f"/api/pipelines/{pipeline_id}")).json()
     assert d["execution"] == {
         "branche": "portail/tache-1-t", "phase": "code", "renvois": 1, "mode": "normal",
-        "pr_url": "https://github.com/o/r/pull/7",
+        "pr_url": "https://github.com/o/r/pull/7", "notes": [],
     }  # fmt: skip
     (c,) = d["commandes"]
     assert (c["nom"], c["code"], c["delai_depasse"], c["sortie"]) == ("tests", 1, False, "boum")

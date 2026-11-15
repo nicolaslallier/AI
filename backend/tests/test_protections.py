@@ -57,6 +57,27 @@ async def test_commit_doc_dans_docs_permis(espace, cfg):
     assert await verifier_commits_code(espace, base, cfg) == []
 
 
+async def test_commit_doc_md_sous_chemin_protege_viole(espace, cfg):
+    cfg = cfg.model_copy(update={"chemins_doc": ["**/*.md"]})
+    base = await _base(espace, {"README.md": "a"})
+    await _code(espace, {"README.md": "b", "tests/notes.md": "x"}, "agent-doc")
+    assert await verifier_commits_code(espace, base, cfg) == [
+        "tests/notes.md (hors des chemins de doc)"
+    ]
+
+
+async def test_commit_doc_section_de_test_du_manifeste_viole(espace, cfg):
+    cfg = cfg.model_copy(update={"chemins_doc": ["**"]})
+    await _base(espace, {"pyproject.toml": "[tool.pytest.ini_options]\naddopts = '-q'\n"})
+    base = git(espace.racine, "rev-parse", "HEAD")
+    await _code(
+        espace, {"pyproject.toml": "[tool.pytest.ini_options]\naddopts = '-q --lf'\n"}, "agent-doc"
+    )
+    assert await verifier_commits_code(espace, base, cfg) == [
+        "pyproject.toml (section tool.pytest.ini_options)"
+    ]
+
+
 async def test_commit_code_supprime_un_test(espace, cfg):
     base = git(espace.racine, "rev-parse", "HEAD")
     await _code(espace, {"tests/a.py": None})

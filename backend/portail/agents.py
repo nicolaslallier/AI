@@ -95,6 +95,13 @@ class Agent(BaseModel):
         return self
 
 
+def modele_pour(agent: Agent, auteur: Agent) -> str:
+    """Le modèle de `agent` quand il conteste `auteur` : jamais le même que l'auteur, si possible."""
+    if agent.modele == auteur.modele and agent.modele_si_meme:
+        return agent.modele_si_meme
+    return agent.modele
+
+
 class Catalogue(BaseModel):
     agents: dict[str, Agent]
     pipelines: dict[str, list[str]]

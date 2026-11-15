@@ -6,8 +6,10 @@ from portail.agents import (
     OUTILS_ACTIONS_PORTAIL,
     OUTILS_PORTAIL,
     OUTILS_SUIVI,
+    Agent,
     CatalogueInvalide,
     charger_catalogue,
+    modele_pour,
 )
 
 VALIDE = """
@@ -253,3 +255,16 @@ def test_agents_yaml_du_depot_a_l_orchestrateur():
     a = charger_catalogue(racine / "agents.yaml").agents["orchestrateur"]
     assert set(a.outils) == set(OUTILS_PORTAIL) - set(OUTILS_SUIVI)
     assert (a.temperature, a.tours_max) == (0.3, 10)
+
+
+def test_modele_pour():
+    def agent(nom, modele, si_meme=None):
+        return Agent(
+            nom=nom, description=nom, modele=modele, prompt_systeme="p", contexte_max=1000,
+            modele_si_meme=si_meme,
+        )  # fmt: skip
+
+    code = agent("code", "x")
+    assert modele_pour(agent("challenger", "x", "y"), code) == "y"
+    assert modele_pour(agent("challenger", "z", "y"), code) == "z"
+    assert modele_pour(agent("revue", "x"), code) == "x"

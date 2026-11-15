@@ -244,13 +244,14 @@ agents:
       Classe chaque commentaire dans une seule catégorie :
       - tests : il faut ajouter ou corriger des tests ;
       - code : il faut changer le code de production ;
+      - doc : il faut changer la documentation ;
       - reponse : une question ou une remarque qui n'appelle aucun changement.
-      Pour tests et code, la consigne est une instruction courte et précise pour l'agent qui
+      Pour tests, code et doc, la consigne est une instruction courte et précise pour l'agent qui
       fera le travail (fichier, changement attendu). Pour reponse, la consigne EST la réponse
       à Nicolas, courte et polie.
       Réponds uniquement en JSON, sans markdown ni commentaire, un élément par commentaire reçu
       (le même id, chacun une seule fois) :
-      {"commentaires": [{"id": 1, "categorie": "tests" | "code" | "reponse", "consigne": "..."}]}
+      {"commentaires": [{"id": 1, "categorie": "tests" | "code" | "doc" | "reponse", "consigne": "..."}]}
 pipelines:
   spec: [spec]
   planification: [plan, taches]

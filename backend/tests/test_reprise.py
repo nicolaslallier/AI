@@ -9,12 +9,17 @@ from sqlalchemy import select, update
 from test_dev import (
     BRANCHE,
     CATALOGUE,
+    CATALOGUE_D,
     CIBLES,
     CODE_OK,
+    CONFIG_D,
+    CONTROLES_OK,
     TESTS_OK,
     Monde,
     _agent,
     appel,
+    appels_de,
+    etapes_apres,
     git,
     texte,
     verdict,
@@ -22,7 +27,7 @@ from test_dev import (
 
 from portail.agents import Catalogue
 from portail.api import create_app
-from portail.db import CommentairePris, Etape, ExecutionDev, Pipeline, Tache
+from portail.db import CommentairePris, Etape, ExecutionDev, Pipeline, Projet, Tache
 from portail.dev import MANIFESTE_A_NICOLAS, Orchestrateur, lire_tri
 from portail.github import ErreurGitHub
 
@@ -67,9 +72,9 @@ def pousser_sur_main(monde: Monde, chemin: str, contenu: str) -> None:
     git(amont, "push", "origin", "main")
 
 
-async def en_revue(monde: Monde) -> int:
+async def en_revue(monde: Monde, *controles) -> int:
     monde.lanceur.codes = {CIBLES: [1]}
-    monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok")]
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, *(controles or [verdict("ok")])]
     pid = await monde.lancer()
     _ex, tache, _p = await monde.etat(pid)
     assert (tache.colonne, tache.verrou) == ("en_revue", pid)
@@ -523,3 +528,89 @@ async def test_une_reponse_en_echec_n_arrete_pas_les_autres(monde):
     ((_n, corps),) = monde.github.commentaires
     assert "> Vu" in corps and "c" in corps
     assert [c.repondu_le is not None for c in await pris(monde)] == [False, True, True]
+
+
+@pytest.fixture
+async def monde_d(tmp_path, sessions):
+    m = Monde(tmp_path, sessions)
+    m.reglages.donnees_dir = tmp_path / "donnees"
+    catalogue = Catalogue(
+        agents={**CATALOGUE_D.agents, "tri": CATALOGUE_REPRISE.agents["tri"]},
+        pipelines=CATALOGUE_D.pipelines,
+    )
+    m.orch = Orchestrateur(
+        sessions, catalogue, m.llm, m.lanceur, m.github, m.reglages,
+        depot_de=lambda url: "nicolas/projet", notifieur=m.notifieur,
+    )  # fmt: skip
+    await m.creer()
+    async with sessions() as s:
+        (await s.get(Projet, 1)).config_execution = CONFIG_D
+        await s.commit()
+    await en_revue(m, *CONTROLES_OK)
+    return m
+
+
+async def test_reprise_passe_par_tous_les_controles(monde_d):
+    monde_d.llm.reponses = [
+        tri((1, "code", "corrige a")),
+        modifier("src/a.py", "a = 2\n"), texte("fait"),
+        *CONTROLES_OK,
+    ]  # fmt: skip
+    pid = await reprendre(monde_d, [commentaire("revue", 10)])
+    _ex, tache, pipeline = await monde_d.etat(pid)
+    assert (tache.colonne, pipeline.etat) == ("en_revue", "terminee")
+    async with monde_d.sessions() as s:
+        etapes = (
+            await s.scalars(select(Etape).where(Etape.pipeline_id == pid).order_by(Etape.ordre))
+        ).all()
+    assert [e.action or e.agent for e in etapes][1:] == [
+        "tri", "code", "verification", "revue", "challenger", "securite", "doc", "reponses"
+    ]  # fmt: skip
+    annexes = "\n".join(
+        m["content"] or "" for m in appels_de(monde_d, "challenger")[-1]["messages"]
+    )
+    assert "corrige a" in annexes and "a = 2" in annexes
+
+
+async def test_reprise_commentaire_doc_passe_par_l_agent_doc(monde_d):
+    monde_d.llm.reponses = [
+        tri((1, "doc", "documente l'équipe")),
+        verdict("ok"), verdict("ok"), verdict("ok"),
+        modifier("README.md", "# Équipe\n"), texte("fait"),
+    ]  # fmt: skip
+    pid = await reprendre(monde_d, [commentaire("revue", 10, texte="Il manque la doc")])
+    _ex, tache, pipeline = await monde_d.etat(pid)
+    assert (tache.colonne, pipeline.etat) == ("en_revue", "terminee")
+    assert await etapes_apres(monde_d, "tri") == [
+        "revue", "challenger", "securite", "doc", "reponses"
+    ]  # fmt: skip
+    doc = "\n".join(m["content"] or "" for m in appels_de(monde_d, "doc")[-1]["messages"])
+    assert "documente l'équipe" in doc
+    assert git(monde_d.origine, "log", "-1", "--format=%ae %s", BRANCHE) == (
+        "agent-doc@portail.local docs: Ajouter l'équipe (reprise)"
+    )
+    court = git(monde_d.origine, "rev-parse", "--short=7", BRANCHE)
+    ((_n, corps),) = monde_d.github.commentaires
+    assert f"Fait dans {court} : documente l'équipe" in corps
+
+
+async def test_reprise_compteur_repart_a_zero(monde):
+    origine = await en_revue(
+        monde, verdict("renvoyer_code", "a"), texte("rien"), verdict("renvoyer_code", "b"),
+        texte("rien"), verdict("ok"),
+    )  # fmt: skip
+    ex, _tache, _p = await monde.etat(origine)
+    assert ex.renvois == 2
+    monde.llm.reponses = [
+        tri((1, "code", "corrige a")),
+        modifier("src/a.py", "a = 2\n"), texte("fait"),
+        verdict("renvoyer_code", "renommer a"),
+        texte("rien"),
+        verdict("ok"),
+    ]  # fmt: skip
+    pid = await reprendre(monde, [commentaire("revue", 10)])
+    ex, _tache, pipeline = await monde.etat(pid)
+    assert pipeline.etat == "terminee"
+    assert (ex.renvois, ex.remarques) == (1, [])  # le renvoi a été accepté
+    code2 = appels_de(monde, "code")[-1]["messages"]
+    assert any("renommer a" in (m["content"] or "") for m in code2)
