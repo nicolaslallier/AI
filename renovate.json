@@ -24,6 +24,20 @@
   ],
   "prConcurrentLimit": 3,
   "automerge": false,
+  "packageRules": [
+    {
+      "description": "Le lanceur exige le tag exact que les projets nomment : seuls les digests de LANCEUR_IMAGES_SERVICES se mettent à jour.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "enabled": false
+    }
+  ],
   "customManagers": [
     {
       "description": "Images de services permises au lanceur : entrées nom:tag@sha256:… de LANCEUR_IMAGES_SERVICES.",

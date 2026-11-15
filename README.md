@@ -36,7 +36,7 @@ Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolas
 Le dépôt est public : rien de secret n'y entre, tout passe par OpenBao.
 
 - **Ce que la CI bloque** : audits de dépendances (`pip-audit`, `npm audit`, `cargo audit`), secrets (`gitleaks`) et images avec une faille CRITICAL/HIGH corrigeable (Trivy, sur les trois images). `latest` n'est posé qu'après les trois analyses ; avant, une image ne porte que `sha-<7>`.
-- **Épinglage** : actions et images de base par SHA ou digest, mises à jour proposées par Renovate. Un projet nomme une image par `nom:tag` ; le lanceur la résout vers le digest de `LANCEUR_IMAGES` / `LANCEUR_IMAGES_SERVICES` et refuse le reste. Le lanceur et l'image d'exécution tournent avec `cap_drop: ALL` et `read_only`.
+- **Épinglage** : actions et images de base par SHA ou digest, mises à jour proposées par Renovate. Un projet nomme une image par `nom:tag` ; le lanceur la résout vers le digest de `LANCEUR_IMAGES` / `LANCEUR_IMAGES_SERVICES` et refuse le reste. Le portail et le lanceur tournent avec `cap_drop: ALL`, `read_only` et `no-new-privileges` (pile Portainer). Les conteneurs d'exécution et de service que le lanceur crée ne reçoivent que `cap_drop: ALL` et `no-new-privileges` (les services regagnent cinq capacités pour démarrer, p. ex. postgres) ; leur `/travail` reste en écriture et seul `/travail/.git` est en lecture seule.
 - **Modèles** : `modeles_permis` (`agents.yaml`) liste les seuls modèles admis, `modele_si_meme` compris ; la clé LiteLLM du portail est limitée à cette liste.
 - **Journal d'audit** : table `audit` (auteur, action, objet, identifiant, date), lisible par `GET /api/audit` (`limite`, `avant`), sans écriture par l'API. Hors développement local, l'auteur est l'adresse e-mail transmise par oauth2-proxy.
 - **Aucun contenu dans les journaux ni les notifications** : ni message, ni document, ni sortie de commande, ni secret. Les erreurs passent par `portail.journal.erreur` (classe de l'exception et pile, jamais son message) ; ntfy ne porte que des libellés génériques, le résumé du matin envoie seulement « Résumé prêt » et le lien.
@@ -52,6 +52,8 @@ Le dépôt est public : rien de secret n'y entre, tout passe par OpenBao.
 7. Épingler MinIO : `minio/minio:latest` est resté sans digest dans `deploy/portainer-stack.yml` (Docker Hub refuse l'accès anonyme à ce dépôt). Choisir un tag `RELEASE` daté, relever son digest avec un accès authentifié, le remplacer, puis nommer ce tag dans les projets.
 8. Lancer `actionlint` sur `.github/workflows` avant la fusion : il n'a pas pu tourner pendant le lot, et une erreur dans `deploy.yml` ne se verrait qu'après la fusion dans `main`.
 9. Au premier déploiement, vérifier que le lanceur durci (`cap_drop: ALL`, `read_only`) répond et démarre une exécution, et que Trivy lit bien GHCR.
+10. Dans Settings > Actions > General du dépôt, exiger l'approbation des workflows pour TOUS les contributeurs externes (« Require approval for all outside collaborators » ; le réglage par défaut ne couvre que les nouveaux contributeurs), et relire le diff de `.github/` avant d'approuver.
+11. Rendre le runner auto-hébergé `ai` éphémère (un job, puis il est recréé). Le dépôt est public : une PR de fork peut AJOUTER son propre workflow `on: pull_request` avec `runs-on: [self-hosted, ai]`, donc le contenu des workflows de `main` ne protège pas le runner ; seuls l'approbation de tout fork et l'éphémérité le font.
 
 ### Jeton GitHub (lecture seule)
 
