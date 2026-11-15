@@ -111,6 +111,30 @@ async def test_lint_du_portail_tranche_l_affirmation_lint(sessions, tmp_path, co
     assert [f.type for f in faits] == ([] if code_lint == 0 else ["lint"])
 
 
+@pytest.mark.parametrize("lint_base_ok", [False, None])
+async def test_lint_en_echec_sur_dette_n_absout_pas_l_affirmation(sessions, tmp_path, lint_base_ok):
+    cfg = lire_config(
+        "image: img\nchemins_tests: ['tests/**']\n"
+        "commandes: {installer: i, tests: t, tests_cibles: 't {fichiers}', lint: l}\n"
+    )
+    async with sessions() as s:
+        projet = Projet(nom="p")
+        s.add(projet)
+        await s.flush()
+        pipeline = Pipeline(projet_id=projet.id, type="dev")
+        s.add(pipeline)
+        await s.flush()
+        etape = Etape(pipeline_id=pipeline.id, ordre=0, agent="code")
+        s.add(etape)
+        await s.flush()
+        s.add(Message(etape_id=etape.id, role="assistant", contenu="Fait, le lint passe."))
+        await s.commit()
+    lint = cmd("lint", 1)
+    lint.sortie = "E501"
+    faits = await verifier_faits(sessions, pipeline.id, tmp_path, cfg, "", lint, lint_base_ok)
+    assert sorted((f.type, f.bloquant) for f in faits) == [("affirmation", True), ("lint", False)]
+
+
 def test_affirmation_dont_la_derniere_commande_echoue_bloque():
     faits = verifier_affirmations(
         "All tests pass", [cmd("tests", 0), cmd("tests_cibles", 1)], "tests", set(CFG.commandes)
