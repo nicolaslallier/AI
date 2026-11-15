@@ -9,6 +9,7 @@ import { duree, emplacement, extrait, lienPrSur, numeroPr } from '../dev'
 import EtatBadge from '../components/EtatBadge.vue'
 import ChatEtape from '../components/ChatEtape.vue'
 import EditeurDocument from '../components/EditeurDocument.vue'
+import DocumentArchitecture from '../components/DocumentArchitecture.vue'
 import PanneauAvis from '../components/PanneauAvis.vue'
 
 const props = defineProps<{ id: string }>()
@@ -165,8 +166,17 @@ onBeforeUnmount(() => {
         <pre>{{ c.sortie }}</pre>
       </details>
       <template v-if="e.etat !== 'a_faire'">
+        <DocumentArchitecture
+          v-if="e.document && e.produit === 'architecture'"
+          :pipeline-id="pipeline.id"
+          :etape="e"
+          :etapes="pipeline.etapes"
+          :message="message"
+          @enregistrer="(c) => action(() => enregistrerDocument(e.id, c), false)"
+          @valider="action(() => valider(e.id), false)"
+        />
         <EditeurDocument
-          v-if="e.document"
+          v-else-if="e.document"
           :etape="e"
           :message="message"
           @enregistrer="(c) => action(() => enregistrerDocument(e.id, c), false)"

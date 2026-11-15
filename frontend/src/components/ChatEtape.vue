@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { Etape } from '../api'
 import { rendreMarkdown } from '../markdown'
 import JaugeContexte from './JaugeContexte.vue'
@@ -14,6 +14,9 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ envoyer: [contenu: string, vider: () => void]; rediger: []; reessayer: [] }>()
 const saisie = ref('')
+// Volets et architecture tournent seuls : pas de discussion, l'utilisateur ne fait que valider la fin.
+const automatique = computed(() => props.etape.produit === 'volet' || props.etape.produit === 'architecture')
+const livrable: Record<string, string> = { vision: 'la vision', plan: 'le plan' }
 
 function envoyer() {
   const t = saisie.value.trim()
@@ -40,7 +43,7 @@ function surEntree(e: KeyboardEvent) {
     <p v-if="message" class="erreur">{{ message }}</p>
   </section>
   <section v-else class="pile">
-    <JaugeContexte v-if="etape.jauge" :jauge="etape.jauge" />
+    <JaugeContexte v-if="etape.jauge" :jauge="etape.jauge" :produit="etape.produit" />
     <div class="messages">
       <div v-for="m in etape.messages" :key="m.id" :class="['bulle', m.role === 'user' ? 'moi' : 'agent', { systeme: m.role === 'system' }]">
         <details v-if="m.role === 'tool'"><summary>🔎 {{ m.outil }}</summary><pre>{{ m.contenu }}</pre></details>
@@ -59,18 +62,19 @@ function surEntree(e: KeyboardEvent) {
     </p>
     <p v-if="message" class="erreur">{{ message }}</p>
     <textarea
+      v-if="!automatique"
       v-model="saisie"
       rows="3"
       placeholder="Écris ton message… (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)"
       :disabled="etape.etat !== 'en_attente' || etape.jauge?.niveau === 'plein'"
       @keydown.enter.exact="surEntree"
     ></textarea>
-    <div class="rangee">
+    <div v-if="!automatique" class="rangee">
       <button :disabled="!saisie.trim() || etape.etat !== 'en_attente' || etape.jauge?.niveau === 'plein'" @click="envoyer">
         Envoyer
       </button>
       <button class="primaire pousse" :disabled="etape.etat !== 'en_attente'" @click="emit('rediger')">
-        Rédiger {{ etape.produit === 'plan' ? 'le plan' : 'la spec' }}
+        Rédiger {{ livrable[etape.produit ?? ''] ?? 'la spec' }}
       </button>
     </div>
   </section>

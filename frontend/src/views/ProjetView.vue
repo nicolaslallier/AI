@@ -41,12 +41,12 @@ async function enregistrer() {
   }
 }
 
-async function planifier() {
+async function lancer(type: string) {
   if (enCours.value) return
   enCours.value = true
   erreur.value = ''
   try {
-    const p = await creerPipeline(Number(props.id), 'planification')
+    const p = await creerPipeline(Number(props.id), type)
     router.push(`/pipelines/${p.id}`)
   } catch (e) {
     erreur.value = (e as Error).message // un 409 porte déjà son detail en français
@@ -64,9 +64,10 @@ onMounted(charger)
     <div class="titre">
       <h1>{{ projet.nom }}</h1>
       <RouterLink :to="`/projets/${projet.id}/kanban`" class="bouton pousse">Kanban</RouterLink>
-      <button class="primaire" :disabled="!projet.spec_courante || enCours" @click="planifier">
+      <button class="primaire" :disabled="!projet.spec_courante || enCours" @click="lancer('planification')">
         Lancer la planification
       </button>
+      <button class="primaire" :disabled="enCours" @click="lancer('architecture')">Lancer l'architecture</button>
     </div>
     <p v-if="projet.description" class="discret">{{ projet.description }}</p>
     <p v-if="!projet.spec_courante" class="discret">La planification se débloque dès qu'une spec est validée.</p>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Jauge } from '../api'
-defineProps<{ jauge: Jauge; compacte?: boolean }>()
+const props = defineProps<{ jauge: Jauge; compacte?: boolean; produit?: string | null }>()
+const rediger = props.produit === 'vision' ? 'Rédiger la vision' : 'Rédiger la spec'
 const couleurs = { ok: 'var(--succes)', alerte: 'var(--alerte)', plein: 'var(--danger)' }
 </script>
 
@@ -11,9 +12,9 @@ const couleurs = { ok: 'var(--succes)', alerte: 'var(--alerte)', plein: 'var(--d
     </div>
     <small>Contexte : {{ jauge.utilises.toLocaleString('fr-FR') }} / {{ jauge.max.toLocaleString('fr-FR') }}</small>
     <p v-if="!compacte && jauge.niveau === 'alerte'" class="alerte">
-      Le contexte se remplit : clique « Rédiger la spec » pour que l'agent reparte du brouillon.
+      Le contexte se remplit : clique « {{ rediger }} » pour que l'agent reparte du brouillon.
     </p>
-    <p v-if="!compacte && jauge.niveau === 'plein'" class="alerte">Contexte plein : rédige la spec pour continuer.</p>
+    <p v-if="!compacte && jauge.niveau === 'plein'" class="alerte">Contexte plein : {{ rediger.toLowerCase() }} pour continuer.</p>
   </div>
 </template>
 
