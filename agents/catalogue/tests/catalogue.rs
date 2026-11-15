@@ -13,8 +13,11 @@ fn noms_egaux_a_agents_yaml() {
         .take_while(|l| l.is_empty() || l.starts_with(' ') || l.starts_with('#'))
         .filter_map(|l| {
             let nom = l.strip_prefix("  ")?.strip_suffix(':')?;
-            (!nom.is_empty() && nom.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
-                .then_some(nom)
+            (!nom.is_empty()
+                && nom
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b == b'_' || b == b'-'))
+            .then_some(nom)
         })
         .collect();
     assert_eq!(dans_agents, NOMS);

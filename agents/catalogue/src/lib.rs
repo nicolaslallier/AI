@@ -3,7 +3,7 @@
 use agent::serveur::Tourner;
 
 /// Les agents de `agents.yaml` (un test vérifie l'égalité).
-pub const NOMS: [&str; 13] = [
+pub const NOMS: [&str; 21] = [
     "spec",
     "orchestrateur",
     "plan",
@@ -17,6 +17,14 @@ pub const NOMS: [&str; 13] = [
     "doc",
     "pm",
     "tri",
+    "archi-entreprise",
+    "archi-affaires",
+    "archi-donnees",
+    "archi-applicatif",
+    "archi-techno",
+    "archi-securite",
+    "archi-solution",
+    "archi-entreprise-synthese",
 ];
 
 /// Le travail d'un agent. Un agent sur mesure gagne ici sa branche et son module.

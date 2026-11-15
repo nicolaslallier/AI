@@ -488,3 +488,48 @@ def test_agent_architecture_refuse(tmp_path, agents, etapes, fragment):
     with pytest.raises(CatalogueInvalide) as exc:
         charger_catalogue(ecrire(tmp_path, _architecture(agents, etapes)))
     assert fragment in str(exc.value)
+
+
+RACINE = Path(__file__).parents[2]
+
+
+def test_agents_yaml_reel_bureau_d_architectes():
+    cat = charger_catalogue(RACINE / "agents.yaml")
+    assert cat.pipelines["architecture"] == [
+        "archi-entreprise",
+        "archi-affaires",
+        "archi-donnees",
+        "archi-applicatif",
+        "archi-techno",
+        "archi-securite",
+        "archi-solution",
+        "archi-entreprise-synthese",
+    ]
+    assert [cat.agents[a].prefixe for a in cat.pipelines["architecture"]] == [
+        "mot-",
+        "aff-",
+        "don-",
+        "app-",
+        "tec-",
+        "sec-",
+        "sol-",
+        "ent-",
+    ]
+    locaux = {"qwen3.8:27b-mlx", "mlx-community/GLM-4.7-Flash-8bit"}
+    for nom, a in cat.agents.items():
+        assert nom.startswith("archi-") or a.modele in locaux, nom
+    for a in cat.pipelines["architecture"][1:]:
+        assert "Règles communes du bureau d'architectes" in cat.agents[a].prompt_systeme
+    volets = cat.pipelines["architecture"][1:7]
+    assert [cat.agents[a].volet for a in volets] == [
+        "affaires",
+        "données",
+        "applicatif",
+        "technologique",
+        "sécurité",
+        "solution",
+    ]
+    assert cat.agents["archi-entreprise-synthese"].outils == []
+    nuage = {"cloud-anthropic", "cloud-openai", "cloud-gemini"}
+    for a in cat.pipelines["architecture"]:
+        assert cat.agents[a].modele in nuage, a
