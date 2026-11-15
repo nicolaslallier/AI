@@ -35,14 +35,14 @@ groups:
               conditions:
                 - evaluator: {type: gt, params: [0.25]}
       - uid: portail-tache-trop-longue
-        title: "Portail : une exécution dev dépasse la durée maximale"
+        title: "Portail : une exécution dev dépasse deux fois la durée maximale"
         condition: B
         for: 5m
         noDataState: OK
         execErrState: Error
         labels: {}
         annotations:
-          summary: "Portail : une exécution dev dépasse la durée maximale"
+          summary: "Portail : une exécution dev dépasse deux fois la durée maximale"
         data:
           - refId: A
             relativeTimeRange: {from: 600, to: 0}
@@ -50,7 +50,8 @@ groups:
             model:
               refId: A
               instant: true
-              expr: 'portail_tache_en_cours_age_max_secondes - portail_duree_max_tache_secondes'
+              # `debut` n'est pas remis à zéro au redémarrage alors que le délai repart : marge de deux délais
+              expr: 'portail_tache_en_cours_age_max_secondes - 2 * portail_duree_max_tache_secondes'
           - refId: B
             datasourceUid: __expr__
             model:
@@ -100,7 +101,8 @@ groups:
             model:
               refId: A
               instant: true
-              expr: 'time() - portail_deploiement_horodatage_secondes'
+              # 0 = pile démarrée hors workflow de déploiement : pas d'alerte
+              expr: '(time() - portail_deploiement_horodatage_secondes) and portail_deploiement_horodatage_secondes > 0'
           - refId: B
             datasourceUid: __expr__
             model:

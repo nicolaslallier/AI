@@ -129,7 +129,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "(time() - portail_deploiement_horodatage_secondes) / 86400",
+          "expr": "((time() - portail_deploiement_horodatage_secondes) and portail_deploiement_horodatage_secondes > 0) / 86400",
           "legendFormat": "jours"
         }
       ],

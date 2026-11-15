@@ -68,3 +68,17 @@ def test_alertes_valides():
         assert r["annotations"]["summary"].strip()
         for texte in r["annotations"].values():  # rien de variable dans la notification
             assert "$values" not in texte and "$labels" not in texte
+
+
+def test_alertes_gardes_deploiement_et_tache_longue():
+    regles = {
+        r["uid"]: r
+        for r in yaml.safe_load((DOSSIER / "alertes-portail.yml").read_text())["groups"][0]["rules"]
+    }
+    expr = lambda uid: regles[uid]["data"][0]["model"]["expr"]
+    assert "portail_deploiement_horodatage_secondes > 0" in expr("portail-deploiement-ancien")
+    assert "2 * portail_duree_max_tache_secondes" in expr("portail-tache-trop-longue")
+    assert (
+        "portail_deploiement_horodatage_secondes > 0"
+        in (DOSSIER / "portail-sante.json").read_text()
+    )

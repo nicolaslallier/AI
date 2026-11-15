@@ -48,5 +48,7 @@ Sans cette PR, `/metrics` répond sur `infra-net` sans être lu : rien ne casse.
    - les quatre tableaux s'affichent dans le dossier Infra, sans erreur de requête ;
    - les quatre règles sont visibles dans Alerting ;
    - Loki rend des lignes JSON avec `{container=~"portail-portail.*"} | json | agent != ""` ;
+   - un chat en flux est essayé et `appel_llm` reçoit des jetons non nuls (sinon LiteLLM ne renvoie
+     pas l'usage en flux) ;
    - cAdvisor expose bien `name=~"portail-.*"` ; sinon corriger le filtre des panneaux mémoire et
      CPU du tableau `portail-sante`.
