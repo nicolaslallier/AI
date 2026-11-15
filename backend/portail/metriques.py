@@ -34,6 +34,27 @@ HTTP_DUREE = Histogram(
 )
 FLUX_OUVERTS = Gauge("portail_flux_ouverts", "Flux SSE ouverts", ["flux"])
 
+PHASES_DEV = Counter("portail_phases_dev_total", "Phases de la boucle de dev", ["phase", "issue"])
+EXECUTIONS_DEV = Counter(
+    "portail_executions_dev_total", "Exécutions de la boucle de dev", ["mode", "issue"]
+)
+RENVOIS = Counter(
+    "portail_renvois_total", "Renvois en arrière de la boucle de dev", ["agent", "vers"]
+)
+BLOCAGES = Counter("portail_blocages_total", "Blocages de la boucle de dev", ["cause", "phase"])
+DUREE_TACHE = Histogram(
+    "portail_duree_tache_secondes", "Durée d'une exécution normale, du démarrage à la revue",
+    buckets=(300, 900, 1800, 3600, 7200, 14400),
+)  # fmt: skip
+REPRISES = Counter("portail_reprises_total", "Reprises créées sur commentaires de PR")
+LANCEUR_COMMANDES = Counter(
+    "portail_lanceur_commandes_total", "Commandes lancées dans le lanceur", ["nom", "code"]
+)
+LANCEUR_DUREE = Histogram(
+    "portail_lanceur_duree_secondes", "Durée d'une commande du lanceur", ["nom"],
+    buckets=(1, 5, 15, 60, 300, 600, 1800),
+)  # fmt: skip
+
 
 def initialiser(r: Reglages) -> None:
     INFO.clear()  # ponytail: une seule version à la fois, même si l'application est recréée

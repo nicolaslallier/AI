@@ -71,7 +71,7 @@ async def test_mission_complete_sans_contenu(tmp_path, sessions, caplog):
     m.llm.exception = ErreurLLM(f"LiteLLM a répondu 500 : {MARQUEUR}")
     await m.lancer(3)
     assert MARQUEUR not in caplog.text
-    assert "bloqué : ErreurLLM" in caplog.text
+    assert "bloqué : llm" in caplog.text
 
 
 async def test_conversation_sans_contenu(client, faux_llm, caplog):

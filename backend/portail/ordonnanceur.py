@@ -10,7 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
-from portail import journal
+from portail import journal, metriques
 from portail.audit import inscrire
 from portail.db import (
     CommentairePris,
@@ -182,6 +182,7 @@ class Ordonnanceur:
             if tache is None or tache.colonne != "prete" or tache.verrou is not None:
                 return  # déplacée entre-temps : on n'y touche pas
             await deplacer_tache(s, tache, "bloquee", None, "portail")
+            metriques.BLOCAGES.labels(cause="demarrage", phase="aucune").inc()
             tache.resume_blocage = raison
             await s.commit()
         try:
@@ -236,4 +237,4 @@ async def reprendre_interrompues(
         if interruptions <= 1:
             (lancer or orchestrateur.lancer)(pipeline_id)
         else:
-            await orchestrateur.bloquer(pipeline_id, "interrompue deux fois")
+            await orchestrateur.bloquer(pipeline_id, "interrompue deux fois", cause="interrompue")

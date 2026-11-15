@@ -23,7 +23,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from portail import journal
+from portail import journal, metriques
 from portail.agents import Catalogue, modele_pour
 from portail.boucle import ErreurOutils, boucle_outils
 from portail.config import Reglages
@@ -80,6 +80,13 @@ MANIFESTE_A_NICOLAS = (
 _TEXTE_MAX = 20_000
 _FIN_SORTIE = 3000
 _REGLES_MAX = 50_000  # par fichier de règles donné au challenger
+
+
+# cause de blocage par classe d'erreur : liste fixe, jamais le message
+_CAUSES = {
+    ErreurLanceur: "lanceur", ErreurGitHub: "github", ErreurDepot: "depot",
+    ErreurLLM: "llm", ErreurOutils: "outils",
+}  # fmt: skip
 
 
 class _Blocage(Exception):
@@ -272,6 +279,7 @@ class Orchestrateur:
         )  # fmt: skip
         session.add(ex)
         await session.flush()
+        metriques.REPRISES.inc()
         for c in lot:
             session.add(
                 CommentairePris(
@@ -384,20 +392,20 @@ class Orchestrateur:
                 await self._derouler(pipeline_id)
             return
         except _Blocage as e:
-            raison, cause = e.raison, type(e).__name__
-        except TimeoutError as e:
-            raison, cause = "durée maximale dépassée", type(e).__name__
+            raison, cause = e.raison, "blocage"
+        except TimeoutError:
+            raison, cause = "durée maximale dépassée", "delai"
             if not delai.expired():  # un délai interne, pas celui de la tâche
                 journal.erreur(logger, "pipeline dev %s : erreur inattendue", pipeline_id)
-                raison = "erreur inattendue : TimeoutError"
+                raison, cause = "erreur inattendue : TimeoutError", "inattendue"
         except Refus as e:  # config stockée qui ne passe plus la validation
-            raison, cause = e.message, type(e).__name__
+            raison, cause = e.message, "config"
         except (ErreurLanceur, ErreurGitHub, ErreurDepot, ErreurLLM, ErreurOutils) as e:
-            raison, cause = str(e), type(e).__name__
+            raison, cause = str(e), next(c for t, c in _CAUSES.items() if isinstance(e, t))
         except Exception as e:  # dernier recours : une tâche ne reste jamais verrouillée en cours  # noqa: BLE001
             journal.erreur(logger, "pipeline dev %s : erreur inattendue", pipeline_id)
-            raison, cause = f"erreur inattendue : {type(e).__name__}", type(e).__name__
-        await self.bloquer(pipeline_id, raison, cause)
+            raison, cause = f"erreur inattendue : {type(e).__name__}", "inattendue"
+        await self.bloquer(pipeline_id, raison, cause=cause)
 
     async def _derouler(self, pipeline_id: int) -> None:
         ctx = await self._charger(pipeline_id)
@@ -473,6 +481,8 @@ class Orchestrateur:
         """Termine l'étape en cours et écrit la phase suivante avec `champs`, en une transaction :
         une reprise après un arrêt ne rejoue ni ne perd la décision (renvoi, retour aux tests)."""
         etat = Etat.ECHOUEE if erreur else Etat.TERMINEE
+        issue = "echec" if erreur else "ok"
+        metriques.PHASES_DEV.labels(phase=ctx.phase or "reprise", issue=issue).inc()
         champs["phase"] = suivante
         async with self._sessions() as s:
             await s.execute(
@@ -508,6 +518,9 @@ class Orchestrateur:
             ctx.ex.espace, ctx.cfg.image, commande(ctx.cfg, nom, fichiers),
             self._reglages.delai_commande_s, lecture_seule, tout_lecture_seule,
         )  # fmt: skip
+        code = "delai" if r.delai_depasse else "aucun" if r.code is None else str(r.code)
+        metriques.LANCEUR_COMMANDES.labels(nom=nom, code=code).inc()
+        metriques.LANCEUR_DUREE.labels(nom=nom).observe((self._horloge() - debut).total_seconds())
         sortie = r.sortie
         if protege and (restaures := await self._restaurer_proteges(ctx, avant)):
             sortie += f"\n[fichiers de tests restaurés : {', '.join(restaures)}]"
@@ -876,6 +889,7 @@ class Orchestrateur:
             sortie = r.sortie[-_FIN_SORTIE:]
             if ctx.ex.renvois >= self._reglages.renvois_max:
                 raise _Blocage(f"installation échouée :\n{sortie}")
+            metriques.RENVOIS.labels(agent="installation", vers="code").inc()
             return await self._transition(
                 ctx, "code", renvois=ctx.ex.renvois + 1, controle_courant=0,
                 remarques=[f"installation des dépendances échouée (paquet inventé ?) :\n{sortie}"],
@@ -922,6 +936,7 @@ class Orchestrateur:
                     ]
                     if bloquants := [f for f in faits if f.bloquant]:
                         if ctx.ex.renvois < self._reglages.renvois_max:  # pas de challenger
+                            metriques.RENVOIS.labels(agent="faits", vers=bloquants[0].role).inc()
                             return await self._transition(
                                 ctx, bloquants[0].role, renvois=ctx.ex.renvois + 1,
                                 remarques=[f.texte for f in faits], controle_courant=0,
@@ -942,6 +957,7 @@ class Orchestrateur:
                 if verdict.decision != "ok":
                     if ctx.ex.renvois < self._reglages.renvois_max:
                         suivante = "tests" if verdict.decision == "renvoyer_tests" else "code"
+                        metriques.RENVOIS.labels(agent=nom, vers=suivante).inc()
                         return await self._transition(
                             ctx, suivante, renvois=ctx.ex.renvois + 1,
                             remarques=verdict.remarques, controle_courant=0, notes=notes,
@@ -1108,6 +1124,9 @@ class Orchestrateur:
                 update(ExecutionDev).where(ExecutionDev.id == ctx.ex.id).values(phase="fini")
             )
             await s.commit()
+        metriques.EXECUTIONS_DEV.labels(mode=ctx.ex.mode, issue="en_revue").inc()
+        if ctx.ex.mode == "normal":
+            metriques.DUREE_TACHE.observe((self._horloge() - ctx.ex.debut).total_seconds())
         await self._au_mieux("nettoyer", self._lanceur.nettoyer(ctx.ex.espace))
 
     def _corps(self, ctx: _Ctx, resume: str | None) -> str:
@@ -1141,9 +1160,9 @@ class Orchestrateur:
             journal.erreur(logger, "pipeline dev : %s impossible", quoi)
             return None
 
-    async def bloquer(self, pipeline_id: int, raison: str, cause: str = "") -> None:
-        # la raison reste en base ; au journal, seulement la classe de l'exception (cause)
-        logger.warning("pipeline dev %s bloqué : %s", pipeline_id, cause or "-")
+    async def bloquer(self, pipeline_id: int, raison: str, *, cause: str) -> None:
+        # la raison reste en base ; au journal et en métrique, seulement la cause (liste fixe)
+        logger.warning("pipeline dev %s bloqué : %s", pipeline_id, cause)
         ex = projet = None
         try:
             async with self._sessions() as s:
@@ -1157,6 +1176,10 @@ class Orchestrateur:
         except Exception:  # noqa: BLE001
             journal.erreur(logger, "blocage du pipeline %s : lecture impossible", pipeline_id)
         reprise = ex is not None and ex.mode == "reprise"
+        metriques.BLOCAGES.labels(cause=cause, phase=ex.phase if ex else "aucune").inc()
+        metriques.EXECUTIONS_DEV.labels(
+            mode=ex.mode if ex else "normal", issue="echouee" if reprise else "bloquee"
+        ).inc()
         branche = None
         if ex is not None and projet is not None:
             espace = Espace(self._reglages.espaces_dir / ex.espace, projet.depot_url)

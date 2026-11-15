@@ -3,7 +3,7 @@ import json
 
 import pytest
 from asgi_lifespan import LifespanManager
-from conftest import commentaire
+from conftest import commentaire, valeur
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, update
 from test_dev import (
@@ -111,6 +111,7 @@ async def pris(monde: Monde) -> list[CommentairePris]:
 
 
 async def test_creer_reprise_en_attente(monde):
+    reprises = valeur("portail_reprises_total")
     origine = await en_revue(monde)
     pid = await creer(monde, [commentaire("ligne", 7, "x" * 30_000, chemin="src/x.py", ligne=1)])
     ex, tache, pipeline = await monde.etat(pid)
@@ -129,6 +130,7 @@ async def test_creer_reprise_en_attente(monde):
     )
     assert len(c.texte) == 20_000
     assert (tache.colonne, tache.verrou) == ("en_revue", origine)
+    assert valeur("portail_reprises_total") == reprises + 1
 
 
 async def test_demarrer_reprise_prend_le_verrou(monde):

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from conftest import URL, FauxGitHub, FauxLanceur, FauxLLM, FauxNotifieur
+from conftest import URL, FauxGitHub, FauxLanceur, FauxLLM, FauxNotifieur, valeur
 from sqlalchemy import select
 
 from portail.agents import Agent, Catalogue
@@ -506,8 +506,8 @@ async def test_bloquer_sans_execution_ne_leve_pas(monde):
         p = Pipeline(projet_id=1, type="dev", etat="en_cours")
         s.add(p)
         await s.commit()
-    await monde.orch.bloquer(p.id, "x")
-    await monde.orch.bloquer(999, "x")
+    await monde.orch.bloquer(p.id, "x", cause="inattendue")
+    await monde.orch.bloquer(999, "x", cause="inattendue")
     async with monde.sessions() as s:
         assert (await s.get(Pipeline, p.id)).etat == "echouee"
 
@@ -1070,3 +1070,44 @@ async def test_affirmation_prouvee_par_la_verification_ne_renvoie_pas(monde_d):
     pid = await monde_d.lancer()
     ex, _tache, pipeline = await monde_d.etat(pid)
     assert (pipeline.etat, ex.renvois) == ("terminee", 0)
+
+
+async def test_parcours_compte_phases_duree_et_commandes(monde):
+    lus = {
+        "phase": ("portail_phases_dev_total", {"phase": "tests", "issue": "ok"}),
+        "exec": ("portail_executions_dev_total", {"mode": "normal", "issue": "en_revue"}),
+        "duree": ("portail_duree_tache_secondes_count", {}),
+        "cmd": ("portail_lanceur_commandes_total", {"nom": "installer", "code": "0"}),
+        "cmd_duree": ("portail_lanceur_duree_secondes_count", {"nom": "installer"}),
+    }
+    avant = {k: valeur(n, **e) for k, (n, e) in lus.items()}
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok", "propre")]
+    await monde.lancer()
+    for k, (n, e) in lus.items():
+        assert valeur(n, **e) > avant[k], k
+
+
+async def test_delai_compte_commande_et_blocage(monde):
+    lus = [
+        ("portail_lanceur_commandes_total", {"nom": "tests", "code": "delai"}),
+        ("portail_blocages_total", {"cause": "blocage", "phase": "verification"}),
+        ("portail_executions_dev_total", {"mode": "normal", "issue": "bloquee"}),
+    ]
+    avant = [valeur(n, **e) for n, e in lus]
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.lanceur.delais = {"pytest"}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+    await monde.lancer()
+    assert [valeur(n, **e) - a for (n, e), a in zip(lus, avant, strict=True)] == [1, 1, 1]
+
+
+async def test_renvoi_compte(monde):
+    avant = valeur("portail_renvois_total", agent="revue", vers="code")
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [
+        *TESTS_OK, *CODE_OK, verdict("renvoyer_code", "renommer x"),
+        appel("ecrire", chemin="src/x.py", contenu="x = 2\n"), texte("corrigé"), verdict("ok"),
+    ]  # fmt: skip
+    await monde.lancer()
+    assert valeur("portail_renvois_total", agent="revue", vers="code") == avant + 1

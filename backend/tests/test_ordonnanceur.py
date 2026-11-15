@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from asgi_lifespan import LifespanManager
-from conftest import commentaire
+from conftest import commentaire, valeur
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
@@ -145,6 +145,7 @@ async def test_paralleles_max_respecte(tmp_path, sessions):
 
 
 async def test_demarrage_impossible_bloque_et_passe_a_la_suivante(tmp_path, sessions):
+    blocages = valeur("portail_blocages_total", cause="demarrage", phase="aucune")
     m = await _monde(tmp_path, sessions)
     async with sessions() as s:
         p2 = await _projet(s, depot=f"file://{m.origine}")
@@ -169,6 +170,7 @@ async def test_demarrage_impossible_bloque_et_passe_a_la_suivante(tmp_path, sess
         assert (t1.colonne, t1.verrou) == ("bloquee", None)
         assert t1.resume_blocage == "démarrage impossible : App non installée"
         assert t2.colonne == "en_cours" and t2.verrou is not None
+        assert valeur("portail_blocages_total", cause="demarrage", phase="aucune") == blocages + 1
         async with sessions() as s:
             types = (
                 await s.scalars(select(TacheEvenement.type).where(TacheEvenement.tache_id == 1))
@@ -349,6 +351,7 @@ async def _egal(attente, valeur):
 
 
 async def test_redemarrage_reprend_une_fois_puis_bloque(tmp_path, sessions):
+    interrompues = valeur("portail_blocages_total", cause="interrompue", phase="tests")
     m = await _monde(tmp_path, sessions)
     m.llm.reponses = [asyncio.Event()]
     async with sessions() as s:
@@ -365,6 +368,7 @@ async def test_redemarrage_reprend_une_fois_puis_bloque(tmp_path, sessions):
     assert m.orch.taches == {}
     ex, t, pipeline = await m.etat(pid)
     assert ex.interruptions == 2
+    assert valeur("portail_blocages_total", cause="interrompue", phase="tests") == interrompues + 1
     assert (t.colonne, t.verrou, pipeline.etat) == ("bloquee", None, "echouee")
     assert t.resume_blocage.startswith("interrompue deux fois")
     assert not (m.reglages.espaces_dir / "tache-1-1").exists()

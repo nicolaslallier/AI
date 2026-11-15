@@ -324,7 +324,7 @@ def faux_github():
 # --- métriques ---------------------------------------------------------
 
 
-def valeur(nom: str, **etiquettes: str) -> float:
+def valeur(nom: str, /, **etiquettes: str) -> float:
     """Valeur courante d'un échantillon du registre ; les tests comparent avant et après."""
     from prometheus_client import REGISTRY
 
