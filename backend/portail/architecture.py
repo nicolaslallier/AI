@@ -1,5 +1,7 @@
 """Pipeline architecture : annexes des étapes et contrôle des blocs de modèle."""
 
+import re
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -88,6 +90,12 @@ def _hors_code(texte: str):
             yield ligne, dedans
 
 
+def _norme(titre: str) -> str:
+    """Titre comparable : sans numéro de tête ni parenthèse finale, casse et espaces ignorés."""
+    titre = re.sub(r"^\d+[.)]\s*", "", titre.strip())
+    return " ".join(re.sub(r"\s*\([^)]*\)$", "", titre).casefold().split())
+
+
 def descendre_titres(texte: str) -> str:
     """Chaque titre markdown gagne un `#`, sauf dans les blocs de code."""
     return "\n".join(
@@ -133,7 +141,9 @@ async def assembler(s: AsyncSession, catalogue: Catalogue, pipeline_id: int) -> 
     _, etape, doc = await _derniere(s, pipeline_id)
     precedents = await documents_precedents(s, etape)
     modele = await modele_fusionne(s, catalogue, pipeline_id)
-    propres = {t: descendre_titres(c) for t, c in sections(lire_bloc(doc.contenu)[0]).items()}
+    propres = {
+        _norme(t): (t, descendre_titres(c)) for t, c in sections(lire_bloc(doc.contenu)[0]).items()
+    }
     vision, volets = "", []
     for e, d in precedents:
         agent = catalogue.agents.get(e.agent)
@@ -143,11 +153,16 @@ async def assembler(s: AsyncSession, catalogue: Catalogue, pipeline_id: int) -> 
         elif agent and agent.produit == "volet":
             titre = TITRES_VOLET.get(agent.volet or "", f"Architecture : {agent.volet}")
             volets.append((titre, texte))
+
+    def propre(brut: str) -> str | None:
+        return propres.pop(_norme(brut), (None, None))[1]
+
     ordre = [
-        (SOMMAIRE, propres.get(SOMMAIRE)),
+        (SOMMAIRE, propre(SOMMAIRE)),
         ("Vision", vision),
         *volets,
-        *((titre, propres.get(brut)) for brut, titre in REGISTRES.items()),
+        *((titre, propre(brut)) for brut, titre in REGISTRES.items()),
+        *propres.values(),  # sections non reconnues de la synthèse : gardées, à la fin
     ]
     origine = {
         a.prefixe: "vision"

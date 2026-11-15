@@ -437,3 +437,40 @@ def test_xml_un_element_repete_dans_une_vue_donne_un_seul_noeud():
     texte = xml_echange(m, "P")
     SCHEMA.validate(io.StringIO(texte))
     assert len(ET.fromstring(texte).findall("a:views/a:diagrams/a:view/a:node", NS)) == 1
+
+
+@pytest.mark.parametrize(
+    "contenu",
+    [
+        'Texte.\r\n\r\n```json\r\n{"elements":[{"id":"a","type":"Node","nom":"A"}]}\r\n```\r\n',
+        'Texte.\n```json{"elements":[{"id":"a","type":"Node","nom":"A"}]}\n```',
+        'Texte.\n```json\n{"elements":[{"id":"a","type":"Node","nom":"A"}]}```',
+    ],
+)
+def test_lire_bloc_tolere_crlf_json_colle_et_cloture_collee(contenu):
+    texte, m = lire_bloc(contenu)
+    assert texte.strip() == "Texte."
+    assert m.elements[0].id == "a"
+
+
+def test_valider_refuse_un_identifiant_avec_saut_de_ligne_final():
+    m = Modele(
+        elements=[Element(id="app-a\n", type="Node", nom="A")],
+        vues=[Vue(nom="v", elements=["app-a\n"])],
+    )
+    with pytest.raises(BlocInvalide, match="minuscules, chiffres et tirets"):
+        valider(m, "app-", set())
+
+
+def test_champs_nuls_ou_absents_sont_vides():
+    brut = {
+        "elements": [{"id": "a", "type": "Node", "nom": "A", "description": None}],
+        "relations": [
+            {"type": "Serving", "source": "a", "cible": "a", "nom": None},
+            {"type": "Serving", "source": "a", "cible": "a"},
+        ],
+        "vues": [{"nom": "v", "point_de_vue": None, "elements": ["a"]}],
+    }
+    _, m = lire_bloc(f"```json\n{json.dumps(brut)}\n```")
+    assert m.elements[0].description == "" and [r.nom for r in m.relations] == ["", ""]
+    assert m.vues[0].point_de_vue == ""

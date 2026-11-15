@@ -52,6 +52,9 @@ from portail.propositions import (
 
 logger = logging.getLogger(__name__)
 
+# le document que le bouton « Rédiger … » produit, selon le produit de l'agent
+LIVRABLE = {"vision": "la vision", "plan": "le plan", "architecture": "l'architecture"}
+
 
 class Diffuseur:
     def __init__(self) -> None:
@@ -235,7 +238,9 @@ class ServiceChat:
             avec = await self._demande(s, etape, agent) + [{"role": "user", "content": contenu}]
             if jauge(agent, avec).niveau == "plein":
                 raise Refus(
-                    409, "contexte presque plein : clique « Rédiger la spec » pour continuer"
+                    409,
+                    "contexte presque plein : clique « Rédiger "
+                    f"{LIVRABLE.get(agent.produit, 'la spec')} » pour continuer",
                 )
             s.add(Message(etape_id=etape_id, role="user", contenu=contenu))
             etape.action = "repondre"
@@ -311,7 +316,9 @@ class ServiceChat:
             return await streamer(self._llm, self._missions, agent, demande, publier)
         filtre = FiltreReflexion()
         brut = ""
-        async for morceau in self._llm.flux(agent.modele, demande, agent.temperature):
+        async for morceau in self._llm.flux(
+            agent.modele, demande, agent.temperature, agent.sortie_max
+        ):
             brut += morceau
             if part := filtre.envoyer(morceau):
                 self.diffuseur.ajouter_partiel(etape_id, part)
@@ -405,12 +412,30 @@ class ServiceChat:
                     (await s.scalars(select(Tache.id).where(Tache.projet_id == projet.id))).all()
                 )
             limite, visible, suivante, a_relire = False, "", None, None
-            if action == "taches":
-                lues = await self._proposer(agent, demande, cles)
-            elif arbre is None:
-                visible = await self._streamer(etape_id, agent, demande)
-            else:
-                visible, limite = await self._boucle(etape_id, agent, demande, arbre)
+            erreur = None
+            for essai in range(2):  # un produit d'architecture au bloc invalide : une relance
+                if action == "taches":
+                    lues = await self._proposer(agent, demande, cles)
+                elif arbre is None:
+                    visible = await self._streamer(etape_id, agent, demande)
+                else:
+                    visible, limite = await self._boucle(etape_id, agent, demande, arbre)
+                if not (
+                    visible and action != "repondre" and agent.produit in PRODUITS_ARCHITECTURE
+                ):
+                    break
+                erreur = await self._erreur_bloc(etape_id, visible)
+                if not erreur:
+                    break
+                if not essai:
+                    demande = demande + [
+                        {"role": "assistant", "content": visible},
+                        {
+                            "role": "user",
+                            "content": f"Réponse invalide : {erreur}. "
+                            "Rends le document complet corrigé.",
+                        },
+                    ]
             async with self._sessions() as s:
                 etape = await self._etape(s, etape_id)  # projet verrouillé d'abord
                 if etape.etat != Etat.EN_COURS:  # annulée entre-temps : on n'écrase rien
@@ -437,10 +462,25 @@ class ServiceChat:
                     if action == "repondre":
                         s.add(Message(etape_id=etape_id, role="assistant", contenu=visible))
                     else:
-                        if agent.produit in PRODUITS_ARCHITECTURE:  # BlocInvalide : étape échouée
-                            await verifier_bloc(s, self._catalogue, etape, visible)
-                        etat_doc = "validee" if agent.sans_validation else "brouillon"
-                        a_relire = await self._ecrire_document(s, etape, agent, visible, etat_doc)
+                        brouillon = await s.scalar(
+                            select(Document.id).where(Document.etape_id == etape_id)
+                        )
+                        if erreur and (brouillon is None or agent.sans_validation):
+                            raise BlocInvalide(erreur)  # étape échouée
+                        if erreur:  # retouche ratée : le brouillon reste, Nicolas est prévenu
+                            s.add(
+                                Message(
+                                    etape_id=etape_id,
+                                    role="assistant",
+                                    contenu="Je n'ai pas réussi à produire un document valide : "
+                                    f"{erreur}. Le brouillon précédent est conservé.",
+                                )
+                            )
+                        else:
+                            etat_doc = "validee" if agent.sans_validation else "brouillon"
+                            a_relire = await self._ecrire_document(
+                                s, etape, agent, visible, etat_doc
+                            )
                     if agent.sans_validation:  # volet accepté d'office : pas d'avis, on enchaîne
                         a_relire = None
                         suivante = await terminer_etape(s, self._catalogue, etape)
@@ -475,6 +515,14 @@ class ServiceChat:
             d.publier(etape_id, {"type": "erreur", "message": str(exc)})
         finally:
             d.oublier(etape_id)
+
+    async def _erreur_bloc(self, etape_id: int, contenu: str) -> str | None:
+        async with self._sessions() as s:
+            etape = await s.get(Etape, etape_id)
+            try:
+                await verifier_bloc(s, self._catalogue, etape, contenu)
+            except BlocInvalide as e:
+                return str(e)
 
     async def _ecrire_document(
         self, s: AsyncSession, etape: Etape, agent: Agent, contenu: str, etat: str = "brouillon"
@@ -513,7 +561,8 @@ class ServiceChat:
             if doc is None:
                 raise Refus(409, "aucun brouillon à corriger")
             if doc.etat != "brouillon":
-                raise Refus(409, "spec déjà validée")
+                spec = self._agent(etape).produit == "spec"
+                raise Refus(409, "spec déjà validée" if spec else "document déjà validé")
             if etape.etat == Etat.EN_COURS:
                 raise Refus(409, "une réponse est en cours")
             await self._bloc_valide(s, etape, contenu)
@@ -532,7 +581,8 @@ class ServiceChat:
                 raise Refus(409, "une réponse est en cours")
             doc = await s.scalar(select(Document).where(Document.etape_id == etape_id))
             if etape.etat != Etat.EN_ATTENTE or doc is None or doc.etat != "brouillon":
-                raise Refus(409, "rien à valider : clique d'abord « Rédiger la spec »")
+                livrable = LIVRABLE.get(self._agent(etape).produit, "la spec")
+                raise Refus(409, f"rien à valider : clique d'abord « Rédiger {livrable} »")
             await self._bloc_valide(s, etape, doc.contenu)
             doc.etat = "validee"
             doc.maj_le = datetime.now(UTC)

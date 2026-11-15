@@ -312,7 +312,9 @@ class ServiceConversation:
             return await streamer(self._llm, self._missions, agent, demande, publier)
         filtre = FiltreReflexion()
         brut = ""
-        async for morceau in self._llm.flux(agent.modele, demande, agent.temperature):
+        async for morceau in self._llm.flux(
+            agent.modele, demande, agent.temperature, agent.sortie_max
+        ):
             brut += morceau
             if part := filtre.envoyer(morceau):
                 self.diffuseur.ajouter_partiel(cid, part)

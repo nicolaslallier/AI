@@ -21,5 +21,8 @@ https://www.opengroup.org/xsd/archimate/ qui les publie :
 > Copyright © 2015-2019 The Open Group, All Rights Reserved.
 > ArchiMate® is a registered trademark of The Open Group
 
-Cette page n'interdit pas la redistribution. `xml.xsd` est le schéma de l'espace de noms XML du W3C,
+`xml.xsd` est le schéma de l'espace de noms XML du W3C,
 publié pour être importé par d'autres schémas ; il ne porte aucun avis.
+
+Les fichiers viennent des adresses ci-dessus. Leur redistribution dans un dépôt public reste à
+trancher.

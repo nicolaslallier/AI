@@ -1,35 +1,40 @@
 import json
 import re
 import xml.etree.ElementTree as ET
+from typing import Annotated
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, BeforeValidator, ValidationError
 
 from portail.archimate_types import ELEMENTS, POINTS_DE_VUE, RELATIONS
 
-BLOC = re.compile(r"```json[ \t]*\n(.*?)\n```", re.DOTALL)
+BLOC = re.compile(r"```json\s*(.*?)\s*```", re.DOTALL)
 
 
 class BlocInvalide(ValueError):
     pass
 
 
+# `null` vaut champ vide
+Texte = Annotated[str, BeforeValidator(lambda v: "" if v is None else v)]
+
+
 class Element(BaseModel):
     id: str
     type: str
     nom: str
-    description: str = ""
+    description: Texte = ""
 
 
 class Relation(BaseModel):
     type: str
     source: str
     cible: str
-    nom: str = ""
+    nom: Texte = ""
 
 
 class Vue(BaseModel):
     nom: str
-    point_de_vue: str = ""
+    point_de_vue: Texte = ""
     elements: list[str]
 
 
@@ -70,14 +75,14 @@ def valider(modele: Modele, prefixe: str, connus: set[str]) -> None:
     """Lève BlocInvalide à la première erreur ; `connus` : identifiants des étapes précédentes."""
     if modele.fusions:
         raise BlocInvalide("fusions réservées à la synthèse")
-    forme = re.compile(rf"^{re.escape(prefixe)}[a-z0-9]+(-[a-z0-9]+)*$")
+    forme = re.compile(rf"{re.escape(prefixe)}[a-z0-9]+(-[a-z0-9]+)*")
     propres: set[str] = set()
     for e in modele.elements:
         if e.type not in ELEMENTS:
             raise BlocInvalide(f"type d'élément inconnu : {e.type}")
         if not e.id.startswith(prefixe):
             raise BlocInvalide(f"identifiant « {e.id} » : préfixe « {prefixe} » attendu")
-        if not forme.match(e.id):
+        if not forme.fullmatch(e.id):
             raise BlocInvalide(f"identifiant « {e.id} » : minuscules, chiffres et tirets")
         if e.id in propres:
             raise BlocInvalide(f"identifiant en double : {e.id}")

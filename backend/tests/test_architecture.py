@@ -91,11 +91,14 @@ async def test_volet_recoit_la_vision_en_annexe(client, faux_llm):
 
 
 async def test_bloc_absent_fait_echouer_le_volet(client, faux_llm):
-    pid, (vision, *_) = await _vision_redigee(client, faux_llm, ["Pas de bloc."])
+    pid, (vision, *_) = await _vision_redigee(
+        client, faux_llm, ["Pas de bloc."], ["Toujours pas de bloc."]
+    )
     await client.post(f"/api/etapes/{vision}/valider")
     await _attendre_tout(client)
     etapes = (await _pipeline(client, pid))["etapes"]
     assert [e["etat"] for e in etapes] == ["terminee", "echouee", "a_faire"]
+    assert len(faux_llm.appels) == 3
     assert "bloc de modèle absent" in etapes[1]["erreur"]
     assert etapes[1]["document"] is None
 
@@ -114,13 +117,29 @@ async def test_reessayer_un_volet_echoue_reprend_la_chaine(client, faux_llm):
 
 
 async def test_rediger_un_bloc_invalide_garde_le_brouillon(client, faux_llm):
-    pid, (vision, *_) = await _vision_redigee(client, faux_llm, [_bloc("aff-")])
+    pid, (vision, *_) = await _vision_redigee(client, faux_llm, [_bloc("aff-")], [_bloc("aff-")])
     avant = (await _pipeline(client, pid))["etapes"][0]["document"]
     assert (await client.post(f"/api/etapes/{vision}/rediger")).status_code == 202
     await _attendre_tout(client)
     e = (await _pipeline(client, pid))["etapes"][0]
-    assert e["etat"] == "echouee" and "préfixe « mot- » attendu" in e["erreur"]
-    assert e["document"] == avant
+    assert e["etat"] == "en_attente" and e["document"] == avant
+    dernier = e["messages"][-1]
+    assert dernier["role"] == "assistant"
+    assert "préfixe « mot- » attendu" in dernier["contenu"]
+    assert "Le brouillon précédent est conservé." in dernier["contenu"]
+
+
+async def test_bloc_invalide_relance_une_fois_avec_l_erreur(client, faux_llm):
+    pid, (vision, *_) = await _vision_redigee(client, faux_llm, [_bloc("aff-")], [VISION + " v2"])
+    assert (await client.post(f"/api/etapes/{vision}/rediger")).status_code == 202
+    await _attendre_tout(client)
+    e = (await _pipeline(client, pid))["etapes"][0]
+    assert e["etat"] == "en_attente" and e["document"]["version"] == 2
+    assert e["document"]["contenu"] == VISION + " v2"
+    relance = faux_llm.appels[2]["messages"]
+    assert relance[-2] == {"role": "assistant", "content": _bloc("aff-")}
+    assert relance[-1]["content"].startswith("Réponse invalide : ")
+    assert relance[-1]["content"].endswith("Rends le document complet corrigé.")
 
 
 async def test_corriger_un_brouillon_au_bloc_casse_422(client, faux_llm):
@@ -382,3 +401,28 @@ def test_descendre_titres_laisse_le_code():
 def test_sections_par_titre_exact():
     texte = "avant\n## Un\na\n```\n## faux\n```\n## Deux\nb"
     assert sections(texte) == {"Un": "a\n```\n## faux\n```", "Deux": "b"}
+
+
+async def test_sections_retrouvees_par_titre_normalise_et_inconnues_gardees(client, faux_llm):
+    corps = (
+        "## 1. Sommaire Exécutif  et portée\n\nSommaire numéroté.\n\n"
+        "## REGISTRE DES DÉCISIONS (ADR)\n\nADR-9.\n\n"
+        "## Plan de transition\n\nEn trois temps.\n\n"
+    )
+    pid = await _architecture_redigee(client, faux_llm, _morceau("ent-", corps, ["aff-a"]))
+    md = (await client.get(f"/api/pipelines/{pid}/architecture.md")).text
+    assert "# 1. Sommaire exécutif et portée\n\nSommaire numéroté." in md
+    assert "# 4. Registre des décisions (ADR)\n\nADR-9." in md
+    assert md.index("# 8. Plan de transition\n\nEn trois temps.") < md.index("Annexe : catalogues")
+    assert md.index("Registre de la dette") < md.index("Plan de transition")
+
+
+async def test_messages_de_refus_nomment_le_bon_document(client, faux_llm):
+    p = await _architecture(client)
+    vision = p["etapes"][0]["id"]
+    r = await client.post(f"/api/etapes/{vision}/valider")
+    assert r.status_code == 409 and "Rédiger la vision" in r.json()["detail"]
+    _, (vision, *_) = await _vision_redigee(client, faux_llm, [VOLET], [SYNTHESE])
+    await client.post(f"/api/etapes/{vision}/valider")
+    r = await client.put(f"/api/etapes/{vision}/document", json={"contenu": VISION})
+    assert r.status_code == 409 and r.json()["detail"] == "document déjà validé"

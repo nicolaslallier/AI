@@ -83,7 +83,11 @@ class ClientLLM:
             journal.erreur(logger, "appel_llm non inscrit")
 
     async def flux(
-        self, modele: str, messages: list[dict], temperature: float | None
+        self,
+        modele: str,
+        messages: list[dict],
+        temperature: float | None,
+        sortie_max: int | None = None,
     ) -> AsyncIterator[str]:
         corps: dict = {
             "model": modele,
@@ -93,6 +97,8 @@ class ClientLLM:
         }
         if temperature is not None:
             corps["temperature"] = temperature
+        if sortie_max is not None:
+            corps["max_tokens"] = sortie_max
         debut, usage = time.monotonic(), None
         try:
             for essai in (1, 2):
@@ -151,10 +157,13 @@ class ClientLLM:
         temperature: float | None,
         outils: list[dict] | None = None,
         response_format: dict | None = None,
+        sortie_max: int | None = None,
     ) -> dict:
         corps: dict = {"model": modele, "messages": messages, "stream": False}
         if temperature is not None:
             corps["temperature"] = temperature
+        if sortie_max is not None:
+            corps["max_tokens"] = sortie_max
         if outils is not None:
             corps["tools"] = outils
         if response_format is not None:

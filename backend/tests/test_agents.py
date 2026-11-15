@@ -537,3 +537,20 @@ def test_agents_yaml_reel_bureau_d_architectes():
     assert "Ne recopie pas les éléments des volets" in synthese
     assert "le modèle complet, fusionné" not in synthese
     assert synthese.count("Réponds uniquement avec le document") == 1
+
+
+def test_agents_yaml_sortie_max_et_temperature_du_bureau_d_architectes():
+    cat = charger_catalogue(RACINE / "agents.yaml")
+    for nom in cat.pipelines["architecture"]:
+        a = cat.agents[nom]
+        assert a.sortie_max == 16000
+        if a.modele == "cloud-openai":
+            assert a.temperature is None
+    assert cat.agents["orchestrateur"].sortie_max is None
+
+
+def test_sortie_max_doit_etre_positive():
+    with pytest.raises(ValueError):
+        Agent(
+            nom="a", description="d", modele="m", prompt_systeme="p", contexte_max=1, sortie_max=0
+        )

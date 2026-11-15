@@ -38,6 +38,8 @@ class Agent(BaseModel):
     prompt_systeme: str
     contexte_max: int = Field(gt=0)
     temperature: float | None = None
+    # plafond de jetons de la réponse ; absent : aucune limite envoyée au modèle
+    sortie_max: int | None = Field(default=None, gt=0)
     consigne_redaction: str | None = None
     produit: Literal[
         "spec", "plan", "taches", "travail", "verdict", "vision", "volet", "architecture"

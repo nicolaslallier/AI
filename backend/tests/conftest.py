@@ -66,12 +66,13 @@ class FauxLLM:
         # morceaux propres à chaque appel de `flux`, tour à tour ; vide : `morceaux` à chaque appel
         self.file: list[list[str | asyncio.Event]] = []
 
-    async def flux(self, modele, messages, temperature):
+    async def flux(self, modele, messages, temperature, sortie_max=None):
         self.appels.append(
             {
                 "modele": modele,
                 "messages": messages,
                 "temperature": temperature,
+                "sortie_max": sortie_max,
                 "contexte": dict(journal.contexte.get()),
             }
         )
@@ -83,12 +84,15 @@ class FauxLLM:
         if self.exception:
             raise self.exception
 
-    async def completer(self, modele, messages, temperature, outils=None, response_format=None):
+    async def completer(
+        self, modele, messages, temperature, outils=None, response_format=None, sortie_max=None
+    ):
         self.appels.append(
             {
                 "modele": modele,
                 "messages": [dict(m) for m in messages],  # copie : la boucle ajoute ensuite
                 "temperature": temperature,
+                "sortie_max": sortie_max,
                 "outils": outils,
                 "response_format": response_format,
                 "contexte": dict(journal.contexte.get()),

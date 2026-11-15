@@ -492,7 +492,11 @@ async def completer(
     """Une réponse structurée sans outils ; avec un `service:`, c'est une nouvelle mission."""
     if agent.service is None:
         reponse = await llm.completer(
-            agent.modele, messages, agent.temperature, response_format=response_format
+            agent.modele,
+            messages,
+            agent.temperature,
+            response_format=response_format,
+            sortie_max=agent.sortie_max,
         )
         return retirer_reflexion(reponse.get("content") or "")
     if missions is None:
@@ -631,7 +635,9 @@ def _erreur_modele(m: Mission, e: Exception) -> ErreurLLM:
 
 async def _pomper(m: Mission, messages: list[dict], file: asyncio.Queue) -> None:
     try:
-        async for morceau in m.llm.flux(m.agent.modele, messages, m.agent.temperature):
+        async for morceau in m.llm.flux(
+            m.agent.modele, messages, m.agent.temperature, m.agent.sortie_max
+        ):
             await file.put(morceau)  # file bornée : un agent qui ne lit plus ralentit le modèle
         await file.put(None)
     except asyncio.CancelledError:
@@ -740,6 +746,7 @@ async def modele(request: Request):
                     agent.temperature,
                     outils=offerts,
                     response_format=d.response_format,
+                    sortie_max=agent.sortie_max,
                 ),
             )
         except ErreurMission:

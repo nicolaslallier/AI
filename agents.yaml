@@ -257,6 +257,7 @@ agents:
     description: Reçoit une vision et la discute avec Nicolas jusqu'à une vision d'architecture claire.
     modele: cloud-anthropic
     contexte_max: 200000
+    sortie_max: 16000
     temperature: 0.3
     produit: vision
     prefixe: mot-
@@ -303,7 +304,7 @@ agents:
     description: Rédige le volet affaires (TOGAF, phase B) de l'architecture.
     modele: cloud-openai
     contexte_max: 200000
-    temperature: 0.2
+    sortie_max: 16000
     produit: volet
     auto: true
     sans_validation: true
@@ -364,6 +365,7 @@ agents:
     description: Rédige le volet données (TOGAF, phase C) de l'architecture.
     modele: cloud-gemini
     contexte_max: 200000
+    sortie_max: 16000
     temperature: 0.2
     produit: volet
     auto: true
@@ -428,6 +430,7 @@ agents:
     description: Rédige le volet applicatif (TOGAF, phase C) de l'architecture.
     modele: cloud-anthropic
     contexte_max: 200000
+    sortie_max: 16000
     temperature: 0.2
     produit: volet
     auto: true
@@ -492,7 +495,7 @@ agents:
     description: Rédige le volet technologique (TOGAF, phase D) de l'architecture.
     modele: cloud-openai
     contexte_max: 200000
-    temperature: 0.2
+    sortie_max: 16000
     produit: volet
     auto: true
     sans_validation: true
@@ -556,6 +559,7 @@ agents:
     description: Rédige le volet sécurité, transversal, de l'architecture.
     modele: cloud-gemini
     contexte_max: 200000
+    sortie_max: 16000
     temperature: 0.2
     produit: volet
     auto: true
@@ -627,6 +631,7 @@ agents:
     description: Rédige le volet solution (TOGAF, phases E et F), avec options, lots de travail et plateaux.
     modele: cloud-anthropic
     contexte_max: 200000
+    sortie_max: 16000
     temperature: 0.2
     produit: volet
     auto: true
@@ -699,6 +704,7 @@ agents:
     description: Assemble le document d'architecture, avec registres, arbitrages et modèle fusionné.
     modele: cloud-anthropic
     contexte_max: 200000
+    sortie_max: 16000
     temperature: 0.2
     produit: architecture
     auto: true

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ErreurApi, lireArchitecture, urlDocumentArchitecture, urlModeleArchimate, type Etape } from '../api'
-import { rendreMarkdown, sansBlocModele } from '../markdown'
+import { rendreMarkdown } from '../markdown'
 import EditeurDocument from './EditeurDocument.vue'
 
 const props = defineProps<{ pipelineId: number; etape: Etape; etapes: Etape[]; message?: string }>()
@@ -44,7 +44,7 @@ watch(
         <a :href="urlModeleArchimate(pipelineId)" download class="bouton">Télécharger le modèle ArchiMate</a>
         <a :href="urlDocumentArchitecture(pipelineId)" download class="bouton">Télécharger le document</a>
       </div>
-      <div class="carte markdown" v-html="rendreMarkdown(sansBlocModele(assemble))"></div>
+      <div class="carte markdown" v-html="rendreMarkdown(assemble)"></div>
     </template>
     <p v-if="erreur" class="erreur">{{ erreur }}</p>
     <EditeurDocument
