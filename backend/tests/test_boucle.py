@@ -1,7 +1,8 @@
 import json
 
 import pytest
-from conftest import FauxLLM
+from conftest import FauxLLM, valeur
+from prometheus_client import generate_latest
 
 from portail.agents import Agent
 from portail.boucle import ErreurOutils, boucle_outils
@@ -271,3 +272,36 @@ async def test_arret_apres_proposition(outils):
     ignore = "ignoré : une action attend la confirmation de Nicolas"
     assert [m["content"] for m in messages if m["role"] == "tool"] == ["proposé", ignore, ignore]
     assert len(llm.appels) == 2 and llm.appels[-1]["outils"] is None
+
+
+async def test_tours_et_outils(outils):
+    llm = FauxLLM()
+    llm.reponses = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "a", "function": {"name": "lire", "arguments": '{"chemin": "README.md"}'}},
+                {"id": "b", "function": {"name": "zzz_987", "arguments": "{}"}},
+            ],
+        },
+        _texte("Fini"),
+    ]
+    ok = {"agent": "plan", "outil": "lire", "issue": "ok"}
+    refus = {"agent": "plan", "outil": "non_autorise", "issue": "refuse"}
+    tours = {"agent": "plan"}
+    av = [
+        valeur("portail_tours_mission_sum", **tours),
+        valeur("portail_tours_mission_count", **tours),
+        valeur("portail_outils_appels_total", **ok),
+        valeur("portail_outils_appels_total", **refus),
+    ]
+    await _go(llm, outils)
+    ap = [
+        valeur("portail_tours_mission_sum", **tours),
+        valeur("portail_tours_mission_count", **tours),
+        valeur("portail_outils_appels_total", **ok),
+        valeur("portail_outils_appels_total", **refus),
+    ]
+    assert [a - b for a, b in zip(ap, av, strict=True)] == [2, 1, 1, 1]
+    assert b"zzz_987" not in generate_latest()

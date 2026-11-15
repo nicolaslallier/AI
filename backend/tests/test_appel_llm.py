@@ -2,6 +2,7 @@ import json
 
 import httpx
 import pytest
+from conftest import valeur
 from sqlalchemy import select
 
 from portail import journal
@@ -51,6 +52,23 @@ async def test_completer_inscrit_l_appel(sessions):
     assert ligne.conversation_id is None
     assert (ligne.jetons_entree, ligne.jetons_sortie, ligne.issue) == (10, 5, "ok")
     assert ligne.duree_ms >= 0
+
+
+async def test_metriques_d_un_appel(sessions):
+    et = {"agent": "code", "modele": "m", "lieu": "portail"}
+    noms = [
+        ("portail_llm_appels_total", {**et, "issue": "ok"}),
+        ("portail_llm_jetons_total", {**et, "sens": "entree"}),
+        ("portail_llm_jetons_total", {**et, "sens": "sortie"}),
+        ("portail_llm_duree_secondes_count", et),
+        ("portail_contexte_remplissage_count", {"agent": "code"}),
+        ("portail_contexte_remplissage_sum", {"agent": "code"}),
+    ]
+    avant = [valeur(n, **e) for n, e in noms]
+    journal.nouvelle_mission("code", 1000)
+    await _client(_ok, sessions).completer("m", MSG, None)
+    apres = [valeur(n, **e) for n, e in noms]
+    assert [round(a - b, 6) for a, b in zip(apres, avant, strict=True)] == [1, 10, 5, 1, 1, 0.01]
 
 
 async def test_flux_demande_l_usage(sessions):

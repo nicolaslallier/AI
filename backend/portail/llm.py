@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from portail import journal
+from portail import journal, metriques
 from portail.db import AppelLLM
 
 logger = logging.getLogger(__name__)
@@ -35,12 +35,30 @@ class ClientLLM:
         self._sessions = sessions
         self._version = version
 
+    @staticmethod
+    def _mesurer(ctx: dict, modele: str, issue: str, usage: dict, duree: float) -> None:
+        try:
+            agent = ctx.get("agent", "inconnu")
+            et = {"agent": agent, "modele": modele, "lieu": ctx.get("lieu", "portail")}
+            metriques.LLM_APPELS.labels(**et, issue=issue).inc()
+            metriques.LLM_DUREE.labels(**et).observe(duree)
+            entree, sortie = usage.get("prompt_tokens"), usage.get("completion_tokens")
+            for sens, n in (("entree", entree), ("sortie", sortie)):
+                if isinstance(n, int | float):
+                    metriques.LLM_JETONS.labels(**et, sens=sens).inc(n)
+            max_ = ctx.get("contexte_max")
+            if isinstance(entree, int | float) and isinstance(max_, int) and max_ > 0:
+                metriques.CONTEXTE_REMPLISSAGE.labels(agent=agent).observe(entree / max_)
+        except Exception:  # noqa: BLE001 (une métrique ne doit jamais arrêter l'appel)
+            journal.erreur(logger, "métriques de l'appel_llm non enregistrées")
+
     async def _noter(self, modele: str, issue: str, usage: dict | None, debut: float) -> None:
-        """Une ligne par appel, sans aucun contenu ; n'échoue jamais."""
-        if self._sessions is None:
-            return
+        """Une ligne et des métriques par appel, sans aucun contenu ; n'échoue jamais."""
         ctx = journal.contexte.get()
         usage = usage if isinstance(usage, dict) else {}
+        self._mesurer(ctx, modele, issue, usage, time.monotonic() - debut)
+        if self._sessions is None:
+            return
         try:
             async with self._sessions() as s:
                 s.add(
