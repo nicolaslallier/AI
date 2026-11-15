@@ -281,8 +281,9 @@ async fn assurer_image(docker: &Docker, image: &str, rafraichir: bool) -> Result
         return Ok(());
     }
     match tirer(docker, image).await {
-        Err(e) if locale => {
-            eprintln!("image {image} non rafraîchie, copie locale utilisée : {e:?}");
+        Err(_) if locale => {
+            // jamais le détail : il peut reprendre la réponse du registre
+            eprintln!("image {image} non rafraîchie, copie locale utilisée");
             Ok(())
         }
         r => r,

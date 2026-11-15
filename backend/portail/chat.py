@@ -10,6 +10,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from portail import journal
 from portail.agents import Agent, Catalogue
 from portail.avis import ServiceAvis
 from portail.boucle import boucle_outils
@@ -426,8 +427,8 @@ class ServiceChat:
             if a_relire and self._avis:
                 try:
                     await self._avis.lancer(a_relire)
-                except Exception:
-                    logger.exception("avis non lancés pour le document %s", a_relire)
+                except Exception:  # noqa: BLE001
+                    journal.erreur(logger, "avis non lancés pour le document %s", a_relire)
         except Exception as exc:  # noqa: BLE001 - toute erreur doit finir en étape échouée
             try:
                 async with self._sessions() as s:
@@ -436,13 +437,13 @@ class ServiceChat:
                         return
                     await changer_etat(s, etape, Etat.ECHOUEE, str(exc))
                     await s.commit()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 # l'événement terminal part quand même : les abonnés ne doivent pas rester bloqués
-                logger.exception("impossible d'enregistrer l'échec de l'étape %s", etape_id)
+                journal.erreur(logger, "impossible d'enregistrer l'échec de l'étape %s", etape_id)
             try:
                 await self._depots.liberer(etape_id)
-            except Exception:
-                logger.exception("impossible de libérer l'arbre de l'étape %s", etape_id)
+            except Exception:  # noqa: BLE001
+                journal.erreur(logger, "impossible de libérer l'arbre de l'étape %s", etape_id)
             d.publier(etape_id, {"type": "erreur", "message": str(exc)})
         finally:
             d.oublier(etape_id)
@@ -501,8 +502,8 @@ class ServiceChat:
         if self._avis:
             try:
                 await self._avis.abandonner(doc.id)
-            except Exception:
-                logger.exception("avis non abandonnés pour le document %s", doc.id)
+            except Exception:  # noqa: BLE001
+                journal.erreur(logger, "avis non abandonnés pour le document %s", doc.id)
         await self._depots.liberer(etape_id)
         if suivante:
             self.lancer(suivante.id)
@@ -542,8 +543,8 @@ class ServiceChat:
         for doc_id in docs if self._avis else ():
             try:
                 await self._avis.abandonner(doc_id)
-            except Exception:
-                logger.exception("avis non abandonnés pour le document %s", doc_id)
+            except Exception:  # noqa: BLE001
+                journal.erreur(logger, "avis non abandonnés pour le document %s", doc_id)
         for i in ids:
             self.diffuseur.publier(i, {"type": "erreur", "message": "annulé"})
             await self._depots.liberer(i)

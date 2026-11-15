@@ -23,6 +23,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from portail import journal
 from portail.agents import Catalogue, modele_pour
 from portail.boucle import ErreurOutils, boucle_outils
 from portail.config import Reglages
@@ -380,14 +381,14 @@ class Orchestrateur:
         except TimeoutError:
             raison = "durée maximale dépassée"
             if not delai.expired():  # un délai interne, pas celui de la tâche
-                logger.exception("pipeline dev %s : erreur inattendue", pipeline_id)
+                journal.erreur(logger, "pipeline dev %s : erreur inattendue", pipeline_id)
                 raison = "erreur inattendue : TimeoutError"
         except Refus as e:  # config stockée qui ne passe plus la validation
             raison = e.message
         except (ErreurLanceur, ErreurGitHub, ErreurDepot, ErreurLLM, ErreurOutils) as e:
             raison = str(e)
-        except Exception as e:  # dernier recours : une tâche ne reste jamais verrouillée en cours
-            logger.exception("pipeline dev %s : erreur inattendue", pipeline_id)
+        except Exception as e:  # dernier recours : une tâche ne reste jamais verrouillée en cours  # noqa: BLE001
+            journal.erreur(logger, "pipeline dev %s : erreur inattendue", pipeline_id)
             raison = f"erreur inattendue : {type(e).__name__}"
         await self.bloquer(pipeline_id, raison)
 
@@ -712,7 +713,9 @@ class Orchestrateur:
                 )
                 await self._repondu([c.id])
             except ErreurGitHub as e:
-                logger.warning("reprise %s : réponse impossible (%s)", ctx.pipeline_id, e)
+                logger.warning(
+                    "reprise %s : réponse impossible (%s)", ctx.pipeline_id, type(e).__name__
+                )
         autres = [c for c in pris if c.type != "ligne"]
         blocs = [
             "> " + c.texte[:200].replace("\n", "\n> ") + "\n\n" + _texte_reponse(c, court)
@@ -726,7 +729,9 @@ class Orchestrateur:
                 # ponytail: un redémarrage entre `commenter` et `_repondu` reposte ce commentaire
                 await self._repondu([c.id for c in autres])
             except ErreurGitHub as e:
-                logger.warning("reprise %s : commentaire impossible (%s)", ctx.pipeline_id, e)
+                logger.warning(
+                    "reprise %s : commentaire impossible (%s)", ctx.pipeline_id, type(e).__name__
+                )
         await self._terminer(ctx)
         await self._au_mieux(
             "notifier", self.notifier(ctx.tache.titre, "Reprise terminée", ctx.ex.pr_url)
@@ -1068,8 +1073,8 @@ class Orchestrateur:
                         ctx.depot, p.pr_numero, f"Remplacée par {ctx.ex.pr_url}"
                     )
                     await self._github.fermer_pr(ctx.depot, p.pr_numero)
-            except Exception:
-                logger.exception("fermeture de l'ancienne PR %s impossible", p.pr_numero)
+            except Exception:  # noqa: BLE001
+                journal.erreur(logger, "fermeture de l'ancienne PR %s impossible", p.pr_numero)
         return "fini"
 
     async def _terminer(self, ctx: _Ctx) -> None:
@@ -1122,12 +1127,12 @@ class Orchestrateur:
         """Attend `attente` ; une erreur est seulement journalisée (rend alors None)."""
         try:
             return await attente
-        except Exception:
-            logger.exception("pipeline dev : %s impossible", quoi)
+        except Exception:  # noqa: BLE001
+            journal.erreur(logger, "pipeline dev : %s impossible", quoi)
             return None
 
     async def bloquer(self, pipeline_id: int, raison: str) -> None:
-        logger.warning("pipeline dev %s bloqué : %s", pipeline_id, raison)
+        logger.warning("pipeline dev %s bloqué", pipeline_id)  # la raison reste en base
         ex = projet = titre = None
         try:
             async with self._sessions() as s:
@@ -1140,8 +1145,8 @@ class Orchestrateur:
                 projet = await s.get(Projet, pipeline.projet_id)
                 if ex is not None:
                     titre = await s.scalar(select(Tache.titre).where(Tache.id == ex.tache_id))
-        except Exception:
-            logger.exception("blocage du pipeline %s : lecture impossible", pipeline_id)
+        except Exception:  # noqa: BLE001
+            journal.erreur(logger, "blocage du pipeline %s : lecture impossible", pipeline_id)
         reprise = ex is not None and ex.mode == "reprise"
         branche = None
         if ex is not None and projet is not None:
@@ -1157,8 +1162,8 @@ class Orchestrateur:
             return
         try:
             await self._enregistrer_blocage(pipeline_id, raison, branche)
-        except Exception:
-            logger.exception("blocage du pipeline %s : état non enregistré", pipeline_id)
+        except Exception:  # noqa: BLE001
+            journal.erreur(logger, "blocage du pipeline %s : état non enregistré", pipeline_id)
             await self._au_mieux("blocage minimal", self._blocage_minimal(pipeline_id, raison))
         if titre and projet is not None:
             lien = self.lien(f"/projets/{projet.id}/kanban")
@@ -1200,8 +1205,8 @@ class Orchestrateur:
                     .values(etat=Etat.ECHOUEE, maj_le=self._horloge())
                 )
                 await s.commit()
-        except Exception:
-            logger.exception("échec de la reprise %s : état non enregistré", pipeline_id)
+        except Exception:  # noqa: BLE001
+            journal.erreur(logger, "échec de la reprise %s : état non enregistré", pipeline_id)
             minimal = self._blocage_minimal(pipeline_id, raison, reprise=True)
             await self._au_mieux("blocage minimal", minimal)
         courte = raison_courte(raison)
@@ -1289,7 +1294,7 @@ class Orchestrateur:
         if not any(a in COURRIELS_AGENTS for _, a, _ in await espace.commits(ex.base_sha)):
             return False
         if violations := await verifier_commits_code(espace, ex.base_sha, lire_config(config)):
-            logger.warning("branche %s non poussée : %s", ex.branche, ", ".join(violations))
+            logger.warning("branche %s non poussée : %d violation(s)", ex.branche, len(violations))
             return False
         jeton = await self._github.jeton(self._depot_de(espace.depot_url))
         await espace.pousser(jeton, ex.branche)

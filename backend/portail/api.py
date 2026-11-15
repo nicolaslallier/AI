@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from portail import resume
+from portail import journal, resume
 from portail.agents import Catalogue, charger_catalogue
 from portail.arbitre import Arbitre, LLMArbitre
 from portail.avis import ServiceAvis
@@ -336,7 +336,7 @@ def _orchestrateur(r: Reglages, sessions, catalogue, llm) -> Orchestrateur | Non
     try:
         github = GitHubApp(r.github_app_id, r.github_app_cle)
     except ErreurGitHub:
-        logger.exception("App GitHub mal configurée : pas d'ordonnanceur")
+        journal.erreur(logger, "App GitHub mal configurée : pas d'ordonnanceur")
         return None
     lanceur = ClientLanceur(r.lanceur_url, r.lanceur_secret)
     notifieur = Notifieur(r.ntfy_url, r.ntfy_sujet, r.ntfy_jeton)
@@ -369,7 +369,7 @@ def create_app(
             # au démarrage, aucune étape n'est au milieu d'une préparation : nettoyer sans verrou
             await depots.nettoyer(garder=en_attente)
         except ErreurDepot:
-            logger.exception("nettoyage des arbres de travail incomplet")
+            journal.erreur(logger, "nettoyage des arbres de travail incomplet")
         arbitre = Arbitre()
         interactif = LLMArbitre(app.state.llm, arbitre, "interactif")
         app.state.diffuseur = Diffuseur()
@@ -443,6 +443,14 @@ def create_app(
     @app.exception_handler(Refus)
     async def _refus(_: Request, refus: Refus):
         return JSONResponse(status_code=refus.code, content={"detail": refus.message})
+
+    @app.exception_handler(Exception)
+    async def _erreur_interne(request: Request, _: Exception):
+        route = request.scope.get("route")  # le modèle (`/api/taches/{tache_id}`), pas l'URL
+        journal.erreur(
+            logger, "erreur interne sur %s %s", request.method, getattr(route, "path", "?")
+        )
+        return JSONResponse(status_code=500, content={"detail": "erreur interne"})
 
     @app.middleware("http")
     async def _utilisateur(request: Request, call_next):

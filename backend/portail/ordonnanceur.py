@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
+from portail import journal
 from portail.db import (
     CommentairePris,
     Etape,
@@ -125,15 +126,19 @@ class Ordonnanceur:
                         return  # la route occupée réveillera l'ordonnanceur après son commit
                     pipeline = await self._orch.demarrer(s, tache, base)
                     await s.commit()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 passagere = isinstance(e, SQLAlchemyError) or (
                     isinstance(e, ErreurGitHub) and e.transitoire
                 )
                 if passagere:  # GitHub ou base : la tâche reste Prête, retentée au tour suivant
-                    logger.warning("ordonnanceur : tâche %s reportée : %s", tache_id, e)
+                    logger.warning(
+                        "ordonnanceur : tâche %s reportée (%s)", tache_id, type(e).__name__
+                    )
                     return
                 # sinon elle reviendrait à chaque tour, devant les autres
-                logger.exception("ordonnanceur : démarrage de la tâche %s impossible", tache_id)
+                journal.erreur(
+                    logger, "ordonnanceur : démarrage de la tâche %s impossible", tache_id
+                )
                 await self._bloquer(tache_id, f"démarrage impossible : {e}")
                 continue
             self.lancer(pipeline.id)
@@ -191,8 +196,8 @@ class Ordonnanceur:
             self._reveil.clear()
             try:
                 await self.tour()
-            except Exception:  # la boucle ne meurt jamais ; CancelledError l'arrête
-                logger.exception("ordonnanceur : tour en échec")
+            except Exception:  # la boucle ne meurt jamais ; CancelledError l'arrête  # noqa: BLE001
+                journal.erreur(logger, "ordonnanceur : tour en échec")
             try:
                 async with asyncio.timeout(PERIODE_S):
                     await self._reveil.wait()

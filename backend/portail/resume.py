@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from portail import journal
 from portail.conversations import ServiceConversation
 from portail.db import MessageConversation, Resume
 from portail.notifications import lien_absolu
@@ -91,7 +92,7 @@ async def tourner(
             await resumer_si_du(sessions, conversations, notifieur, horloge(), heure, url_publique)
             maintenant = horloge()
             pause = max((prochaine_echeance(maintenant, heure) - maintenant).total_seconds(), 1)
-        except Exception:
-            logger.exception("résumé du matin impossible")
+        except Exception:  # noqa: BLE001
+            journal.erreur(logger, "résumé du matin impossible")
             pause = ERREUR_PAUSE_S
         await asyncio.sleep(pause)

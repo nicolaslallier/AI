@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from portail import journal
 from portail.db import CommentairePris, ExecutionDev, Projet, Tache
 from portail.dev import Orchestrateur
 from portail.github import CommentaireGitHub
@@ -171,13 +172,13 @@ class SuiviPR:
         for ex, tache, depot_url in await self._a_suivre():
             try:
                 await self._traiter(ex, tache, depot_url)
-            except Exception:  # une PR en échec n'arrête pas les autres
-                logger.exception("suivi des PR : tâche %s", tache.id)
+            except Exception:  # une PR en échec n'arrête pas les autres  # noqa: BLE001
+                journal.erreur(logger, "suivi des PR : tâche %s", tache.id)
 
     async def tourner(self) -> None:
         while True:
             try:
                 await self.passer()
-            except Exception:  # la boucle ne meurt jamais ; CancelledError l'arrête
-                logger.exception("suivi des PR : passage en échec")
+            except Exception:  # la boucle ne meurt jamais ; CancelledError l'arrête  # noqa: BLE001
+                journal.erreur(logger, "suivi des PR : passage en échec")
             await asyncio.sleep(PERIODE_S)

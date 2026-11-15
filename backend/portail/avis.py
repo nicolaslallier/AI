@@ -6,6 +6,7 @@ import logging
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from portail import journal
 from portail.agents import Catalogue, modele_pour
 from portail.boucle import boucle_outils
 from portail.contexte import construire
@@ -116,8 +117,8 @@ class ServiceAvis:
                 await s.commit()
         except asyncio.CancelledError:
             raise  # la ligne est déjà passée « abandonne » par celui qui annule
-        except Exception:
-            logger.exception("avis %s abandonné", avis_id)
+        except Exception:  # noqa: BLE001
+            journal.erreur(logger, "avis %s abandonné", avis_id)
             async with self._sessions() as s:
                 await s.execute(
                     update(Avis)

@@ -8,6 +8,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from portail import journal
 from portail.actions import executer_action
 from portail.agents import Agent, Catalogue
 from portail.boucle import boucle_outils
@@ -240,7 +241,7 @@ class ServiceConversation:
                 if isinstance(e, Refus):
                     motif = e.message
                 else:  # course rare (projet ou tâche supprimé entre-temps…)
-                    logger.exception("action %s : erreur de base à l'exécution", action_id)
+                    journal.erreur(logger, "action %s : erreur de base à l'exécution", action_id)
                     motif = "le portail a changé entre-temps, réessaie de proposer l'action"
                 a.etat, a.resultat = "echouee", motif
                 texte = f"Action n°{action_id} ({nom}) refusée par le portail : {motif}"
@@ -256,9 +257,9 @@ class ServiceConversation:
             await self._annuler_tache(tache_id)
             etat, resultat = "confirmee", "tâche annulée, revenue à faire"
             texte = f"Action n°{action_id} ({nom}) confirmée par Nicolas : {resultat}"
-        except Exception as e:  # l'action est déjà confirmee : noter l'échec
+        except Exception as e:  # l'action est déjà confirmee : noter l'échec  # noqa: BLE001
             if not isinstance(e, Refus):
-                logger.exception("action %s : annulation de la tâche %s", action_id, tache_id)
+                journal.erreur(logger, "action %s : annulation de la tâche %s", action_id, tache_id)
             etat, resultat = "echouee", e.message if isinstance(e, Refus) else f"erreur : {e}"
             texte = f"Action n°{action_id} ({nom}) refusée par le portail : {resultat}"
         async with self._sessions() as s:
@@ -366,9 +367,11 @@ class ServiceConversation:
                     if c.etat == "en_cours":
                         c.etat, c.erreur = "erreur", str(exc)
                         await s.commit()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 # l'événement terminal part quand même : les abonnés ne doivent pas rester bloqués
-                logger.exception("impossible d'enregistrer l'échec de la conversation %s", cid)
+                journal.erreur(
+                    logger, "impossible d'enregistrer l'échec de la conversation %s", cid
+                )
             d.publier(cid, {"type": "erreur", "message": str(exc)})
         finally:
             d.oublier(cid)
