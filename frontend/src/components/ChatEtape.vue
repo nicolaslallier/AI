@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import type { Etape } from '../api'
 import { rendreMarkdown } from '../markdown'
 import JaugeContexte from './JaugeContexte.vue'
@@ -12,13 +12,17 @@ const props = defineProps<{
   propositions?: number
   projetId?: number
 }>()
-const emit = defineEmits<{ envoyer: [contenu: string, vider: () => void]; rediger: []; reessayer: [] }>()
+const emit = defineEmits<{ envoyer: [contenu: string, vider: () => void, modele?: string]; rediger: []; reessayer: [] }>()
 const saisie = ref('')
+const modele = ref(props.etape.modele ?? '')
+watch(() => props.etape.modele, (m) => (modele.value = m ?? ''))
+// même règle que le serveur : spec, modèle pas encore figé, aucun message
+const choixModele = () => props.etape.produit === 'spec' && !props.etape.modele_fige && props.etape.messages.length === 0
 
 function envoyer() {
   const t = saisie.value.trim()
   if (!t || props.etape.etat !== 'en_attente' || props.etape.jauge?.niveau === 'plein') return
-  emit('envoyer', t, () => (saisie.value = ''))
+  emit('envoyer', t, () => (saisie.value = ''), choixModele() ? modele.value : undefined)
 }
 
 function surEntree(e: KeyboardEvent) {
@@ -58,6 +62,10 @@ function surEntree(e: KeyboardEvent) {
       {{ etape.erreur }} <button type="button" v-if="etape.erreur !== 'annulé'" @click="emit('reessayer')">Réessayer</button>
     </p>
     <p v-if="message" class="erreur">{{ message }}</p>
+    <label v-if="choixModele()" class="discret">IA
+      <select v-model="modele"><option v-for="m in etape.modeles" :key="m" :value="m">{{ m }}</option></select>
+    </label>
+    <span v-else-if="etape.produit === 'spec'" class="discret">IA : {{ etape.modele }}</span>
     <textarea
       v-model="saisie"
       rows="3"

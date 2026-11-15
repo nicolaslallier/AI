@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from portail import journal
-from portail.agents import Catalogue, modele_pour
+from portail.agents import Catalogue, agent_effectif, modele_pour
 from portail.contexte import construire
 from portail.db import Avis, Document, Etape, Pipeline, Projet
 from portail.depots import Depots
@@ -146,7 +146,7 @@ class ServiceAvis:
         agent = self._catalogue.agents[avis.agent]
         journal.lier(pipeline=etape.pipeline_id)
         journal.nouvelle_mission(agent.nom, agent.contexte_max)
-        auteur = self._catalogue.agents[etape.agent]
+        auteur = agent_effectif(self._catalogue, etape.agent, etape.modele)
         agent = agent.model_copy(update={"modele": modele_pour(agent, auteur)})
         demande = construire(agent, [], None, agent.consigne_avis, annexes)
         if agent.outils and projet.depot_url:

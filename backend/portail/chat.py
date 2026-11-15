@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from portail import journal
-from portail.agents import Agent, Catalogue
+from portail.agents import Agent, Catalogue, agent_effectif
 from portail.avis import ServiceAvis
 from portail.contexte import construire, jauge
 from portail.db import (
@@ -174,7 +174,7 @@ class ServiceChat:
         return etape
 
     def _agent(self, etape: Etape):
-        agent = self._catalogue.agents.get(etape.agent)
+        agent = agent_effectif(self._catalogue, etape.agent, etape.modele)
         if agent is None:
             raise Refus(409, f"agent « {etape.agent} » absent de agents.yaml")
         return agent
@@ -203,10 +203,10 @@ class ServiceChat:
             agent, messages, doc, consigne, await annexes(s, agent, etape, pipeline.projet_id)
         )
 
-    async def envoyer(self, etape_id: int, contenu: str) -> None:
+    async def envoyer(self, etape_id: int, contenu: str, modele: str | None = None) -> None:
         async with self._sessions() as s:
             etape = await self._etape_relancable(s, etape_id)
-            self._agent_conversation(etape)
+            spec = self._agent_conversation(etape).produit == "spec"
             if etape.etat == Etat.EN_COURS:
                 raise Refus(409, "une réponse est déjà en cours")
             if etape.etat != Etat.EN_ATTENTE:
@@ -214,7 +214,17 @@ class ServiceChat:
             contenu = contenu.strip()
             if not contenu:
                 raise Refus(422, "le message est vide")
+            if modele and modele not in self._catalogue.modeles_permis:
+                raise Refus(422, f"modèle non permis : {modele}")
+            if (
+                spec
+                and not etape.modele
+                and not await s.scalar(select(Message.id).where(Message.etape_id == etape_id))
+            ):  # figé dès le premier message (choisi, sinon celui de l'agent)
+                etape.modele = modele or self._agent(etape).modele
             agent = self._agent(etape)
+            if modele and modele != agent.modele:
+                raise Refus(409, f"modèle déjà figé : {agent.modele}")
             avec = await self._demande(s, etape, agent) + [{"role": "user", "content": contenu}]
             if jauge(agent, avec).niveau == "plein":
                 raise Refus(
@@ -229,7 +239,7 @@ class ServiceChat:
     async def rediger(self, etape_id: int) -> None:
         async with self._sessions() as s:
             etape = await self._etape_relancable(s, etape_id)
-            self._agent_conversation(etape)
+            agent = self._agent_conversation(etape)
             if etape.etat != Etat.EN_ATTENTE:
                 raise Refus(
                     409,
@@ -237,8 +247,10 @@ class ServiceChat:
                     if etape.etat != Etat.EN_COURS
                     else "une réponse est déjà en cours",
                 )
-            if not self._agent(etape).consigne_redaction:
+            if not agent.consigne_redaction:
                 raise Refus(409, "cet agent ne rédige pas de document")
+            if agent.produit == "spec" and not etape.modele:  # le modèle auteur est figé
+                etape.modele = agent.modele
             etape.action = "rediger"
             await changer_etat(s, etape, Etat.EN_COURS)
             await s.commit()

@@ -165,6 +165,9 @@ class EtapeOut(BaseModel):
     action: str | None
     sha: str | None
     produit: str | None
+    modele: str | None
+    modele_fige: bool
+    modeles: list[str]
     messages: list[MessageOut]
     document: DocumentOut | None
     jauge: Jauge | None

@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from portail import bureau, journal, metriques, resume
-from portail.agents import Catalogue, charger_catalogue
+from portail.agents import Catalogue, agent_effectif, charger_catalogue
 from portail.arbitre import Arbitre, LLMArbitre
 from portail.audit import auteur_de, inscrire
 from portail.avis import ServiceAvis
@@ -175,7 +175,7 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
     avis_par_doc = await _avis(session, [e.document for e in pipeline.etapes if e.document])
     etapes = []
     for e in pipeline.etapes:
-        agent = catalogue.agents.get(e.agent)
+        agent = agent_effectif(catalogue, e.agent, e.modele)
         j = None
         if agent:
             a = await annexes(session, agent, e, pipeline.projet_id)
@@ -188,6 +188,11 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
                         for k in ("id", "ordre", "agent", "etat", "erreur", "action", "sha")
                     },
                     "produit": agent.produit if agent else None,
+                    "modele": agent.modele if agent else None,
+                    "modele_fige": e.modele is not None,
+                    "modeles": catalogue.modeles_permis
+                    if agent and agent.produit == "spec"
+                    else [],
                     "messages": e.messages,
                     "document": e.document
                     and {
@@ -789,10 +794,11 @@ def create_app(
 
     class MessageIn(BaseModel):
         contenu: str
+        modele: str | None = None
 
     @app.post("/api/etapes/{etape_id}/messages", status_code=202)
     async def envoyer_message(etape_id: int, corps: MessageIn, request: Request, s: Session):
-        await request.app.state.chat.envoyer(etape_id, corps.contenu)
+        await request.app.state.chat.envoyer(etape_id, corps.contenu, corps.modele)
         await _tracer(s, request, "etape.message", "etape", etape_id)
         return {}
 

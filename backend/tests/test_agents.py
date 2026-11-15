@@ -7,7 +7,9 @@ from portail.agents import (
     OUTILS_PORTAIL,
     OUTILS_SUIVI,
     Agent,
+    Catalogue,
     CatalogueInvalide,
+    agent_effectif,
     charger_catalogue,
     modele_pour,
     rangement,
@@ -365,3 +367,14 @@ def test_service_adresse_invalide(tmp_path, adresse):
     texte = VALIDE.replace("prompt_systeme: p", f"prompt_systeme: p\n    service: {adresse}")
     with pytest.raises(CatalogueInvalide, match="« spec »"):
         charger_catalogue(ecrire(tmp_path, texte))
+
+
+def test_agent_effectif():
+    from conftest import _agent
+
+    cat = Catalogue(modeles_permis=["m", "g"], agents={"spec": _agent("spec")}, pipelines={})
+    assert agent_effectif(cat, "spec", None).modele == "m"
+    assert agent_effectif(cat, "spec", "g").modele == "g"
+    assert cat.agents["spec"].modele == "m"  # le catalogue n'est pas modifié
+    assert agent_effectif(cat, "spec", "retire").modele == "m"  # retiré d'agents.yaml : repli
+    assert agent_effectif(cat, "absent", "g") is None

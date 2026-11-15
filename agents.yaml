@@ -1,4 +1,4 @@
-modeles_permis: [qwen3.8:27b-mlx, mlx-community/GLM-4.7-Flash-8bit]
+modeles_permis: [qwen3.8:27b-mlx, mlx-community/GLM-4.7-Flash-8bit, gemma4:26b-a4b-it-qat]
 agents:
   spec:
     description: Discute avec Nicolas pour écrire la spec d'un projet.
