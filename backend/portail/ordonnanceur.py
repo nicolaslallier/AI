@@ -1,5 +1,5 @@
-"""Ordonnanceur de la boucle de dev : les tâches *Prêtes* partent seules, une à la fois
-(`paralleles_max`), et un pipeline interrompu par un redémarrage repart une seule fois."""
+"""Ordonnanceur de la boucle de dev : les tâches *Prêtes* et les reprises partent seules,
+une à la fois (`paralleles_max`), et un pipeline interrompu par un redémarrage repart une seule fois."""
 
 import asyncio
 import logging

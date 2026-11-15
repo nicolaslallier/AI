@@ -59,6 +59,20 @@ def lot_pret(
     return []
 
 
+async def _verrouiller(s: AsyncSession, tache: Tache, ex: ExecutionDev) -> Tache | None:
+    """Verrouille le projet puis la tâche (ordre des routes) ; None si elle a quitté la revue."""
+    await s.scalar(select(Projet.id).where(Projet.id == tache.projet_id).with_for_update())
+    t = await s.scalar(
+        select(Tache)
+        .where(Tache.id == tache.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if t is None or t.colonne != "en_revue" or t.verrou != ex.pipeline_id:
+        return None
+    return t
+
+
 class SuiviPR:
     def __init__(
         self,
@@ -104,15 +118,8 @@ class SuiviPR:
                 await self._lire(ex, tache, depot_url)
             return
         async with self._sessions() as s:
-            # ordre des verrous : le projet d'abord, comme les routes
-            await s.scalar(select(Projet.id).where(Projet.id == tache.projet_id).with_for_update())
-            t = await s.scalar(
-                select(Tache)
-                .where(Tache.id == tache.id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
-            if t is None or t.colonne != "en_revue" or t.verrou != ex.pipeline_id:
+            t = await _verrouiller(s, tache, ex)
+            if t is None:
                 return  # déplacée entre-temps
             t.verrou = None
             await deplacer_tache(s, t, ARRIVEE[etat], None, "portail")
@@ -149,14 +156,8 @@ class SuiviPR:
         if not lot:
             return
         async with self._sessions() as s:
-            await s.scalar(select(Projet.id).where(Projet.id == tache.projet_id).with_for_update())
-            t = await s.scalar(
-                select(Tache)
-                .where(Tache.id == tache.id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
-            if t is None or t.colonne != "en_revue" or t.verrou != ex.pipeline_id:
+            t = await _verrouiller(s, tache, ex)
+            if t is None:
                 return  # déplacée entre-temps
             try:
                 await self._orch.creer_reprise(s, ex, lot)
