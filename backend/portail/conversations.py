@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from portail import journal
 from portail.actions import executer_action
 from portail.agents import Agent, Catalogue
+from portail.audit import inscrire
 from portail.boucle import boucle_outils
 from portail.chat import Diffuseur, ServiceChat, _sse
 from portail.contexte import jauge
@@ -212,11 +213,12 @@ class ServiceConversation:
         s.add(MessageConversation(conversation_id=c.id, role="system", contenu=contenu))
         c.etat, c.erreur = "en_cours", None
 
-    async def confirmer(self, action_id: int) -> None:
+    async def confirmer(self, action_id: int, auteur: str) -> None:
         """Seul chemin d'exécution d'une action : le clic de Nicolas, une seule fois."""
         async with self._sessions() as s:
             c, a = await self._verrouiller(s, action_id)
             cid, nom = c.id, a.nom
+            inscrire(s, auteur, "action.confirmer", "action_conversation", action_id)
             if nom == "annuler_tache":
                 # passée confirmee et commitée d'abord : jamais exécutée deux fois
                 tache_id = a.parametres["tache_id"]
@@ -269,10 +271,11 @@ class ServiceConversation:
             self._systeme(s, c, texte)
             await s.commit()
 
-    async def refuser(self, action_id: int) -> None:
+    async def refuser(self, action_id: int, auteur: str) -> None:
         async with self._sessions() as s:
             c, a = await self._verrouiller(s, action_id)
             cid = c.id
+            inscrire(s, auteur, "action.refuser", "action_conversation", action_id)
             a.etat = "refusee"
             self._systeme(s, c, f"Nicolas a refusé l'action n°{action_id} ({a.nom})")
             await s.commit()

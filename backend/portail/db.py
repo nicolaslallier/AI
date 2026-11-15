@@ -309,6 +309,19 @@ class CommandeLancee(Base):
     fin: Mapped[datetime] = _horodatage()
 
 
+class Audit(Base):
+    """Sans clé étrangère : la ligne survit à l'objet qu'elle désigne."""
+
+    __tablename__ = "audit"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    quand: Mapped[datetime] = _horodatage(index=True)
+    auteur: Mapped[str] = mapped_column(String)
+    action: Mapped[str] = mapped_column(String)
+    objet: Mapped[str] = mapped_column(String)  # pipeline | tache | proposition | …
+    objet_id: Mapped[int] = mapped_column(Integer)
+
+
 def creer_moteur(url: str) -> AsyncEngine:
     return create_async_engine(url)
 

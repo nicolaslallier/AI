@@ -17,12 +17,14 @@ from sqlalchemy.orm import selectinload
 from portail import journal, resume
 from portail.agents import Catalogue, charger_catalogue
 from portail.arbitre import Arbitre, LLMArbitre
+from portail.audit import auteur_de, inscrire
 from portail.avis import ServiceAvis
 from portail.chat import Diffuseur, ServiceChat, annexes
 from portail.config import Reglages
 from portail.contexte import construire, jauge
 from portail.conversations import ServiceConversation
 from portail.db import (
+    Audit,
     Avis,
     CommandeLancee,
     CommentairePris,
@@ -52,6 +54,7 @@ from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.schemas import (
     Acceptation,
+    AuditOut,
     AvisOut,
     CommandeVue,
     CommentaireVue,
@@ -98,6 +101,12 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 
 
 Session = Annotated[AsyncSession, Depends(get_session)]
+
+
+async def _tracer(s: AsyncSession, request: Request, action: str, objet: str, objet_id: int):
+    """Pour les routes dont le service a déjà validé : une ligne d'audit, commitée aussitôt."""
+    inscrire(s, auteur_de(request), action, objet, objet_id)
+    await s.commit()
 
 
 async def _avis(session: AsyncSession, docs: list[Document]) -> dict[int, list[AvisOut]]:
@@ -483,28 +492,31 @@ def create_app(
         return (await s.scalars(select(Projet).order_by(Projet.nom))).all()
 
     @app.post("/api/projets", status_code=201, response_model=ProjetOut)
-    async def creer_projet(corps: ProjetIn, s: Session):
+    async def creer_projet(corps: ProjetIn, request: Request, s: Session):
         verifier_depot(corps.depot_url)
         projet = Projet(**corps.model_dump())
         s.add(projet)
+        await s.flush()
+        inscrire(s, auteur_de(request), "projet.creer", "projet", projet.id)
         await s.commit()
         await s.refresh(projet)
         return projet
 
     @app.patch("/api/projets/{projet_id}", response_model=ProjetOut)
-    async def modifier_projet(projet_id: int, corps: ProjetPatch, s: Session):
+    async def modifier_projet(projet_id: int, corps: ProjetPatch, request: Request, s: Session):
         projet = await s.get(Projet, projet_id)
         if projet is None:
             raise Refus(404, "projet introuvable")
         verifier_depot(corps.depot_url)
         for champ in corps.model_fields_set:
             setattr(projet, champ, getattr(corps, champ))
+        inscrire(s, auteur_de(request), "projet.modifier", "projet", projet_id)
         await s.commit()
         await s.refresh(projet)
         return projet
 
     @app.put("/api/projets/{projet_id}/execution", response_model=ProjetOut)
-    async def definir_execution(projet_id: int, corps: ExecutionIn, s: Session):
+    async def definir_execution(projet_id: int, corps: ExecutionIn, request: Request, s: Session):
         projet = await s.get(Projet, projet_id)
         if projet is None:
             raise Refus(404, "projet introuvable")
@@ -513,6 +525,7 @@ def create_app(
             projet.config_execution = corps.yaml
         else:
             projet.config_execution = None
+        inscrire(s, auteur_de(request), "projet.definir_execution", "projet", projet_id)
         await s.commit()
         await s.refresh(projet)
         return projet
@@ -554,6 +567,7 @@ def create_app(
             raise Refus(404, "projet introuvable")
         cat = request.app.state.catalogue
         pipeline, a_lancer = await creer_pipeline(s, cat, corps.projet_id, corps.type)
+        inscrire(s, auteur_de(request), "pipeline.lancer", "pipeline", pipeline.id)
         await s.commit()
         if a_lancer:
             request.app.state.chat.lancer(a_lancer.id)
@@ -566,6 +580,7 @@ def create_app(
     @app.post("/api/pipelines/{pipeline_id}/annuler", response_model=PipelineDetail)
     async def annuler(pipeline_id: int, request: Request, s: Session):
         await _annuler(request.app.state, s, pipeline_id, clos=True)
+        await _tracer(s, request, "pipeline.annuler", "pipeline", pipeline_id)
         return await _detail(s, request.app.state.catalogue, pipeline_id)
 
     @app.get("/api/projets/{projet_id}/kanban", response_model=Kanban)
@@ -598,6 +613,7 @@ def create_app(
             if p.etat == "perimee":  # le marquage est gardé, même si l'acceptation échoue
                 await _fermer(request, s, p.etape_id)
             raise
+        inscrire(s, auteur_de(request), "proposition.accepter", "proposition", p.id)
         await _fermer(request, s, p.etape_id)
         _reveiller(request.app.state)
         return await _kanban(s, p.projet_id)
@@ -606,6 +622,7 @@ def create_app(
     async def rejeter_proposition(proposition_id: int, request: Request, s: Session):
         p = await _proposition(s, proposition_id)
         await rejeter(s, p)
+        inscrire(s, auteur_de(request), "proposition.rejeter", "proposition", p.id)
         await _fermer(request, s, p.etape_id)
         return await _kanban(s, p.projet_id)
 
@@ -633,6 +650,7 @@ def create_app(
                 if p.etat != "perimee":
                     raise
                 perimees += 1
+        inscrire(s, auteur_de(request), "propositions.tout_accepter", "etape", etape_id)
         await _fermer(request, s, etape_id)
         _reveiller(request.app.state)
         k = await _kanban(s, projet_id)
@@ -641,6 +659,7 @@ def create_app(
     @app.post("/api/projets/{projet_id}/taches", status_code=201, response_model=TacheVue)
     async def ajouter_tache(projet_id: int, corps: DonneesTache, request: Request, s: Session):
         t = await creer_tache(s, projet_id, corps, "nicolas")
+        inscrire(s, auteur_de(request), "tache.creer", "tache", t.id)
         await s.commit()
         _reveiller(request.app.state)
         return await _vue(s, t.id)
@@ -649,6 +668,7 @@ def create_app(
     async def modifier(tache_id: int, corps: DonneesTachePartielles, request: Request, s: Session):
         t = await _tache(s, tache_id)
         await modifier_tache(s, t, corps, "nicolas")
+        inscrire(s, auteur_de(request), "tache.modifier", "tache", tache_id)
         await s.commit()
         _reveiller(request.app.state)
         return await _vue(s, tache_id)
@@ -657,37 +677,43 @@ def create_app(
     async def deplacer(tache_id: int, corps: Deplacement, request: Request, s: Session):
         t = await _tache(s, tache_id)
         await deplacer_tache(s, t, corps.colonne, corps.avant_id, "nicolas")
+        inscrire(s, auteur_de(request), "tache.deplacer", "tache", tache_id)
         await s.commit()
         _reveiller(request.app.state)
         return await _vue(s, tache_id)
 
     @app.delete("/api/taches/{tache_id}", status_code=204)
-    async def supprimer(tache_id: int, s: Session):
+    async def supprimer(tache_id: int, request: Request, s: Session):
         t = await _tache(s, tache_id)
         await supprimer_tache(s, t, "nicolas")
+        inscrire(s, auteur_de(request), "tache.supprimer", "tache", tache_id)
         await s.commit()
 
     @app.post("/api/taches/{tache_id}/annuler", response_model=TacheVue)
     async def annuler_tache(tache_id: int, request: Request, s: Session):
         await _annuler_tache(request.app.state, s, tache_id)
+        await _tracer(s, request, "tache.annuler", "tache", tache_id)
         return await _vue(s, tache_id)
 
     class MessageIn(BaseModel):
         contenu: str
 
     @app.post("/api/etapes/{etape_id}/messages", status_code=202)
-    async def envoyer_message(etape_id: int, corps: MessageIn, request: Request):
+    async def envoyer_message(etape_id: int, corps: MessageIn, request: Request, s: Session):
         await request.app.state.chat.envoyer(etape_id, corps.contenu)
+        await _tracer(s, request, "etape.message", "etape", etape_id)
         return {}
 
     @app.post("/api/etapes/{etape_id}/rediger", status_code=202)
-    async def rediger(etape_id: int, request: Request):
+    async def rediger(etape_id: int, request: Request, s: Session):
         await request.app.state.chat.rediger(etape_id)
+        await _tracer(s, request, "etape.rediger", "etape", etape_id)
         return {}
 
     @app.post("/api/etapes/{etape_id}/reessayer", status_code=202)
-    async def reessayer(etape_id: int, request: Request):
+    async def reessayer(etape_id: int, request: Request, s: Session):
         await request.app.state.chat.reessayer(etape_id)
+        await _tracer(s, request, "etape.reessayer", "etape", etape_id)
         return {}
 
     class DocumentIn(BaseModel):
@@ -696,6 +722,7 @@ def create_app(
     @app.put("/api/etapes/{etape_id}/document", response_model=DocumentOut)
     async def corriger_document(etape_id: int, corps: DocumentIn, request: Request, s: Session):
         doc = await request.app.state.chat.corriger(etape_id, corps.contenu)
+        await _tracer(s, request, "etape.corriger", "etape", etape_id)
         sortie = DocumentOut.model_validate(doc, from_attributes=True)
         sortie.avis = (await _avis(s, [doc])).get(doc.id, [])
         return sortie
@@ -708,12 +735,13 @@ def create_app(
         if doc.etat != "brouillon":
             raise Refus(409, "document déjà validé")
         await request.app.state.avis.lancer(document_id)
+        await _tracer(s, request, "avis.relancer", "document", document_id)
 
     class AvisPatch(BaseModel):
         etat: Literal["pris_en_compte", "ecarte", "ouvert"]
 
     @app.patch("/api/avis/{avis_id}", response_model=AvisOut)
-    async def trier_avis(avis_id: int, corps: AvisPatch, s: Session):
+    async def trier_avis(avis_id: int, corps: AvisPatch, request: Request, s: Session):
         avis = await s.get(Avis, avis_id)
         if avis is None:
             raise Refus(404, "avis introuvable")
@@ -721,6 +749,7 @@ def create_app(
             raise Refus(409, "avis non tranchable : encore en cours ou abandonné")
         avis.etat = corps.etat
         doc = await s.get(Document, avis.document_id)
+        inscrire(s, auteur_de(request), "avis.trier", "avis", avis_id)
         await s.commit()
         return AvisOut.model_validate(avis, from_attributes=True).model_copy(
             update={"ancienne": avis.version < doc.version}
@@ -729,6 +758,7 @@ def create_app(
     @app.post("/api/etapes/{etape_id}/valider", response_model=PipelineDetail)
     async def valider(etape_id: int, request: Request, s: Session):
         pipeline_id = await request.app.state.chat.valider(etape_id)
+        await _tracer(s, request, "etape.valider", "etape", etape_id)
         return await _detail(s, request.app.state.catalogue, pipeline_id)
 
     @app.get("/api/etapes/{etape_id}/flux")
@@ -742,9 +772,11 @@ def create_app(
         return await request.app.state.conversations.lister()
 
     @app.post("/api/conversations", status_code=201, response_model=ConversationDetail)
-    async def creer_conversation(request: Request, corps: ConversationIn | None = None):
+    async def creer_conversation(request: Request, s: Session, corps: ConversationIn | None = None):
         service = request.app.state.conversations
-        return await service.detail((await service.creer((corps or ConversationIn()).agent)).id)
+        cid = (await service.creer((corps or ConversationIn()).agent)).id
+        await _tracer(s, request, "conversation.creer", "conversation", cid)
+        return await service.detail(cid)
 
     @app.get("/api/conversations/{conversation_id}", response_model=ConversationDetail)
     async def lire_conversation(conversation_id: int, request: Request):
@@ -752,34 +784,40 @@ def create_app(
 
     @app.patch("/api/conversations/{conversation_id}", response_model=ConversationDetail)
     async def renommer_conversation(
-        conversation_id: int, corps: ConversationPatch, request: Request
+        conversation_id: int, corps: ConversationPatch, request: Request, s: Session
     ):
         service = request.app.state.conversations
         await service.renommer(conversation_id, corps.titre)
+        await _tracer(s, request, "conversation.renommer", "conversation", conversation_id)
         return await service.detail(conversation_id)
 
     @app.delete("/api/conversations/{conversation_id}", status_code=204)
-    async def supprimer_conversation(conversation_id: int, request: Request):
+    async def supprimer_conversation(conversation_id: int, request: Request, s: Session):
         await request.app.state.conversations.supprimer(conversation_id)
+        await _tracer(s, request, "conversation.supprimer", "conversation", conversation_id)
 
     @app.post("/api/conversations/{conversation_id}/messages", status_code=202)
-    async def envoyer_conversation(conversation_id: int, corps: MessageIn, request: Request):
+    async def envoyer_conversation(
+        conversation_id: int, corps: MessageIn, request: Request, s: Session
+    ):
         await request.app.state.conversations.envoyer(conversation_id, corps.contenu)
+        await _tracer(s, request, "conversation.message", "conversation", conversation_id)
         return {}
 
     @app.post("/api/conversations/{conversation_id}/reessayer", status_code=202)
-    async def reessayer_conversation(conversation_id: int, request: Request):
+    async def reessayer_conversation(conversation_id: int, request: Request, s: Session):
         await request.app.state.conversations.reessayer(conversation_id)
+        await _tracer(s, request, "conversation.reessayer", "conversation", conversation_id)
         return {}
 
     @app.post("/api/actions/{action_id}/confirmer", status_code=202)
     async def confirmer_action(action_id: int, request: Request):
-        await request.app.state.conversations.confirmer(action_id)
+        await request.app.state.conversations.confirmer(action_id, auteur_de(request))
         return {}
 
     @app.post("/api/actions/{action_id}/refuser", status_code=202)
     async def refuser_action(action_id: int, request: Request):
-        await request.app.state.conversations.refuser(action_id)
+        await request.app.state.conversations.refuser(action_id, auteur_de(request))
         return {}
 
     @app.get("/api/conversations/{conversation_id}/flux")
@@ -787,6 +825,13 @@ def create_app(
         service = request.app.state.conversations
         await service.etat(conversation_id)  # 404 avant de commencer le flux
         return StreamingResponse(service.flux(conversation_id), media_type="text/event-stream")
+
+    @app.get("/api/audit", response_model=list[AuditOut])
+    async def lire_audit(s: Session, limite: int = 100, avant: int | None = None):
+        q = select(Audit).order_by(Audit.id.desc()).limit(max(1, min(limite, 500)))
+        if avant is not None:
+            q = q.where(Audit.id < avant)
+        return (await s.scalars(q)).all()
 
     @app.get("/api/evenements")
     async def evenements():

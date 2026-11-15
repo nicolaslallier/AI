@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
 from portail import journal
+from portail.audit import inscrire
 from portail.db import (
     CommentairePris,
     Etape,
@@ -124,6 +125,7 @@ class Ordonnanceur:
                     if libre is None:
                         return  # la route occupée réveillera l'ordonnanceur après son commit
                     pipeline = await self._orch.demarrer(s, tache, base)
+                    inscrire(s, "ordonnanceur", "pipeline.lancer", "pipeline", pipeline.id)
                     await s.commit()
             except Exception as e:  # noqa: BLE001
                 passagere = isinstance(e, SQLAlchemyError) or (

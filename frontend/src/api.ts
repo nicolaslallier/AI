@@ -213,6 +213,17 @@ export const rejeterProposition = (id: number) => appel<Kanban>('POST', `/propos
 export const toutAccepter = (etapeId: number) =>
   appel<KanbanToutAccepte>('POST', `/etapes/${etapeId}/propositions/tout-accepter`)
 
+export interface LigneAudit {
+  id: number
+  quand: string
+  auteur: string
+  action: string
+  objet: string
+  objet_id: number
+}
+export const lireAudit = (avant?: number) =>
+  appel<LigneAudit[]>('GET', '/audit' + (avant ? `?avant=${avant}` : ''))
+
 export const listerPipelines = (etat?: string) =>
   appel<PipelineResume[]>('GET', '/pipelines' + (etat ? `?etat=${encodeURIComponent(etat)}` : ''))
 export const creerPipeline = (projet_id: number, type: string) =>

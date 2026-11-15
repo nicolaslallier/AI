@@ -320,3 +320,12 @@ class Deplacement(BaseModel):
         if v not in COLONNES:
             raise ValueError("colonne inconnue")
         return v
+
+
+class AuditOut(BaseModel):
+    id: int
+    quand: datetime
+    auteur: str
+    action: str
+    objet: str
+    objet_id: int
