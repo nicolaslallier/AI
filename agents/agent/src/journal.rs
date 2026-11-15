@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 
 fn ligne(
     niveau: &'static str,
-    agent: &str,
+    agent: &'static str,
     mission: &str,
     message: &'static str,
     compteurs: &[(&'static str, u64)],
@@ -26,12 +26,17 @@ fn ligne(
     Value::Object(o).to_string()
 }
 
-pub fn info(agent: &str, mission: &str, message: &'static str, compteurs: &[(&'static str, u64)]) {
+pub fn info(
+    agent: &'static str,
+    mission: &str,
+    message: &'static str,
+    compteurs: &[(&'static str, u64)],
+) {
     println!("{}", ligne("info", agent, mission, message, compteurs));
 }
 
 pub fn erreur(
-    agent: &str,
+    agent: &'static str,
     mission: &str,
     message: &'static str,
     compteurs: &[(&'static str, u64)],

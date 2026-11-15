@@ -111,6 +111,12 @@ pub struct ReponseOutil {
     pub arret: bool,
 }
 
+/// Corps d'erreur du portail : `{"erreur": "<texte fixe>"}`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CorpsErreur {
+    pub erreur: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sante {
     pub contrat: String,

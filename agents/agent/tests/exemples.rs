@@ -1,7 +1,8 @@
 //! Les exemples du contrat (`docs/agents-contrat-v1.json`) : même fichier que les tests Python.
 
 use agent::contrat::{
-    DemandeModele, DemandeOutil, Ligne, LigneModele, Mission, ReponseModele, ReponseOutil, Sante,
+    CorpsErreur, DemandeModele, DemandeOutil, Ligne, LigneModele, Mission, ReponseModele,
+    ReponseOutil, Sante,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -32,6 +33,43 @@ fn exemples_du_contrat() {
     aller_retour::<DemandeOutil>("demande_outil", &ex["demande_outil"]);
     aller_retour::<ReponseOutil>("reponse_outil", &ex["reponse_outil"]);
     aller_retour::<Sante>("sante", &ex["sante"]);
+    aller_retour::<CorpsErreur>("erreur", &ex["erreur"]);
+}
+
+/// Les exemples que les tests ci-dessus lisent. Un exemple ajouté au JSON doit l'être ici,
+/// avec son type.
+const COUVERTS: [&str; 11] = [
+    "mission",
+    "ligne_texte",
+    "ligne_fin",
+    "ligne_erreur",
+    "demande_modele",
+    "reponse_modele",
+    "demande_modele_flux_lignes",
+    "demande_outil",
+    "reponse_outil",
+    "sante",
+    "erreur",
+];
+
+#[test]
+fn tous_les_exemples_sont_couverts() {
+    let ex: Value =
+        serde_json::from_str(include_str!("../../../docs/agents-contrat-v1.json")).unwrap();
+    let mut non_couverts: Vec<&String> = ex
+        .as_object()
+        .unwrap()
+        .keys()
+        .filter(|k| !COUVERTS.contains(&k.as_str()))
+        .collect();
+    non_couverts.sort();
+    assert!(
+        non_couverts.is_empty(),
+        "exemples du contrat sans test dans exemples.rs : {non_couverts:?}"
+    );
+    for k in COUVERTS {
+        assert!(ex.get(k).is_some(), "exemple « {k} » retiré du JSON");
+    }
 }
 
 #[test]

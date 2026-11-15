@@ -22,6 +22,7 @@ pub fn par_defaut(m: Mission, p: Portail, s: Sortie) -> BoxFuture<'static, Resul
 /// Le texte rendu à l'appelant dit seulement ce que le portail a vu, jamais un contenu.
 fn refus(e: ErreurPortail) -> String {
     match e {
+        ErreurPortail::Arret => crate::serveur::MISSION_ARRETEE.into(),
         ErreurPortail::Refus { statut, .. } => format!("le portail a refusé l'appel ({statut})"),
         ErreurPortail::Reseau => "portail injoignable".into(),
     }
@@ -411,6 +412,53 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(e, "portail injoignable");
+    }
+
+    async fn servir_app(app: Router) -> String {
+        let ecoute = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", ecoute.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(ecoute, app).await.unwrap() });
+        url
+    }
+
+    fn conflit() -> (axum::http::StatusCode, Json<Value>) {
+        (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({"erreur": "mission arrêtée"})),
+        )
+    }
+
+    #[tokio::test]
+    async fn arret_du_portail_sur_le_modele() {
+        let app = Router::new().route("/interne/modele", post(|| async { conflit() }));
+        let p = Portail::new(&servir_app(app).await, "j");
+        let (s, _rx) = canal();
+        let e = par_defaut(mission(true, 5, false), p.clone(), s)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(e, crate::serveur::MISSION_ARRETEE);
+        assert_eq!(p.appels(), (1, 0)); // aucun nouvel appel
+    }
+
+    #[tokio::test]
+    async fn arret_du_portail_sur_un_outil() {
+        let app = Router::new()
+            .route(
+                "/interne/modele",
+                post(|| async {
+                    Json(json!({"message": avec_appels(vec![appel(Some("a"), json!({}))])}))
+                }),
+            )
+            .route("/interne/outils", post(|| async { conflit() }));
+        let p = Portail::new(&servir_app(app).await, "j");
+        let (s, _rx) = canal();
+        let e = par_defaut(mission(true, 5, false), p.clone(), s)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(e, crate::serveur::MISSION_ARRETEE);
+        assert_eq!(p.appels(), (1, 1));
     }
 
     fn outil_msg(c: &str) -> MessageLlm {

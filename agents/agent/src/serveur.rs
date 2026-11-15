@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::body::{Body, Bytes};
-use axum::extract::{Request, State};
+use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{StatusCode, header::AUTHORIZATION, header::CONTENT_TYPE};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -19,6 +19,12 @@ use tokio::task::AbortHandle;
 use crate::contrat::{CONTRAT, Ligne, MessageLlm, Mission, Sante};
 use crate::journal;
 use crate::portail::Portail;
+
+/// Texte fixe de la ligne `erreur` quand le portail a fermé la mission (409) : fin normale.
+pub const MISSION_ARRETEE: &str = "mission arrêtée";
+
+/// Taille maximale du corps d'une mission (le contexte est borné par le portail, bien en deçà).
+const CORPS_MAX: usize = 8 * 1024 * 1024;
 
 /// Canal par lequel une mission relaie son texte au portail, ligne par ligne.
 pub struct Sortie(mpsc::Sender<Ligne>);
@@ -71,6 +77,7 @@ pub fn routeur(
     });
     let protege = Router::new()
         .route("/missions", post(missions))
+        .layer(DefaultBodyLimit::max(CORPS_MAX))
         .route_layer(middleware::from_fn_with_state(etat.clone(), auth));
     Router::new()
         .route("/sante", get(sante))
@@ -163,7 +170,11 @@ async fn missions(State(etat): State<Arc<Etat>>, corps: Bytes) -> Response {
                 }
             }
             Err(e) => {
-                journal::erreur(nom, &id_tache, "mission en erreur", &[]);
+                if e == MISSION_ARRETEE {
+                    journal::info(nom, &id_tache, "mission arrêtée", &[]);
+                } else {
+                    journal::erreur(nom, &id_tache, "mission en erreur", &[]);
+                }
                 Ligne::Erreur { erreur: e }
             }
         };
@@ -373,6 +384,14 @@ mod tests {
         assert_eq!(types, ["texte", "texte", "fin"]);
         assert_eq!(lignes[2]["texte"], "fini");
         assert_eq!(lignes[2]["limite_atteinte"], false);
+    }
+
+    #[tokio::test]
+    async fn corps_trop_gros_413() {
+        let url = demarrer(emettre).await;
+        let gros = format!("{{\"x\":\"{}\"}}", "a".repeat(CORPS_MAX + 1));
+        let r = envoyer(&url, SECRET, gros).send().await.unwrap();
+        assert_eq!(r.status(), 413);
     }
 
     #[tokio::test]

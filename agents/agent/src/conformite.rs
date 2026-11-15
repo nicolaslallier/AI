@@ -28,15 +28,48 @@ enum Mode {
     Refus,
     /// Le modèle met du temps à répondre (pour couper pendant l'appel).
     Lent,
+    /// Le modèle répond 409 (mission arrêtée) à tout appel.
+    Arret,
+    /// Le modèle demande un outil, l'outil répond 409.
+    ArretOutil,
 }
 
 struct Faux {
     mode: Mode,
     appels: AtomicU64,
     sans_jeton: AtomicU64,
+    /// Corps ou messages hors contrat reçus (refusés en 422).
+    invalides: AtomicU64,
+}
+
+const CHAMPS_MODELE: [&str; 4] = ["messages", "outils", "response_format", "flux"];
+const CHAMPS_OUTIL: [&str; 2] = ["nom", "arguments"];
+const CHAMPS_MESSAGE: [&str; 5] = ["role", "content", "tool_calls", "tool_call_id", "name"];
+
+fn cles_dans(v: &Value, permises: &[&str]) -> bool {
+    v.as_object()
+        .is_some_and(|o| o.keys().all(|k| permises.contains(&k.as_str())))
 }
 
 impl Faux {
+    /// Comme le portail (`extra="forbid"`) : 422 sur toute clé hors contrat.
+    fn valider(&self, corps: &Value, permises: &[&str]) -> Option<Response> {
+        let messages_ok = corps["messages"]
+            .as_array()
+            .is_none_or(|m| m.iter().all(|m| cles_dans(m, &CHAMPS_MESSAGE)));
+        if cles_dans(corps, permises) && messages_ok {
+            return None;
+        }
+        self.invalides.fetch_add(1, Ordering::SeqCst);
+        Some(
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"erreur": "demande invalide"})),
+            )
+                .into_response(),
+        )
+    }
+
     /// Compte l'appel ; `Some(401)` si le jeton de la mission manque.
     fn recevoir(&self, h: &HeaderMap) -> Option<Response> {
         self.appels.fetch_add(1, Ordering::SeqCst);
@@ -59,7 +92,17 @@ async fn modele(State(f): State<Arc<Faux>>, h: HeaderMap, Json(d): Json<Value>) 
     if let Some(r) = f.recevoir(&h) {
         return r;
     }
+    if let Some(r) = f.valider(&d, &CHAMPS_MODELE) {
+        return r;
+    }
     match f.mode {
+        Mode::Arret => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({"erreur": "mission arrêtée"})),
+            )
+                .into_response();
+        }
         Mode::Refus => {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
@@ -68,7 +111,7 @@ async fn modele(State(f): State<Arc<Faux>>, h: HeaderMap, Json(d): Json<Value>) 
                 .into_response();
         }
         Mode::Lent => tokio::time::sleep(DELAI_LENT).await,
-        Mode::Normal => {}
+        Mode::Normal | Mode::ArretOutil => {}
     }
     if d["flux"] == true {
         let corps = concat!(
@@ -93,16 +136,28 @@ async fn modele(State(f): State<Arc<Faux>>, h: HeaderMap, Json(d): Json<Value>) 
     Json(json!({"message": message})).into_response()
 }
 
-async fn outil(State(f): State<Arc<Faux>>, h: HeaderMap) -> Response {
-    match f.recevoir(&h) {
-        Some(r) => r,
-        None => Json(json!({"resultat": "contenu", "arret": false})).into_response(),
+async fn outil(State(f): State<Arc<Faux>>, h: HeaderMap, Json(d): Json<Value>) -> Response {
+    if let Some(r) = f.recevoir(&h) {
+        return r;
     }
+    if let Some(r) = f.valider(&d, &CHAMPS_OUTIL) {
+        return r;
+    }
+    if f.mode == Mode::ArretOutil {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"erreur": "mission arrêtée"})),
+        )
+            .into_response();
+    }
+    Json(json!({"resultat": "contenu", "arret": false})).into_response()
 }
 
 struct Banc {
     nom: &'static str,
     agent: String,
+    #[cfg_attr(not(test), allow(dead_code))]
+    portail: String,
     faux: Arc<Faux>,
 }
 
@@ -120,6 +175,7 @@ async fn banc(nom: &'static str, tourner: Tourner, mode: Mode) -> Banc {
         mode,
         appels: AtomicU64::new(0),
         sans_jeton: AtomicU64::new(0),
+        invalides: AtomicU64::new(0),
     });
     let portail = Router::new()
         .route("/interne/modele", post(modele))
@@ -130,11 +186,12 @@ async fn banc(nom: &'static str, tourner: Tourner, mode: Mode) -> Banc {
         nom,
         SECRET.into(),
         "conformite".into(),
-        portail_url,
+        portail_url.clone(),
         tourner,
     );
     Banc {
         nom,
+        portail: portail_url,
         agent: servir(app).await,
         faux,
     }
@@ -293,14 +350,41 @@ where
     Fut: Future<Output = ()> + Send + 'static,
 {
     let b = banc(nom, tourner, mode).await;
+    let faux = b.faux.clone();
     if tokio::spawn(f(b)).await.is_err() {
         panic!("conformité : le cas « {cas} » échoue pour l'agent « {nom} »");
     }
+    assert_eq!(
+        faux.invalides.load(Ordering::SeqCst),
+        0,
+        "conformité : le cas « {cas} » a envoyé au portail un corps hors contrat (agent « {nom} »)"
+    );
+}
+
+/// 409 « mission arrêtée » : fin normale, plus aucun appel au portail.
+async fn cas_arret_modele(b: Banc) {
+    b.lignes(&mission(b.nom, true, false)).await;
+    assert_eq!(
+        b.faux.appels.load(Ordering::SeqCst),
+        1,
+        "appel après un 409 du modèle"
+    );
+}
+
+async fn cas_arret_outil(b: Banc) {
+    b.lignes(&mission(b.nom, true, false)).await;
+    assert_eq!(
+        b.faux.appels.load(Ordering::SeqCst),
+        2,
+        "appel après un 409 d'un outil"
+    );
 }
 
 /// Fait passer la suite à un agent ; panique avec le nom du cas en échec.
 pub async fn verifier(nom: &'static str, tourner: Tourner) {
-    use Mode::{Lent, Normal, Refus};
+    use Mode::{Arret, ArretOutil, Lent, Normal, Refus};
+    jouer(nom, tourner, Arret, "cas_arret_modele", cas_arret_modele).await;
+    jouer(nom, tourner, ArretOutil, "cas_arret_outil", cas_arret_outil).await;
     jouer(nom, tourner, Normal, "cas_sante", cas_sante).await;
     jouer(nom, tourner, Normal, "cas_secret", cas_secret).await;
     jouer(nom, tourner, Normal, "cas_autre_agent", cas_autre_agent).await;
@@ -331,4 +415,38 @@ pub async fn verifier(nom: &'static str, tourner: Tourner) {
     .await;
     jouer(nom, tourner, Lent, "cas_annulation", cas_annulation).await;
     jouer(nom, tourner, Normal, "cas_flux", cas_flux).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn le_faux_portail_refuse_un_corps_hors_contrat() {
+        let b = banc("revue", crate::boucle::par_defaut, Mode::Normal).await;
+        let client = reqwest::Client::new();
+        let envoyer = |chemin: &'static str, corps: Value| {
+            client
+                .post(format!("{}{chemin}", b.portail))
+                .bearer_auth(JETON)
+                .json(&corps)
+                .send()
+        };
+        let ok = json!({"messages": [{"role": "user", "content": "x"}]});
+        assert_eq!(envoyer("/interne/modele", ok).await.unwrap().status(), 200);
+        let avec_modele = json!({"modele": "m", "messages": []});
+        let r = envoyer("/interne/modele", avec_modele).await.unwrap();
+        assert_eq!(r.status(), 422);
+        let message_inconnu = json!({"messages": [{"role": "user", "extra": 1}]});
+        let r = envoyer("/interne/modele", message_inconnu).await.unwrap();
+        assert_eq!(r.status(), 422);
+        let r = envoyer(
+            "/interne/outils",
+            json!({"nom": "lire", "arguments": "{}", "x": 1}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.status(), 422);
+        assert_eq!(b.faux.invalides.load(Ordering::SeqCst), 3);
+    }
 }

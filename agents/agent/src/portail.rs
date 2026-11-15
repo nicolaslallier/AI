@@ -7,10 +7,9 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Value;
 
 use crate::contrat::{
-    DemandeModele, DemandeOutil, LigneModele, MessageLlm, ReponseModele, ReponseOutil,
+    CorpsErreur, DemandeModele, DemandeOutil, LigneModele, MessageLlm, ReponseModele, ReponseOutil,
 };
 use crate::serveur::Sortie;
 
@@ -18,9 +17,14 @@ use crate::serveur::Sortie;
 pub enum ErreurPortail {
     /// Le portail a refusé (401, 409, 413, 422, 429, 502…) : `erreur` est son texte fixe.
     Refus { statut: u16, erreur: String },
+    /// 409 : le portail a fermé la mission. Fin normale : plus aucun appel.
+    Arret,
     /// Pas de réponse exploitable (connexion, flux coupé, corps illisible).
     Reseau,
 }
+
+/// Délai entre deux lectures (le portail tient le modèle au plus 300 s) ; vaut aussi pour le flux.
+const DELAI_LECTURE: Duration = Duration::from_secs(300);
 
 #[derive(Default)]
 struct Compteurs {
@@ -42,6 +46,7 @@ impl Portail {
         // Pas de délai total : le portail tient la durée de la mission.
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
+            .read_timeout(DELAI_LECTURE)
             .build()
             .expect("client HTTP");
         Self {
@@ -77,11 +82,14 @@ impl Portail {
         if statut.is_success() {
             return Ok(r);
         }
+        if statut == reqwest::StatusCode::CONFLICT {
+            return Err(ErreurPortail::Arret);
+        }
         let erreur = r
-            .json::<Value>()
+            .json::<CorpsErreur>()
             .await
             .ok()
-            .and_then(|v| v["erreur"].as_str().map(String::from))
+            .map(|c| c.erreur)
             .unwrap_or_else(|| "refus du portail".into());
         Err(ErreurPortail::Refus {
             statut: statut.as_u16(),

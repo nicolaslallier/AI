@@ -9,6 +9,8 @@ fn noms_egaux_a_agents_yaml() {
         .lines()
         .skip_while(|l| *l != "agents:")
         .skip(1)
+        // s'arrête à la première clé de premier niveau suivante
+        .take_while(|l| l.is_empty() || l.starts_with(' ') || l.starts_with('#'))
         .filter_map(|l| {
             let nom = l.strip_prefix("  ")?.strip_suffix(':')?;
             (!nom.is_empty() && nom.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
@@ -29,4 +31,11 @@ fn un_binaire_par_agent() {
     let mut attendus: Vec<String> = NOMS.iter().map(|n| format!("{n}.rs")).collect();
     attendus.sort();
     assert_eq!(fichiers, attendus);
+    for nom in NOMS {
+        let source = std::fs::read_to_string(format!("{dossier}/{nom}.rs")).unwrap();
+        assert!(
+            source.contains(&format!("principal(\"{nom}\")")),
+            "src/bin/{nom}.rs doit appeler principal(\"{nom}\")"
+        );
+    }
 }
