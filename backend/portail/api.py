@@ -178,7 +178,7 @@ async def _detail(session: AsyncSession, catalogue: Catalogue, pipeline_id: int)
         agent = catalogue.agents.get(e.agent)
         j = None
         if agent:
-            a = await annexes(session, agent, e, pipeline.projet_id)
+            a = await annexes(session, catalogue, agent, e, pipeline.projet_id)
             j = jauge(agent, construire(agent, e.messages, e.document, annexes=a))
         etapes.append(
             EtapeOut.model_validate(

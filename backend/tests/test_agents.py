@@ -306,6 +306,7 @@ def test_rangement():
         ("double", ["a", "b"]),
         ("petit", ["petit"]),
         ("planification", ["plan", "taches"]),
+        ("architecture", ["vision", "volet", "synthese"]),
         (None, ["orchestrateur", "pm"]),
     ]
 

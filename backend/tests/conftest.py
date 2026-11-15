@@ -63,6 +63,8 @@ class FauxLLM:
         self.exception: Exception | None = None
         self.appels: list[dict] = []  # {"modele", "messages", "temperature"}
         self.reponses: list[dict | asyncio.Event] = []  # renvoyés tour à tour par `completer`
+        # morceaux propres à chaque appel de `flux`, tour à tour ; vide : `morceaux` à chaque appel
+        self.file: list[list[str | asyncio.Event]] = []
 
     async def flux(self, modele, messages, temperature):
         self.appels.append(
@@ -73,7 +75,7 @@ class FauxLLM:
                 "contexte": dict(journal.contexte.get()),
             }
         )
-        for m in self.morceaux:
+        for m in self.file.pop(0) if self.file else self.morceaux:
             if isinstance(m, asyncio.Event):
                 await m.wait()
             else:
@@ -124,12 +126,32 @@ CATALOGUE_TEST = Catalogue(
         "taches": _agent(
             "taches", consigne_redaction="Propose les tâches.", produit="taches", auto=True
         ),
+        "vision": _agent(
+            "vision", consigne_redaction="Rédige la vision.", produit="vision", prefixe="mot-"
+        ),
+        "volet": _agent(
+            "volet",
+            consigne_redaction="Rédige le volet.",
+            produit="volet",
+            prefixe="aff-",
+            volet="affaires",
+            auto=True,
+            sans_validation=True,
+        ),
+        "synthese": _agent(
+            "synthese",
+            consigne_redaction="Rédige la synthèse.",
+            produit="architecture",
+            prefixe="ent-",
+            auto=True,
+        ),
     },
     pipelines={
         "spec": ["spec"],
         "double": ["a", "b"],
         "petit": ["petit"],
         "planification": ["plan", "taches"],
+        "architecture": ["vision", "volet", "synthese"],
     },
 )
 

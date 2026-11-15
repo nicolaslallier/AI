@@ -11,7 +11,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from portail import journal
-from portail.agents import Agent, Catalogue
+from portail.agents import PRODUITS_ARCHITECTURE, Agent, Catalogue
+from portail.archimate import BlocInvalide
+from portail.architecture import annexes_architecture, verifier_bloc
 from portail.avis import ServiceAvis
 from portail.contexte import construire, jauge
 from portail.db import (
@@ -30,8 +32,10 @@ from portail.etats import Etat
 from portail.llm import ClientLLM, FiltreReflexion, retirer_reflexion
 from portail.missions import Missions, completer, streamer, tourner
 from portail.moteur import (
+    UN_SEUL_ACTIF,
     Refus,
     annuler_pipeline,
+    autre_actif,
     changer_etat,
     dernier_valide,
     spec_courante,
@@ -76,9 +80,18 @@ class Diffuseur:
         self.partiels.pop(etape_id, None)
 
 
-async def annexes(s: AsyncSession, agent: Agent, etape: Etape, projet_id: int) -> list[str]:
+def budget_apercu(contexte_max: int) -> int:
+    """Jetons de l'aperçu du dépôt : le quart du contexte, au plus 8k (lu huit fois par pipeline)."""
+    return min(int(0.25 * contexte_max), 8192)
+
+
+async def annexes(
+    s: AsyncSession, catalogue: Catalogue, agent: Agent, etape: Etape, projet_id: int
+) -> list[str]:
     """Messages système ajoutés après le prompt de l'agent (comptés dans la jauge)."""
     sortie = []
+    if agent.produit in ("volet", "architecture"):
+        sortie += await annexes_architecture(s, catalogue, etape)
     if agent.produit == "plan":
         if spec := await spec_courante(s, projet_id):
             sortie.append("Spec courante :\n\n" + spec.contenu)
@@ -200,7 +213,11 @@ class ServiceChat:
         messages, doc = await self._contexte(s, etape)
         pipeline = await s.get(Pipeline, etape.pipeline_id)
         return construire(
-            agent, messages, doc, consigne, await annexes(s, agent, etape, pipeline.projet_id)
+            agent,
+            messages,
+            doc,
+            consigne,
+            await annexes(s, self._catalogue, agent, etape, pipeline.projet_id),
         )
 
     async def envoyer(self, etape_id: int, contenu: str) -> None:
@@ -250,19 +267,10 @@ class ServiceChat:
             if etape.etat != Etat.ECHOUEE:
                 raise Refus(409, "seule une étape échouée peut être relancée")
             pipeline = await s.get(Pipeline, etape.pipeline_id)
-            if pipeline.type == "planification":  # une seule planification active par projet
-                autre = await s.scalar(
-                    select(Pipeline.id)
-                    .where(
-                        Pipeline.projet_id == pipeline.projet_id,
-                        Pipeline.type == "planification",
-                        Pipeline.id != pipeline.id,
-                        Pipeline.etat.not_in([Etat.TERMINEE, Etat.ECHOUEE]),
-                    )
-                    .limit(1)
-                )
-                if autre is not None:
-                    raise Refus(409, "une autre planification est active pour ce projet")
+            if pipeline.type in UN_SEUL_ACTIF and await autre_actif(
+                s, pipeline.projet_id, pipeline.type, sauf=pipeline.id
+            ):
+                raise Refus(409, f"une autre {pipeline.type} est active pour ce projet")
             await changer_etat(s, etape, Etat.EN_COURS)
             await s.commit()
         self.lancer(etape_id)
@@ -286,7 +294,7 @@ class ServiceChat:
         except ErreurDepot as e:
             raise ErreurDepot(f"dépôt : {e}") from None
         if etape.apercu is None:  # première préparation : point de départ figé pour l'étape
-            texte = await asyncio.to_thread(apercu, arbre, int(0.25 * agent.contexte_max))
+            texte = await asyncio.to_thread(apercu, arbre, budget_apercu(agent.contexte_max))
             async with self._sessions() as s:
                 e = await s.get(Etape, etape.id)
                 e.sha, e.apercu = sha, texte
@@ -429,12 +437,21 @@ class ServiceChat:
                     if action == "repondre":
                         s.add(Message(etape_id=etape_id, role="assistant", contenu=visible))
                     else:
-                        a_relire = await self._ecrire_document(s, etape, agent, visible)
-                    await changer_etat(s, etape, Etat.EN_ATTENTE)
+                        if agent.produit in PRODUITS_ARCHITECTURE:  # BlocInvalide : étape échouée
+                            await verifier_bloc(s, self._catalogue, etape, visible)
+                        etat_doc = "validee" if agent.sans_validation else "brouillon"
+                        a_relire = await self._ecrire_document(s, etape, agent, visible, etat_doc)
+                    if agent.sans_validation:  # volet accepté d'office : pas d'avis, on enchaîne
+                        a_relire = None
+                        suivante = await terminer_etape(s, self._catalogue, etape)
+                    else:
+                        await changer_etat(s, etape, Etat.EN_ATTENTE)
                 await s.commit()
             if suivante:
                 self.lancer(suivante.id)
             d.publier(etape_id, {"type": "fin"})
+            if agent.sans_validation:  # étape terminée : son arbre ne sert plus, comme à valider
+                await self._depots.liberer(etape_id)
             if a_relire and self._avis:
                 try:
                     await self._avis.lancer(a_relire)
@@ -460,7 +477,7 @@ class ServiceChat:
             d.oublier(etape_id)
 
     async def _ecrire_document(
-        self, s: AsyncSession, etape: Etape, agent: Agent, contenu: str
+        self, s: AsyncSession, etape: Etape, agent: Agent, contenu: str, etat: str = "brouillon"
     ) -> int:
         dernier = await s.scalar(select(func.max(Message.id)).where(Message.etape_id == etape.id))
         pipeline = await s.get(Pipeline, etape.pipeline_id)
@@ -472,11 +489,20 @@ class ServiceChat:
             doc.version += 1
         doc.type = agent.produit
         doc.contenu = contenu
-        doc.etat = "brouillon"
+        doc.etat = etat
         doc.dernier_message_id = dernier
         doc.maj_le = datetime.now(UTC)
         await s.flush()
         return doc.id
+
+    async def _bloc_valide(self, s: AsyncSession, etape: Etape, contenu: str) -> None:
+        """Refus 422 si le document d'architecture porte un bloc de modèle invalide."""
+        agent = self._catalogue.agents.get(etape.agent)
+        if agent and agent.produit in PRODUITS_ARCHITECTURE:
+            try:
+                await verifier_bloc(s, self._catalogue, etape, contenu)
+            except BlocInvalide as e:
+                raise Refus(422, str(e)) from None
 
     async def corriger(self, etape_id: int, contenu: str) -> Document:
         if not contenu.strip():
@@ -490,6 +516,7 @@ class ServiceChat:
                 raise Refus(409, "spec déjà validée")
             if etape.etat == Etat.EN_COURS:
                 raise Refus(409, "une réponse est en cours")
+            await self._bloc_valide(s, etape, contenu)
             doc.contenu = contenu
             doc.version += 1
             doc.maj_le = datetime.now(UTC)
@@ -506,6 +533,7 @@ class ServiceChat:
             doc = await s.scalar(select(Document).where(Document.etape_id == etape_id))
             if etape.etat != Etat.EN_ATTENTE or doc is None or doc.etat != "brouillon":
                 raise Refus(409, "rien à valider : clique d'abord « Rédiger la spec »")
+            await self._bloc_valide(s, etape, doc.contenu)
             doc.etat = "validee"
             doc.maj_le = datetime.now(UTC)
             suivante = await terminer_etape(s, self._catalogue, etape)
