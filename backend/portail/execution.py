@@ -58,6 +58,8 @@ class ConfigExecution(BaseModel):
     config_tests: list[str] = list(CONFIG_TESTS_DEFAUT)
     commandes: dict[str, str]
     services: list[Service] = []
+    chemins_doc: list[str] = ["README.md", "docs/**", "CHANGELOG.md"]
+    regles: str | None = None  # fichier de règles du dépôt, relatif à la racine
 
     @field_validator("chemins_tests")
     @classmethod

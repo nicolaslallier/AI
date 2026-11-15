@@ -43,12 +43,20 @@ class ClientLanceur:
             raise ErreurLanceur(0, f"réponse non JSON : {r.text[:500]}") from None
 
     async def lancer(
-        self, espace: str, image: str, commande: str, delai_s: int, lecture_seule: list[str]
+        self,
+        espace: str,
+        image: str,
+        commande: str,
+        delai_s: int,
+        lecture_seule: list[str],
+        tout_lecture_seule: bool = False,
     ) -> Resultat:
         corps = {
             "espace": espace, "image": image, "commande": commande,
             "delai_s": delai_s, "lecture_seule": lecture_seule,
         }  # fmt: skip
+        if tout_lecture_seule:
+            corps["tout_lecture_seule"] = True
         brut = await self._poster("/lancer", corps, delai_s + 60)
         try:
             return Resultat.model_validate(brut)

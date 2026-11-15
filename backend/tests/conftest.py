@@ -175,11 +175,14 @@ class FauxLanceur:
         self.delais: set[str] = set()  # commandes exactes qui dépassent leur délai
         self.appels: list[dict] = []
 
-    async def lancer(self, espace, image, commande, delai_s, lecture_seule) -> Resultat:
+    async def lancer(
+        self, espace, image, commande, delai_s, lecture_seule, tout_lecture_seule=False
+    ) -> Resultat:
         self.appels.append(
             {
                 "route": "lancer", "espace": espace, "image": image, "commande": commande,
                 "delai_s": delai_s, "lecture_seule": list(lecture_seule),
+                "tout_lecture_seule": tout_lecture_seule,
             }
         )  # fmt: skip
         if commande in self.effets:

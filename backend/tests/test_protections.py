@@ -42,6 +42,21 @@ async def test_commit_code_touche_un_test(espace, cfg):
     assert await verifier_commits_code(espace, base, cfg) == ["tests/a.py (fichier de tests)"]
 
 
+async def test_commit_doc_hors_chemins_viole(espace, cfg):
+    base = await _base(espace, {"README.md": "a"})
+    await _code(espace, {"README.md": "b", "src/a.py": "x", "tests/t.py": "y"}, "agent-doc")
+    assert sorted(await verifier_commits_code(espace, base, cfg)) == [
+        "src/a.py (hors des chemins de doc)",
+        "tests/t.py (hors des chemins de doc)",
+    ]
+
+
+async def test_commit_doc_dans_docs_permis(espace, cfg):
+    base = await _base(espace, {"README.md": "a"})
+    await _code(espace, {"README.md": "b", "docs/a.md": "x"}, "agent-doc")
+    assert await verifier_commits_code(espace, base, cfg) == []
+
+
 async def test_commit_code_supprime_un_test(espace, cfg):
     base = git(espace.racine, "rev-parse", "HEAD")
     await _code(espace, {"tests/a.py": None})

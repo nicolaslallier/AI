@@ -29,6 +29,8 @@ pub struct DemandeLancer {
     pub delai_s: u64,
     #[serde(default)]
     pub lecture_seule: Vec<String>,
+    #[serde(default)]
+    pub tout_lecture_seule: bool,
 }
 
 fn delai_defaut() -> u64 {
@@ -128,12 +130,14 @@ fn libelle(espace: &str) -> HashMap<String, String> {
 
 /// Spécification d'un conteneur de commande durci. Pure : aucune requête Docker.
 /// `services` : noms des services de l'espace, joints sans passer par le proxy.
+#[allow(clippy::too_many_arguments)]
 pub fn specification(
     cfg: &Config,
     espace: &str,
     image: &str,
     commande: &str,
     lecture_seule: &[String],
+    tout_lecture_seule: bool,
     reseau_services: Option<&str>,
     services: &[String],
 ) -> Result<ContainerCreateBody, String> {
@@ -159,7 +163,7 @@ pub fn specification(
         ..Default::default()
     };
     let mut montages = vec![
-        montage(espace.into(), "/travail".into(), false),
+        montage(espace.into(), "/travail".into(), tout_lecture_seule),
         montage(format!("{espace}/.git"), "/travail/.git".into(), true),
     ];
     montages.extend(
@@ -386,6 +390,7 @@ impl Moteur for Docker {
             &d.image,
             &d.commande,
             &d.lecture_seule,
+            d.tout_lecture_seule,
             inspection.map(|_| reseau).as_deref(),
             &services,
         )
@@ -503,7 +508,16 @@ mod tests {
 
     fn spec(ro: &[&str]) -> Result<ContainerCreateBody, String> {
         let ro: Vec<String> = ro.iter().map(|c| c.to_string()).collect();
-        specification(&config_test(), ESPACE, IMAGE, "pytest", &ro, None, &[])
+        specification(
+            &config_test(),
+            ESPACE,
+            IMAGE,
+            "pytest",
+            &ro,
+            false,
+            None,
+            &[],
+        )
     }
 
     fn montages(c: &ContainerCreateBody) -> &[Mount] {
@@ -523,7 +537,16 @@ mod tests {
 
     #[test]
     fn image_refusee() {
-        let r = specification(&config_test(), ESPACE, "alpine:3", "id", &[], None, &[]);
+        let r = specification(
+            &config_test(),
+            ESPACE,
+            "alpine:3",
+            "id",
+            &[],
+            false,
+            None,
+            &[],
+        );
         assert!(r.is_err());
     }
 
@@ -614,6 +637,7 @@ mod tests {
             IMAGE,
             "x",
             &[],
+            false,
             Some("portail-svc-tache-1-1"),
             &["db".to_string(), "minio".to_string()],
         )
@@ -632,6 +656,19 @@ mod tests {
         let git = montage(&c, "/travail/.git");
         assert_eq!(sous_chemin(git), Some("tache-1-1/.git"));
         assert_eq!(git.read_only, Some(true));
+    }
+
+    #[test]
+    fn travail_en_lecture_seule() {
+        let c = specification(&config_test(), ESPACE, IMAGE, "x", &[], true, None, &[]).unwrap();
+        assert_eq!(montage(&c, "/travail").read_only, Some(true));
+        assert_eq!(montage(&c, "/travail/.git").read_only, Some(true));
+    }
+
+    #[test]
+    fn travail_modifiable_par_defaut() {
+        let c = spec(&[]).unwrap();
+        assert_eq!(montage(&c, "/travail").read_only, Some(false));
     }
 
     #[test]
