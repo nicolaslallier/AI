@@ -347,3 +347,20 @@ def test_modification_sans_titre_valide():
         "tache_id": 1,
         "criteres": [],
     }
+
+
+async def test_sans_validation_les_taches_vont_au_kanban(client, sessions, faux_llm, monkeypatch):
+    from conftest import CATALOGUE_TEST
+
+    monkeypatch.setattr(CATALOGUE_TEST.agents["taches"], "sans_validation", True)
+    pid, pipeline_id, eid = await _lancer(
+        client, sessions, faux_llm, _json(_n("n1"), _n("n2", depend_de=["n1"]))
+    )
+    assert await _etat(sessions, Etape, eid) == "terminee"
+    assert await _etat(sessions, Pipeline, pipeline_id) == "terminee"
+    assert [p.etat for p in await _propositions(sessions, eid)] == ["acceptee", "acceptee"]
+    kanban = (await client.get(f"/api/projets/{pid}/kanban")).json()
+    assert kanban["propositions"] == []
+    assert len(kanban["taches"]) == 2
+    deps, _ = await _deps(client, pid)
+    assert sorted(len(d) for d in deps.values()) == [0, 1]

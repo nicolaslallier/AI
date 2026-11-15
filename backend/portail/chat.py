@@ -48,6 +48,7 @@ from portail.propositions import (
     enregistrer_propositions,
     lire_propositions,
     plan_du_pipeline,
+    tout_accepter,
 )
 
 logger = logging.getLogger(__name__)
@@ -392,6 +393,8 @@ class ServiceChat:
                 )
             )
             await s.flush()
+        if agent.sans_validation:  # le plan validé vaut accord : droit au kanban
+            await tout_accepter(s, etape.id)
         ouvertes = await s.scalar(
             select(func.count()).where(
                 Proposition.etape_id == etape.id, Proposition.etat == "ouverte"

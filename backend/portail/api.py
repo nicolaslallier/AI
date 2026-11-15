@@ -59,6 +59,7 @@ from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_c
 from portail.notifications import Notifieur
 from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
+from portail.propositions import tout_accepter as accepter_tout
 from portail.schemas import (
     Acceptation,
     AuditOut,
@@ -756,22 +757,7 @@ def create_app(
         projet_id = await s.scalar(
             select(Pipeline.projet_id).where(Pipeline.id == etape.pipeline_id)
         )
-        ids = (
-            await s.scalars(
-                select(Proposition.id)
-                .where(Proposition.etape_id == etape_id, Proposition.etat == "ouverte")
-                .order_by(Proposition.id)
-            )
-        ).all()
-        perimees = 0
-        for i in ids:
-            p = await s.get(Proposition, i)
-            try:
-                await accepter(s, p, None)
-            except Refus:
-                if p.etat != "perimee":
-                    raise
-                perimees += 1
+        perimees = await accepter_tout(s, etape_id)
         inscrire(s, auteur_de(request), "propositions.tout_accepter", "etape", etape_id)
         await _fermer(request, s, etape_id)
         _reveiller(request.app.state)

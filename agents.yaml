@@ -69,12 +69,13 @@ agents:
       Sections : SHA lu, Résumé, Fichiers et modules, Étapes (dans l'ordre), Risques.
       Réponds uniquement avec le document, sans préambule ni commentaire.
   taches:
-    description: Découpe le plan en tâches du kanban, proposées à Nicolas.
+    description: Découpe le plan validé en tâches, créées directement dans le kanban.
     modele: qwen3.8:27b-mlx
     contexte_max: 32768
     temperature: 0.2
     produit: taches
     auto: true
+    sans_validation: true
     prompt_systeme: |
       Tu découpes un plan d'implémentation en tâches, en français.
       Une tâche = un comportement testable. Tu ne modifies rien : tu proposes.

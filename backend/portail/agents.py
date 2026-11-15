@@ -107,8 +107,10 @@ class Agent(BaseModel):
             raise ValueError(f"l'agent « {self.nom} » ne produit pas un volet : volet interdit")
         if self.produit == "vision" and self.auto:
             raise ValueError(f"l'agent « {self.nom} » est une discussion : pas auto")
-        if self.sans_validation and not (self.auto and self.produit == "volet"):
-            raise ValueError(f"l'agent « {self.nom} » : sans_validation réservé aux volets auto")
+        if self.sans_validation and not (self.auto and self.produit in ("volet", "taches")):
+            raise ValueError(
+                f"l'agent « {self.nom} » : sans_validation réservé aux volets et tâches auto"
+            )
         if self.produit == "volet" and not self.auto:
             raise ValueError(f"l'agent « {self.nom} » produit un volet : auto requis")
         if self.produit == "architecture":
