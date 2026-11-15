@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -105,10 +106,21 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 
-def _flux(generateur) -> StreamingResponse:
+async def _compter(generateur, nom: str):
+    """Compte le flux ouvert dès le premier morceau demandé ; `finally` couvre fermeture et annulation."""
+    jauge_flux = metriques.FLUX_OUVERTS.labels(flux=nom)
+    jauge_flux.inc()
+    try:
+        async for morceau in generateur:
+            yield morceau
+    finally:
+        jauge_flux.dec()
+
+
+def _flux(generateur, nom: str) -> StreamingResponse:
     """Flux SSE : le proxy ne doit ni le mettre en tampon ni le mettre en cache."""
     return StreamingResponse(
-        generateur,
+        _compter(generateur, nom),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -502,6 +514,24 @@ def create_app(
             )
             return JSONResponse(status_code=500, content={"detail": "erreur interne"})
 
+    @app.middleware("http")
+    async def _mesurer(request: Request, call_next):
+        # Déclaré après `_utilisateur` : extérieur, il voit aussi les 401 et 403.
+        debut = time.perf_counter()
+        code = "500"  # si call_next relève
+        try:
+            reponse = await call_next(request)
+            code = str(reponse.status_code)
+            return reponse
+        finally:
+            # Le modèle de route, jamais l'URL : sans route, une valeur fixe (cardinalité bornée).
+            route = getattr(request.scope.get("route"), "path", "aucune")
+            if route != "/metrics":
+                metriques.HTTP_REQUETES.labels(request.method, route, code).inc()
+                metriques.HTTP_DUREE.labels(request.method, route).observe(
+                    time.perf_counter() - debut
+                )
+
     @app.get("/api/sante")
     async def sante():
         return {"ok": True}
@@ -784,7 +814,7 @@ def create_app(
     async def flux(etape_id: int, request: Request):
         chat = request.app.state.chat
         await chat.etat(etape_id)  # 404 avant de commencer le flux
-        return _flux(chat.flux(etape_id))
+        return _flux(chat.flux(etape_id), "etapes")
 
     @app.get("/api/conversations", response_model=list[ConversationResume])
     async def lister_conversations(request: Request):
@@ -843,7 +873,7 @@ def create_app(
     async def flux_conversation(conversation_id: int, request: Request):
         service = request.app.state.conversations
         await service.etat(conversation_id)  # 404 avant de commencer le flux
-        return _flux(service.flux(conversation_id))
+        return _flux(service.flux(conversation_id), "conversations")
 
     @app.get("/api/audit", response_model=list[AuditOut])
     async def lire_audit(s: Session, limite: int = 100, avant: int | None = None):
@@ -854,7 +884,7 @@ def create_app(
 
     @app.get("/api/evenements")
     async def evenements():
-        return _flux(flux_evenements(bus))
+        return _flux(flux_evenements(bus), "evenements")
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics():

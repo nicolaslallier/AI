@@ -26,6 +26,13 @@ TOURS_MISSION = Histogram(
 OUTILS_APPELS = Counter(
     "portail_outils_appels_total", "Appels d'outils", ["agent", "outil", "issue"]
 )
+HTTP_REQUETES = Counter(
+    "portail_http_requetes_total", "Requêtes HTTP", ["methode", "route", "code"]
+)
+HTTP_DUREE = Histogram(
+    "portail_http_duree_secondes", "Durée d'une requête HTTP", ["methode", "route"]
+)
+FLUX_OUVERTS = Gauge("portail_flux_ouverts", "Flux SSE ouverts", ["flux"])
 
 
 def initialiser(r: Reglages) -> None:

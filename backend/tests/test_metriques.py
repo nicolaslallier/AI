@@ -1,12 +1,13 @@
+import asyncio
 import re
 from pathlib import Path
 
 from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
 
-from portail.api import create_app
+from portail.api import _flux, create_app
 from portail.config import Reglages
-from tests.conftest import CATALOGUE_TEST, URL, FauxLLM
+from tests.conftest import CATALOGUE_TEST, URL, FauxLLM, valeur
 
 VHOST = Path(__file__).parents[2] / "deploy" / "nginx" / "portail.conf"
 
@@ -59,3 +60,96 @@ async def test_metrics_avant_le_repli_spa(moteur, tmp_path):
 
 def test_vhost_refuse_metrics():
     assert re.search(r"location\s+\^~\s+/metrics\s*\{\s*return\s+404;\s*\}", VHOST.read_text())
+
+
+_REQ = "portail_http_requetes_total"
+
+
+async def test_requete_par_modele_de_route(moteur, tmp_path):
+    from prometheus_client import generate_latest
+
+    app = await _client(tmp_path)
+    etiq = {"methode": "DELETE", "route": "/api/taches/{tache_id}", "code": "404"}
+    avant = valeur(_REQ, **etiq)
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        assert (await c.delete("/api/taches/987654")).status_code == 404
+    assert valeur(_REQ, **etiq) == avant + 1
+    assert "987654" not in generate_latest().decode()
+    assert valeur(
+        "portail_http_duree_secondes_count", methode="DELETE", route="/api/taches/{tache_id}"
+    )
+
+
+async def test_chemin_sans_route(moteur, tmp_path):
+    app = await _client(tmp_path)
+    etiq = {"methode": "GET", "route": "aucune", "code": "404"}
+    avant = valeur(_REQ, **etiq)
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        assert (await c.get("/api/inconnu/123")).status_code == 404
+    assert valeur(_REQ, **etiq) == avant + 1
+
+
+async def test_401_sans_route(moteur, tmp_path):
+    app = await _client(tmp_path, exiger_utilisateur=True)
+    etiq = {"methode": "GET", "route": "aucune", "code": "401"}
+    avant = valeur(_REQ, **etiq)
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        assert (await c.get("/api/projets")).status_code == 401
+    assert valeur(_REQ, **etiq) == avant + 1
+
+
+async def test_erreur_interne_comptee_500(moteur, tmp_path):
+    app = await _client(tmp_path)
+
+    @app.get("/api/explose/{x}")
+    async def explose(x: str):
+        raise RuntimeError("secret")
+
+    etiq = {"methode": "GET", "route": "/api/explose/{x}", "code": "500"}
+    avant = valeur(_REQ, **etiq)
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        assert (await c.get("/api/explose/1")).status_code == 500
+    assert valeur(_REQ, **etiq) == avant + 1
+
+
+async def test_flux_ouverts():
+    async def gen():
+        yield "a"
+        yield "b"
+
+    avant = valeur("portail_flux_ouverts", flux="conversations")
+    r = _flux(gen(), "conversations")
+    assert valeur("portail_flux_ouverts", flux="conversations") == avant
+    await r.body_iterator.__anext__()
+    assert valeur("portail_flux_ouverts", flux="conversations") == avant + 1
+    await r.body_iterator.aclose()
+    assert valeur("portail_flux_ouverts", flux="conversations") == avant
+
+
+async def test_flux_ouverts_annule():
+    async def gen():
+        yield "a"
+        await asyncio.sleep(60)
+        yield "b"
+
+    avant = valeur("portail_flux_ouverts", flux="evenements")
+    r = _flux(gen(), "evenements")
+    await r.body_iterator.__anext__()
+    tache = asyncio.create_task(r.body_iterator.__anext__())
+    await asyncio.sleep(0)
+    tache.cancel()
+    await asyncio.gather(tache, return_exceptions=True)
+    await r.body_iterator.aclose()
+    assert valeur("portail_flux_ouverts", flux="evenements") == avant
