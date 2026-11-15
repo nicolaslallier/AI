@@ -7,13 +7,13 @@ from pathlib import Path
 
 import httpx
 import pytest
-from conftest import URL, FauxGitHub, FauxLanceur, FauxLLM, FauxNotifieur, valeur
+from conftest import URL, FauxAgent, FauxGitHub, FauxLanceur, FauxLLM, FauxNotifieur, valeur
 from sqlalchemy import select
 
 from portail.agents import Agent, Catalogue
 from portail.config import Reglages
 from portail.db import CommandeLancee, Etape, ExecutionDev, Message, Pipeline, Projet, Tache
-from portail.dev import Orchestrateur
+from portail.dev import FORMAT_VERDICT, Orchestrateur
 from portail.github import ErreurGitHub
 from portail.moteur import Refus, creer_pipeline
 from portail.notifications import Notifieur
@@ -101,7 +101,7 @@ CONTROLES_OK = [verdict("ok"), verdict("ok"), verdict("ok"), texte("rien")]
 
 
 class Monde:
-    def __init__(self, tmp_path, sessions):
+    def __init__(self, tmp_path, sessions, catalogue=CATALOGUE, missions=None):
         nu = tmp_path / "origine.git"
         git(tmp_path, "init", "--bare", "-b", "main", str(nu))
         amont = tmp_path / "amont"
@@ -124,8 +124,8 @@ class Monde:
         self.github = FauxGitHub()
         self.notifieur = FauxNotifieur()
         self.orch = Orchestrateur(
-            sessions, CATALOGUE, self.llm, self.lanceur, self.github, self.reglages,
-            depot_de=lambda url: "nicolas/projet", notifieur=self.notifieur,
+            sessions, catalogue, self.llm, self.lanceur, self.github, self.reglages,
+            depot_de=lambda url: "nicolas/projet", notifieur=self.notifieur, missions=missions,
         )  # fmt: skip
 
     async def creer(self) -> int:
@@ -167,6 +167,84 @@ async def monde(tmp_path, sessions):
     m = Monde(tmp_path, sessions)
     await m.creer()
     return m
+
+
+CATALOGUE_CONTENEUR = CATALOGUE.model_copy(
+    update={
+        "agents": {
+            **CATALOGUE.agents,
+            "revue": CATALOGUE.agents["revue"].model_copy(
+                update={"service": "http://agent-revue:8080"}
+            ),
+        }
+    }
+)
+
+
+@pytest.fixture
+async def monde_conteneur(tmp_path, sessions):
+    faux = FauxAgent("revue")
+    m = Monde(tmp_path, sessions, CATALOGUE_CONTENEUR, faux.registre)
+    await m.creer()
+    yield m, faux
+    await faux.client.aclose()
+
+
+async def test_revue_en_conteneur_parcours_complet(monde_conteneur):
+    monde, faux = monde_conteneur
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [
+        *TESTS_OK, *CODE_OK, appel("lire", chemin="src/x.py"), verdict("ok", "propre"),
+    ]  # fmt: skip
+    pid = await monde.lancer()
+    ex, _tache, pipeline = await monde.etat(pid)
+    assert (ex.phase, pipeline.etat) == ("fini", "terminee")
+    assert "propre" in monde.github.prs[1]["corps"]
+    assert [m["corps"]["agent"] for m in faux.missions] == [
+        "revue"
+    ]  # tests et code : dans le portail
+    async with monde.sessions() as s:
+        messages = (
+            await s.execute(
+                select(Etape.agent, Message.role, Message.outil, Message.contenu)
+                .join(Message, Message.etape_id == Etape.id)
+                .where(Message.role == "tool")
+            )
+        ).all()
+    revue = [m for m in messages if m.agent == "revue"]
+    assert [(m.outil, m.contenu.strip()) for m in revue] == [("lire(src/x.py)", "x = 1")]
+
+
+async def test_relance_verdict_par_une_nouvelle_mission(monde_conteneur):
+    monde, faux = monde_conteneur
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, texte("pas du json"), verdict("ok", "propre")]
+    pid = await monde.lancer()
+    _ex, _tache, pipeline = await monde.etat(pid)
+    assert pipeline.etat == "terminee" and "propre" in monde.github.prs[1]["corps"]
+    premiere, relance = (m["corps"] for m in faux.missions)
+    assert premiere["outils"] and relance["outils"] == []
+    assert relance["response_format"] == FORMAT_VERDICT
+    derniers = [{k: v for k, v in m.items() if v is not None} for m in relance["messages"][-2:]]
+    assert derniers == [
+        {"role": "assistant", "content": "pas du json"},
+        {"role": "user", "content": "Réponse invalide : renvoie uniquement le JSON."},
+    ]
+
+
+async def test_agent_en_conteneur_injoignable_bloque(monde_conteneur):
+    monde, faux = monde_conteneur
+    faux.joignable = False
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+    avant = valeur("portail_blocages_total", cause="outils", phase="controles")
+    pid = await monde.lancer()
+    ex, tache, pipeline = await monde.etat(pid)
+    assert pipeline.etat == "echouee" and tache.colonne == "bloquee"
+    assert "« revue » injoignable" in tache.resume_blocage
+    assert ex.phase == "controles"
+    assert valeur("portail_blocages_total", cause="outils", phase="controles") == avant + 1
+    assert faux.missions == []
 
 
 async def test_parcours_complet_ouvre_une_pr(monde):

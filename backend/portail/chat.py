@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from portail import journal
 from portail.agents import Agent, Catalogue
 from portail.avis import ServiceAvis
-from portail.boucle import boucle_outils
 from portail.contexte import construire, jauge
 from portail.db import (
     Avis,
@@ -29,6 +28,7 @@ from portail.db import (
 from portail.depots import Depots, ErreurDepot
 from portail.etats import Etat
 from portail.llm import ClientLLM, FiltreReflexion, retirer_reflexion
+from portail.missions import Missions, completer, streamer, tourner
 from portail.moteur import (
     Refus,
     annuler_pipeline,
@@ -141,7 +141,9 @@ class ServiceChat:
         diffuseur: Diffuseur,
         depots: Depots,
         avis: ServiceAvis | None = None,
+        missions: Missions | None = None,
     ):
+        self._missions = missions
         self._sessions = sessions
         self._catalogue = catalogue
         self._llm = llm
@@ -292,6 +294,13 @@ class ServiceChat:
         return arbre
 
     async def _streamer(self, etape_id: int, agent: Agent, demande: list[dict]) -> str:
+        if agent.service:
+
+            async def publier(part: str) -> None:
+                self.diffuseur.ajouter_partiel(etape_id, part)
+                self.diffuseur.publier(etape_id, {"type": "delta", "texte": part})
+
+            return await streamer(self._llm, self._missions, agent, demande, publier)
         filtre = FiltreReflexion()
         brut = ""
         async for morceau in self._llm.flux(agent.modele, demande, agent.temperature):
@@ -312,7 +321,9 @@ class ServiceChat:
                 await s.commit()
             self.diffuseur.publier(etape_id, {"type": "outil", "libelle": libelle})
 
-        resultat = await boucle_outils(self._llm, agent, demande, OutilsDepot(arbre), sur_appel)
+        resultat = await tourner(
+            self._llm, self._missions, agent, demande, OutilsDepot(arbre), sur_appel
+        )
         visible = resultat.texte.strip()
         if visible:
             self.diffuseur.publier(etape_id, {"type": "delta", "texte": visible})
@@ -327,10 +338,7 @@ class ServiceChat:
             "json_schema": {"name": "propositions", "schema": SCHEMA_PROPOSITIONS},
         }
         for essai in range(2):
-            reponse = await self._llm.completer(
-                agent.modele, demande, agent.temperature, response_format=format_
-            )
-            texte = retirer_reflexion(reponse.get("content") or "").strip()
+            texte = (await completer(self._llm, self._missions, agent, demande, format_)).strip()
             try:
                 return lire_propositions(texte, cles)
             except ValueError as e:

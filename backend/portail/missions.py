@@ -467,7 +467,17 @@ async def tourner(llm, missions: Missions | None, agent: Agent, messages, outils
     return await missions.faire_tourner(llm, agent, messages, outils, sur_appel)
 
 
-async def completer(llm, missions: Missions | None, agent: Agent, messages, response_format) -> str:
+async def streamer(llm, missions: Missions | None, agent: Agent, messages, sur_texte) -> str:
+    """Le texte d'un agent à `service:` sans outils, relayé morceau par morceau à `sur_texte`."""
+    if missions is None:
+        raise ErreurMission("registre des missions absent")
+    r = await missions.faire_tourner(llm, agent, messages, None, _rien, sur_texte=sur_texte)
+    return r.texte.strip()
+
+
+async def completer(
+    llm, missions: Missions | None, agent: Agent, messages, response_format: dict | None
+) -> str:
     """Une réponse structurée sans outils ; avec un `service:`, c'est une nouvelle mission."""
     if agent.service is None:
         reponse = await llm.completer(

@@ -12,11 +12,11 @@ from portail import journal
 from portail.actions import executer_action
 from portail.agents import Agent, Catalogue
 from portail.audit import inscrire
-from portail.boucle import boucle_outils
 from portail.chat import Diffuseur, ServiceChat, _sse
 from portail.contexte import jauge
 from portail.db import ActionConversation, Conversation, MessageConversation, Tache
 from portail.llm import ClientLLM, FiltreReflexion, retirer_reflexion
+from portail.missions import Missions, streamer, tourner
 from portail.moteur import Refus
 from portail.outils_portail import OutilsPortail
 from portail.schemas import ActionOut, ConversationDetail, MessageOut
@@ -47,7 +47,9 @@ class ServiceConversation:
         chat: ServiceChat,
         annuler_tache: Callable[[int], Awaitable[None]],
         reveiller: Callable[[], None],
+        missions: Missions | None = None,
     ):
+        self._missions = missions
         self._sessions = sessions
         self._catalogue = catalogue
         self._llm = llm
@@ -301,6 +303,13 @@ class ServiceConversation:
             await s.commit()
 
     async def _streamer(self, cid: int, agent: Agent, demande: list[dict]) -> str:
+        if agent.service:
+
+            async def publier(part: str) -> None:
+                self.diffuseur.ajouter_partiel(cid, part)
+                self.diffuseur.publier(cid, {"type": "delta", "texte": part})
+
+            return await streamer(self._llm, self._missions, agent, demande, publier)
         filtre = FiltreReflexion()
         brut = ""
         async for morceau in self._llm.flux(agent.modele, demande, agent.temperature):
@@ -322,7 +331,7 @@ class ServiceConversation:
             self.diffuseur.publier(cid, {"type": "outil", "libelle": libelle})
 
         outils = OutilsPortail(self._sessions, agent.outils, self._catalogue, cid)
-        resultat = await boucle_outils(self._llm, agent, demande, outils, sur_appel)
+        resultat = await tourner(self._llm, self._missions, agent, demande, outils, sur_appel)
         visible = resultat.texte.strip()
         if visible:
             self.diffuseur.publier(cid, {"type": "delta", "texte": visible})

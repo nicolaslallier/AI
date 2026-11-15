@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import os
 import subprocess
@@ -151,6 +152,23 @@ async def client(moteur, reglages, faux_llm):
         AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
     ):
         yield c
+
+
+@pytest_asyncio.fixture
+async def client_conteneur(moteur, reglages, faux_llm):
+    """Fabrique `(catalogue, faux_agent) -> client` : l'application tourne avec les missions du faux."""
+    async with contextlib.AsyncExitStack() as pile:
+
+        async def fabriquer(catalogue, faux):
+            app = create_app(
+                reglages=reglages, llm=faux_llm, catalogue=catalogue, missions=faux.registre
+            )
+            await pile.enter_async_context(LifespanManager(app))
+            return await pile.enter_async_context(
+                AsyncClient(transport=ASGITransport(app), base_url="http://t")
+            )
+
+        yield fabriquer
 
 
 # --- routes /interne/ ----------------------------------------------------

@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from portail import journal, metriques
 from portail.agents import Catalogue, modele_pour
-from portail.boucle import ErreurOutils, boucle_outils
+from portail.boucle import ErreurOutils
 from portail.config import Reglages
 from portail.contexte import construire
 from portail.db import (
@@ -51,7 +51,8 @@ from portail.execution import (
 from portail.faits import Fait, verifier_faits
 from portail.github import CommentaireGitHub, ErreurGitHub, depot_depuis_url
 from portail.lanceur import ErreurLanceur, Resultat
-from portail.llm import ErreurLLM, retirer_reflexion
+from portail.llm import ErreurLLM
+from portail.missions import Missions, completer, tourner
 from portail.moteur import Refus
 from portail.notifications import Notifieur, lien_absolu
 from portail.outils import OutilsDepot, OutilsEspace, _secret_chemin, apercu, empreinte
@@ -209,10 +210,12 @@ class Orchestrateur:
         horloge: Callable[[], datetime] = lambda: datetime.now(UTC),
         depot_de: Callable[[str], str] = depot_depuis_url,
         notifieur: Notifieur | None = None,
+        missions: Missions | None = None,
     ):
         self._sessions = sessions
         self._catalogue = catalogue
         self._llm = llm
+        self._missions = missions
         self._lanceur = lanceur
         self._github = github
         self._reglages = reglages
@@ -603,7 +606,7 @@ class Orchestrateur:
         async def sur_appel(libelle: str, resultat: str) -> None:
             await self._message(ctx, "tool", resultat[:2000], libelle)
 
-        r = await boucle_outils(self._llm, agent, messages, outils, sur_appel)
+        r = await tourner(self._llm, self._missions, agent, messages, outils, sur_appel)
         if r.limite_atteinte:
             await self._message(
                 ctx, "system", f"limite de {agent.tours_max} appels d'outils atteinte"
@@ -660,10 +663,9 @@ class Orchestrateur:
                 {"role": "assistant", "content": texte},
                 {"role": "user", "content": "Réponse invalide : renvoie uniquement le JSON."},
             ]
-            rep = await self._llm.completer(
-                agent.modele, messages, agent.temperature, response_format=FORMAT_TRI
-            )
-            texte = retirer_reflexion(rep.get("content") or "").strip()
+            texte = (
+                await completer(self._llm, self._missions, agent, messages, FORMAT_TRI)
+            ).strip()
             await self._message(ctx, "assistant", texte or "(réponse vide)")
             tri = lire_tri(texte, ids)
         if tri is None:  # jamais de tri par défaut
@@ -1003,10 +1005,10 @@ class Orchestrateur:
                 {"role": "assistant", "content": texte},
                 {"role": "user", "content": "Réponse invalide : renvoie uniquement le JSON."},
             ]
-            rep = await self._llm.completer(
-                modele, messages, agent.temperature, response_format=FORMAT_VERDICT
-            )
-            texte = retirer_reflexion(rep.get("content") or "").strip()
+            relecteur = agent.model_copy(update={"modele": modele})
+            texte = (
+                await completer(self._llm, self._missions, relecteur, messages, FORMAT_VERDICT)
+            ).strip()
             await self._message(ctx, "assistant", texte or "(réponse vide)")
             verdict = _lire_verdict(texte)
         if verdict is None:

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import aclosing, asynccontextmanager
@@ -51,7 +52,7 @@ from portail.execution import lire_config
 from portail.github import ErreurGitHub, GitHubApp
 from portail.lanceur import ClientLanceur
 from portail.llm import ClientLLM
-from portail.missions import ROUTEUR_INTERNE, Missions
+from portail.missions import ROUTEUR_INTERNE, Missions, lire_secrets
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
 from portail.notifications import Notifieur
 from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
@@ -373,7 +374,7 @@ async def _annuler_tache(state, s: AsyncSession, tache_id: int) -> None:
     await _annuler(state, s, verrou, clos=False)  # même chemin que /pipelines/{id}/annuler
 
 
-def _orchestrateur(r: Reglages, sessions, catalogue, llm) -> Orchestrateur | None:
+def _orchestrateur(r: Reglages, sessions, catalogue, llm, missions) -> Orchestrateur | None:
     """Seulement si l'App GitHub et le lanceur sont configurés ; sinon rien, sans erreur."""
     if not (r.github_app_id and r.github_app_cle and r.lanceur_secret):
         return None
@@ -384,7 +385,9 @@ def _orchestrateur(r: Reglages, sessions, catalogue, llm) -> Orchestrateur | Non
         return None
     lanceur = ClientLanceur(r.lanceur_url, r.lanceur_secret)
     notifieur = Notifieur(r.ntfy_url, r.ntfy_sujet, r.ntfy_jeton)
-    return Orchestrateur(sessions, catalogue, llm, lanceur, github, r, notifieur=notifieur)
+    return Orchestrateur(
+        sessions, catalogue, llm, lanceur, github, r, notifieur=notifieur, missions=missions
+    )
 
 
 def create_app(
@@ -401,7 +404,10 @@ def create_app(
         app.state.reglages = r
         metriques.initialiser(r)
         app.state.catalogue = catalogue or charger_catalogue(r.agents_fichier)
-        app.state.missions = missions or Missions({}, r.duree_mission_s)
+        # un agent à `service:` sans secret valide empêche le démarrage
+        app.state.missions = missions or Missions(
+            lire_secrets(app.state.catalogue, os.environ), r.duree_mission_s
+        )
         moteur = creer_moteur(r.database_url)
         app.state.sessions = fabrique_sessions(moteur)
         app.state.llm = llm or ClientLLM(
@@ -422,10 +428,12 @@ def create_app(
         arbitre = Arbitre()
         interactif = LLMArbitre(app.state.llm, arbitre, "interactif")
         app.state.diffuseur = Diffuseur()
-        app.state.avis = ServiceAvis(app.state.sessions, app.state.catalogue, interactif, depots)
+        app.state.avis = ServiceAvis(
+            app.state.sessions, app.state.catalogue, interactif, depots, app.state.missions
+        )
         app.state.chat = ServiceChat(
             app.state.sessions, app.state.catalogue, interactif, app.state.diffuseur, depots,
-            app.state.avis,
+            app.state.avis, app.state.missions,
         )  # fmt: skip
         async with app.state.sessions() as s:
             await app.state.avis.recuperer_interrompues(s)
@@ -443,6 +451,7 @@ def create_app(
             app.state.chat,
             annuler_tache,
             lambda: _reveiller(app.state),
+            app.state.missions,
         )
         async with app.state.sessions() as s:
             await app.state.conversations.recuperer_interrompues(s)
@@ -459,7 +468,11 @@ def create_app(
                 )
             )  # fmt: skip
         orch = orchestrateur or _orchestrateur(
-            r, app.state.sessions, app.state.catalogue, LLMArbitre(app.state.llm, arbitre, "fond")
+            r,
+            app.state.sessions,
+            app.state.catalogue,
+            LLMArbitre(app.state.llm, arbitre, "fond"),
+            app.state.missions,
         )
         app.state.orchestrateur, app.state.ordonnanceur = orch, None
         if orch:

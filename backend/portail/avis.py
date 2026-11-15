@@ -8,12 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from portail import journal
 from portail.agents import Catalogue, modele_pour
-from portail.boucle import boucle_outils
 from portail.contexte import construire
 from portail.db import Avis, Document, Etape, Pipeline, Projet
 from portail.depots import Depots
 from portail.etats import Etat
 from portail.llm import ClientLLM, retirer_reflexion
+from portail.missions import Missions, completer, tourner
 from portail.moteur import spec_courante
 from portail.outils import OutilsDepot
 
@@ -31,7 +31,9 @@ class ServiceAvis:
         catalogue: Catalogue,
         llm: ClientLLM,
         depots: Depots,
+        missions: Missions | None = None,
     ):
+        self._missions = missions
         self._sessions = sessions
         self._catalogue = catalogue
         self._llm = llm
@@ -151,9 +153,10 @@ class ServiceAvis:
             arbre, _ = await self._depots.preparer(
                 projet.id, projet.depot_url, projet.branche_ref, etape.id, etape.sha
             )
-            resultat = await boucle_outils(self._llm, agent, demande, OutilsDepot(arbre), _rien)
+            resultat = await tourner(
+                self._llm, self._missions, agent, demande, OutilsDepot(arbre), _rien
+            )
             texte = resultat.texte
         else:
-            reponse = await self._llm.completer(agent.modele, demande, agent.temperature)
-            texte = reponse.get("content") or ""
+            texte = await completer(self._llm, self._missions, agent, demande, None)
         return retirer_reflexion(texte).strip()

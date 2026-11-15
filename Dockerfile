@@ -23,4 +23,4 @@ ENV PATH="/app/backend/.venv/bin:$PATH" \
     PORTAIL_STATIC_DIR=/app/static \
     PORTAIL_AGENTS_FICHIER=/app/agents.yaml
 EXPOSE 8000
-CMD ["sh","-c","alembic upgrade head && exec uvicorn --factory portail.api:create_app --host 0.0.0.0 --port 8000 --log-config journal.json --no-access-log"]
+CMD ["sh","-c","alembic upgrade head && exec uvicorn --factory portail.api:create_app --host 0.0.0.0 --port 8000 --limit-concurrency 200 --log-config journal.json --no-access-log"]
