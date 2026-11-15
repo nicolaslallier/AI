@@ -1,0 +1,42 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "docker:pinDigests"
+  ],
+  "enabledManagers": [
+    "dockerfile",
+    "docker-compose",
+    "github-actions",
+    "pep621",
+    "npm",
+    "cargo",
+    "custom.regex"
+  ],
+  "docker-compose": {
+    "managerFilePatterns": [
+      "/(^|/)docker-compose[^/]*\\.ya?ml$/",
+      "/^deploy/portainer-stack\\.yml$/"
+    ]
+  },
+  "schedule": [
+    "before 6am on saturday"
+  ],
+  "prConcurrentLimit": 3,
+  "automerge": false,
+  "customManagers": [
+    {
+      "description": "Images de services permises au lanceur : entrées nom:tag@sha256:… de LANCEUR_IMAGES_SERVICES.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^deploy/portainer-stack\\.yml$/"
+      ],
+      "matchStringsStrategy": "recursive",
+      "matchStrings": [
+        "LANCEUR_IMAGES_SERVICES:[^\\n]*",
+        "(?<depName>[^\\s,:@]+):(?<currentValue>[^\\s,@]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ]
+}

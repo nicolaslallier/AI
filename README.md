@@ -25,7 +25,10 @@ Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolas
   - Variables du dépôt : `PORTAINER_URL` (défaut `https://portainer.infra.famillelallier.net`), `VAULT_URL` (défaut `https://vault.infra.famillelallier.net`), `PORTAINER_ENDPOINT_ID` (obligatoire), `VAULT_SECRET_PATH` (défaut `infra/data/portail`), `INFRA_CA_CERT_PATH` (chemin de la CA de l'Infra dans le runner, défaut `/etc/ai/infra-ca.crt`).
   - Clés du secret KV v2 `infra/portail` (lu via l'API à `infra/data/portail`) : `PORTAIL_DB_PASSWORD`, `PORTAIL_LITELLM_CLE`, `PORTAIL_GITHUB_JETON`, `PORTAIL_GITHUB_APP_ID`, `PORTAIL_GITHUB_APP_CLE`, `PORTAIL_LANCEUR_SECRET`, `PORTAIL_NTFY_JETON`.
   - Aucun workflow du dépôt ne doit avoir de déclencheur `pull_request`, `pull_request_target`, `issue_comment` ou `workflow_run` pouvant atteindre le label self-hosted `ai` : une PR de fork peut modifier `ci.yml` elle-même. Le dépôt est public : exiger l'approbation pour tous les collaborateurs externes (Settings → Actions → General → Fork pull request workflows from outside collaborators), et le runner `ai` doit être éphémère (conteneur neuf par job, aucun volume de travail persistant).
-  - Le déploiement n'attend pas la CI : activer la protection de branche sur `main` avec les contrôles de CI obligatoires.
+  - Le déploiement rejoue la CI (`ci.yml`, appelée par `deploy.yml`) et ne construit rien si elle échoue. Elle comprend les audits de dépendances (`pip-audit`, `npm audit`, `cargo audit`), la recherche de secrets (`gitleaks`) et, après chaque construction, l'analyse Trivy des images (CRITICAL/HIGH corrigeables). Actions et images de base sont épinglées par SHA ou digest ; Renovate propose les mises à jour le samedi (`renovate.json`).
+  - Étapes manuelles (réglages GitHub, hors dépôt) :
+    - protéger `main` : exiger les contrôles `backend`, `frontend`, `lanceur` et `securite` avant fusion ;
+    - installer l'application Renovate sur le dépôt.
 
 ### Jeton GitHub (lecture seule)
 
