@@ -31,6 +31,43 @@ Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolas
     - installer l'application Renovate sur le dépôt.
     - remplacer `PORTAIL_LITELLM_CLE` dans OpenBao par une clé LiteLLM limitée aux modèles de `modeles_permis` (`agents.yaml`), jamais la clé maîtresse.
 
+## Agents et pipelines
+
+Schéma généré depuis `agents.yaml` ; après un changement, lancer `cd backend && uv run python -m portail.schema_pipelines`.
+
+<!-- schema-pipelines:debut -->
+```mermaid
+flowchart LR
+  subgraph g0["spec"]
+    g0_spec["spec"]
+  end
+  subgraph g1["planification"]
+    g1_plan["plan"]
+    g1_taches["taches"]
+    g1_plan --> g1_taches
+  end
+  subgraph g2["dev"]
+    g2_tests["tests"]
+    g2_code["code"]
+    g2_revue["revue"]
+    g2_challenger["challenger"]
+    g2_securite["securite"]
+    g2_doc["doc"]
+    g2_tests --> g2_code
+    g2_code --> g2_revue
+    g2_revue --> g2_challenger
+    g2_challenger --> g2_securite
+    g2_securite --> g2_doc
+  end
+  subgraph g3["hors pipeline"]
+    g3_orchestrateur["orchestrateur"]
+    g3_architecte["architecte"]
+    g3_pm["pm"]
+    g3_tri["tri"]
+  end
+```
+<!-- schema-pipelines:fin -->
+
 ## Monitoring
 
 - **`/metrics`** : format Prometheus, lu par Prometheus sur `infra-net` (job `portail`) ; le frontal NGINX répond 404 (`location ^~ /metrics` de `deploy/nginx/portail.conf`).

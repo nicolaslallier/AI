@@ -10,6 +10,7 @@ from portail.agents import (
     CatalogueInvalide,
     charger_catalogue,
     modele_pour,
+    rangement,
 )
 
 VALIDE = """
@@ -295,3 +296,27 @@ def test_modele_pour():
     assert modele_pour(agent("challenger", "x", "y"), code) == "y"
     assert modele_pour(agent("challenger", "z", "y"), code) == "z"
     assert modele_pour(agent("revue", "x"), code) == "x"
+
+
+def test_rangement():
+    from tests.conftest import CATALOGUE_TEST
+
+    assert rangement(CATALOGUE_TEST) == [
+        ("spec", ["spec"]),
+        ("double", ["a", "b"]),
+        ("petit", ["petit"]),
+        ("planification", ["plan", "taches"]),
+        (None, ["orchestrateur", "pm"]),
+    ]
+
+
+def test_rangement_sans_groupe_hors_pipeline_et_agent_dans_deux_pipelines():
+    from tests.conftest import CATALOGUE_TEST
+
+    cat = CATALOGUE_TEST.model_copy(
+        update={
+            "agents": {k: v for k, v in CATALOGUE_TEST.agents.items() if k in ("a", "b")},
+            "pipelines": {"x": ["a", "b"], "y": ["b"]},
+        }
+    )
+    assert rangement(cat) == [("x", ["a", "b"]), ("y", ["b"])]

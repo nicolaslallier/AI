@@ -109,6 +109,14 @@ class Catalogue(BaseModel):
     avis: dict[Literal["spec", "plan"], list[str]] = {}
 
 
+def rangement(cat: Catalogue) -> list[tuple[str | None, list[str]]]:
+    """Un groupe par pipeline (agents dans l'ordre des étapes), puis les agents hors pipeline."""
+    groupes: list[tuple[str | None, list[str]]] = [(p, list(e)) for p, e in cat.pipelines.items()]
+    en_pipeline = {a for e in cat.pipelines.values() for a in e}
+    reste = [a for a in cat.agents if a not in en_pipeline]
+    return groupes + [(None, reste)] if reste else groupes
+
+
 def charger_catalogue(chemin: Path) -> Catalogue:
     try:
         brut = yaml.safe_load(Path(chemin).read_text(encoding="utf-8"))
