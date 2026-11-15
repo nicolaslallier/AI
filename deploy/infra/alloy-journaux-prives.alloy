@@ -1,0 +1,7 @@
+// À insérer dans le bloc discovery.relabel de monitoring/alloy/config.alloy (dépôt Infra).
+// Le lanceur marque ses conteneurs d'exécution portail.journaux=prives : on ne les collecte pas.
+rule {
+	source_labels = ["__meta_docker_container_label_portail_journaux"]
+	regex         = "prives"
+	action        = "drop"
+}

@@ -125,7 +125,11 @@ pub fn chemin_relatif_sur(c: &str) -> bool {
 }
 
 fn libelle(espace: &str) -> HashMap<String, String> {
-    HashMap::from([(LABEL.to_string(), espace.to_string())])
+    HashMap::from([
+        (LABEL.to_string(), espace.to_string()),
+        // Lu par Alloy (Infra) : les journaux d'exécution ne vont jamais dans Loki.
+        ("portail.journaux".to_string(), "prives".to_string()),
+    ])
 }
 
 /// Spécification d'un conteneur de commande durci. Pure : aucune requête Docker.
@@ -587,6 +591,18 @@ mod tests {
         let mut autre = d;
         autre.services[0].image = "postgres:16-alpine@sha256:ccc".into();
         assert!(valider_services(&cfg, &autre).is_err());
+    }
+
+    #[test]
+    fn journaux_prives() {
+        let c = spec(&[]).unwrap();
+        assert_eq!(
+            c.labels
+                .unwrap()
+                .get("portail.journaux")
+                .map(String::as_str),
+            Some("prives")
+        );
     }
 
     #[test]
