@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { lireBureau, lirePoste, type Bureau, type EtatPoste, type PosteDetail } from '../api'
+import { libelleConteneur } from '../bureau'
 import { ecouterEvenements, regrouper } from '../evenements'
 import JaugeContexte from '../components/JaugeContexte.vue'
 
@@ -100,6 +101,11 @@ onUnmounted(() => {
                 <JaugeContexte v-if="t.jauge" :jauge="t.jauge" compacte />
               </li>
             </ul>
+            <small
+              v-if="bureau.postes[nom].conteneur"
+              class="conteneur"
+              :class="{ ko: !bureau.postes[nom].conteneur.repond }"
+            >{{ libelleConteneur(bureau.postes[nom].conteneur) }}</small>
             <small class="discret">
               {{ bureau.postes[nom].appels_jour }} appels ·
               {{ bureau.postes[nom].jetons_jour.toLocaleString('fr-FR') }} jetons
@@ -153,6 +159,7 @@ onUnmounted(() => {
 .pastille.en_attente { color: var(--alerte); }
 .pastille.en_erreur { color: var(--danger); }
 .travaux { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 0.3rem; }
+.conteneur.ko { color: var(--danger); }
 .fleche { color: var(--discret); font-size: 1.4rem; }
 .detail { margin-top: 1rem; overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; }

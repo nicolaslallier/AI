@@ -922,7 +922,9 @@ def create_app(
 
     @app.get("/api/bureau", response_model=Bureau)
     async def lire_le_bureau(request: Request, s: Session):
-        return await bureau.lire_bureau(s, request.app.state.catalogue, datetime.now(UTC))
+        return await bureau.lire_bureau(
+            s, request.app.state.catalogue, datetime.now(UTC), request.app.state.missions
+        )
 
     @app.get("/api/bureau/{agent}", response_model=PosteDetail)
     async def lire_un_poste(agent: str, request: Request, s: Session):

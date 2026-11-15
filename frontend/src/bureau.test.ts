@@ -20,7 +20,7 @@ class FauxEventSource {
 }
 
 const poste = (nom: string, extra: Partial<Poste> = {}): Poste => ({
-  nom, etat: 'libre', travaux: [], appels_jour: 0, jetons_jour: 0, ...extra,
+  nom, etat: 'libre', travaux: [], appels_jour: 0, jetons_jour: 0, conteneur: null, ...extra,
 })
 const bureau: Bureau = {
   groupes: [
@@ -180,4 +180,29 @@ it('lecture du bureau en échec : message affiché, postes déjà chargés conse
   await vi.advanceTimersByTimeAsync(1001)
   expect(racine.querySelector('.erreur')!.textContent).toBe('panne bureau')
   expect(racine.querySelectorAll('.poste')).toHaveLength(4)
+})
+
+import { libelleConteneur } from './bureau'
+
+it('libelleConteneur : rien pour un agent du portail, état en toutes lettres sinon', () => {
+  expect(libelleConteneur(null)).toBe('')
+  expect(libelleConteneur({ repond: false, version: null })).toBe('conteneur injoignable')
+  expect(libelleConteneur({ repond: true, version: 'sha-abc' })).toBe('conteneur ● sha-abc')
+  expect(libelleConteneur({ repond: true, version: null })).toBe('conteneur ●')
+})
+
+it('le poste d’un agent en conteneur affiche son état, pas celui d’un agent du portail', async () => {
+  vi.mocked(lireBureau).mockResolvedValue({
+    ...bureau,
+    postes: {
+      ...bureau.postes,
+      xx: poste('xx', { conteneur: { repond: true, version: 'sha-abc' } }),
+      yy: poste('yy', { conteneur: { repond: false, version: null } }),
+    },
+  })
+  await monter()
+  const postes = [...racine.querySelectorAll('section.groupe')[0].querySelectorAll('.poste')]
+  expect(postes[0].querySelector('.conteneur')!.textContent).toBe('conteneur ● sha-abc')
+  expect(postes[1].querySelector('.conteneur')!.textContent).toBe('conteneur injoignable')
+  expect(racine.querySelectorAll('section.groupe')[2].querySelector('.conteneur')).toBeNull()
 })

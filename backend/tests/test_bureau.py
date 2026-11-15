@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 from portail.agents import rangement
@@ -429,3 +430,98 @@ async def test_lignes_sans_mission_ignorees(client, sessions):
     await _appels(sessions, "a", "m1")
     ms = (await client.get("/api/bureau/a")).json()["missions"]
     assert [m["mission"] for m in ms] == ["m1"]
+
+
+# --- le conteneur d'un agent --------------------------------------------------------------------
+
+
+def _bureau_conteneurs(reglages, faux_llm, repondre, horloge=None):
+    """Application dont `a` et `b` ont un `service:` ; `repondre` joue leurs conteneurs."""
+    import httpx
+
+    from portail.api import create_app
+    from portail.missions import Missions
+
+    cat = CATALOGUE_TEST.model_copy(
+        update={
+            "agents": {
+                **CATALOGUE_TEST.agents,
+                "a": CATALOGUE_TEST.agents["a"].model_copy(
+                    update={"service": "http://agent-a:8080"}
+                ),
+                "b": CATALOGUE_TEST.agents["b"].model_copy(
+                    update={"service": "http://agent-b:8080"}
+                ),
+            }
+        }
+    )
+    missions = Missions({}, 60, transport=httpx.MockTransport(repondre))
+    if horloge:
+        missions.horloge = horloge
+    return create_app(reglages=reglages, llm=faux_llm, catalogue=cat, missions=missions)
+
+
+async def _faire(app):
+    from asgi_lifespan import LifespanManager
+    from httpx import ASGITransport, AsyncClient
+
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        return (await c.get("/api/bureau")).json()
+
+
+def _sante(request, version="sha-agent"):
+    import httpx
+
+    nom = request.url.host.removeprefix("agent-")
+    return httpx.Response(200, json={"contrat": "v1", "agent": nom, "version": version})
+
+
+async def test_bureau_conteneur(moteur, reglages, faux_llm):
+    import asyncio
+    import time
+
+    async def repondre(request):
+        if request.url.host == "agent-b":
+            await asyncio.Event().wait()  # ne répond jamais
+        return _sante(request)
+
+    t = time.monotonic()
+    b = await _faire(_bureau_conteneurs(reglages, faux_llm, repondre))
+    assert time.monotonic() - t < 3
+    p = b["postes"]
+    assert p["a"]["conteneur"] == {"repond": True, "version": "sha-agent"}
+    assert p["b"]["conteneur"] == {"repond": False, "version": None}
+    assert p["petit"]["conteneur"] is None
+    assert "agent-" not in json.dumps(b) and ":8080" not in json.dumps(b)
+
+
+async def test_bureau_conteneur_version_hors_bornes_ecartee(moteur, reglages, faux_llm):
+    async def repondre(request):
+        return _sante(request, "<script>alert(1)</script>")
+
+    b = await _faire(_bureau_conteneurs(reglages, faux_llm, repondre))
+    assert b["postes"]["a"]["conteneur"] == {"repond": False, "version": None}
+    assert "script" not in json.dumps(b)
+
+
+async def test_bureau_conteneur_sonde_en_cache(moteur, reglages, faux_llm):
+    appels = []
+
+    async def repondre(request):
+        appels.append(request.url.host)
+        return _sante(request)
+
+    app = _bureau_conteneurs(reglages, faux_llm, repondre)
+    from asgi_lifespan import LifespanManager
+    from httpx import ASGITransport, AsyncClient
+
+    async with (
+        LifespanManager(app),
+        AsyncClient(transport=ASGITransport(app), base_url="http://t") as c,
+    ):
+        for _ in range(3):
+            assert (await c.get("/api/bureau")).status_code == 200
+    assert sorted(appels) == ["agent-a", "agent-b"]  # une sonde par agent, pas par rechargement

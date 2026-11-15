@@ -233,6 +233,7 @@ class Missions:
             horloge,
         )
         self._en_cours: list[Mission] = []
+        self.sondes: dict[str, tuple[float, Sante | None]] = {}  # cache du bureau, par agent
 
     def ouvrir(self, llm, agent: Agent, outils, sur_appel, version: str) -> Mission:
         for x in [x for x in self._en_cours if self.horloge() > x.echeance]:

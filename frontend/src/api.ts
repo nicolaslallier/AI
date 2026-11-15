@@ -299,6 +299,7 @@ export interface Poste {
   travaux: Travail[]
   appels_jour: number
   jetons_jour: number
+  conteneur: { repond: boolean; version: string | null } | null
 }
 export interface Groupe {
   nom: string | null

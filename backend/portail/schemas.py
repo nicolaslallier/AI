@@ -340,12 +340,20 @@ class Travail(BaseModel):
     jauge: Jauge | None = None
 
 
+class ConteneurVue(BaseModel):
+    """Le conteneur d'un agent : répond-il, et quelle version (validée, jamais l'adresse)."""
+
+    repond: bool
+    version: str | None
+
+
 class Poste(BaseModel):
     nom: str
     etat: Literal["libre", "au_travail", "en_attente", "en_erreur"]
     travaux: list[Travail]
     appels_jour: int = 0
     jetons_jour: int = 0
+    conteneur: ConteneurVue | None = None  # None : l'agent tourne dans le portail
 
 
 class Groupe(BaseModel):

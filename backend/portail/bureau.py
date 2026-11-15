@@ -1,5 +1,6 @@
 """Le bureau des agents : qui travaille, attend ou a échoué aujourd'hui. Aucun contenu, que des identifiants."""
 
+import asyncio
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -19,13 +20,24 @@ from portail.db import (
     Pipeline,
 )
 from portail.etats import ANNULE, REPRISE_ABANDONNEE, Etat
+from portail.missions import Missions
 from portail.moteur import Refus
-from portail.schemas import Bureau, Groupe, MissionOut, Poste, PosteDetail, Travail
+from portail.schemas import (
+    Bureau,
+    ConteneurVue,
+    Groupe,
+    MissionOut,
+    Poste,
+    PosteDetail,
+    Travail,
+)
 
 FUSEAU = ZoneInfo("America/Toronto")
 LIMITE = 500  # par requête : un bureau n'a que quelques travaux en cours
 FENETRE = 200  # lignes d'appel_llm lues par poste
 MISSIONS = 10
+SONDE_DELAI_S = 1  # délai total d'une sonde ; les sondes partent en parallèle
+SONDE_TTL_S = 10  # le bureau recharge chaque seconde : une sonde par agent toutes les 10 s
 ORDRE = {"au_travail": 0, "en_attente": 1, "en_erreur": 2}
 
 
@@ -65,7 +77,37 @@ async def _tour_et_jauge(
         travail.jauge = jauge_jetons(jetons, cat.agents[agent].contexte_max)
 
 
-async def lire_bureau(s: AsyncSession, cat: Catalogue, maintenant: datetime) -> Bureau:
+async def _conteneurs(missions: Missions | None, cat: Catalogue) -> dict[str, ConteneurVue]:
+    """Seuls les agents à `service:` sont sondés, en parallèle, sous un délai total court ; un échec
+    (délai, réponse hors bornes, exception) vaut « ne répond pas ». Aucune erreur ne remonte."""
+    if missions is None:
+        return {}
+    maintenant = missions.horloge()
+    perimes = [
+        n
+        for n, a in cat.agents.items()
+        if a.service
+        and not (n in missions.sondes and maintenant - missions.sondes[n][0] < SONDE_TTL_S)
+    ]
+    rendus = await asyncio.gather(
+        *(missions.sante(cat.agents[n], SONDE_DELAI_S) for n in perimes), return_exceptions=True
+    )
+    for n, r in zip(perimes, rendus, strict=True):
+        missions.sondes[n] = (maintenant, None if isinstance(r, BaseException) else r)
+    vues = {}
+    for n, a in cat.agents.items():
+        if a.service:
+            sante = missions.sondes[n][1]
+            vues[n] = ConteneurVue(
+                repond=sante is not None, version=sante.version if sante else None
+            )
+    return vues
+
+
+async def lire_bureau(
+    s: AsyncSession, cat: Catalogue, maintenant: datetime, missions: Missions | None = None
+) -> Bureau:
+    conteneurs = await _conteneurs(missions, cat)
     debut = debut_du_jour(maintenant)
     agents = list(cat.agents)
     # par agent : (rang d'état, identifiant, travail, filtre des lignes d'appel_llm du travail)
@@ -194,7 +236,14 @@ async def lire_bureau(s: AsyncSession, cat: Catalogue, maintenant: datetime) -> 
             "libre",
         )
         n, jetons = activite.get(a, (0, 0))
-        postes[a] = Poste(nom=a, etat=etat, travaux=travaux, appels_jour=n, jetons_jour=jetons)
+        postes[a] = Poste(
+            nom=a,
+            etat=etat,
+            travaux=travaux,
+            appels_jour=n,
+            jetons_jour=jetons,
+            conteneur=conteneurs.get(a),
+        )
     return Bureau(groupes=[Groupe(nom=n, agents=g) for n, g in rangement(cat)], postes=postes)
 
 
