@@ -858,16 +858,12 @@ class Orchestrateur:
         await ctx.espace.remettre_a_zero()
         r = await self._commande(ctx, "installer")
         if r.code != 0:  # un paquet inventé : l'agent de code corrige, dans la limite des renvois
-            fait = Fait(
-                type="installation", role="code", bloquant=True,
-                texte="installation des dépendances échouée (paquet inventé ?)",
-            )  # fmt: skip
             sortie = r.sortie[-_FIN_SORTIE:]
             if ctx.ex.renvois >= self._reglages.renvois_max:
                 raise _Blocage(f"installation échouée :\n{sortie}")
             return await self._transition(
-                ctx, fait.role, renvois=ctx.ex.renvois + 1, controle_courant=0,
-                remarques=[f"{fait.texte} :\n{sortie}"],
+                ctx, "code", renvois=ctx.ex.renvois + 1, controle_courant=0,
+                remarques=[f"installation des dépendances échouée (paquet inventé ?) :\n{sortie}"],
             )  # fmt: skip
         for nom, fichiers in (("tests_cibles", ctx.ex.fichiers_tests), ("tests", [])):
             r = await self._commande(ctx, nom, fichiers)

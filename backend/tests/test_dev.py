@@ -296,7 +296,6 @@ async def test_installation_echouee_en_verification_bloque(monde):
     monde.lanceur.codes = {CIBLES: [1], "installer": [0, 1, 1, 1]}
     monde.llm.reponses = [*TESTS_OK, *CODE_OK, texte("rien"), texte("rien")]
     pid = await monde.lancer()
-    _ex, tache, _pipeline = await monde.etat(pid)
     ex, tache, _pipeline = await monde.etat(pid)
     assert ex.renvois == 2
     assert tache.resume_blocage.startswith("installation échouée")
@@ -1001,9 +1000,9 @@ async def test_lint_nouveau_bloque(monde_d):
 async def test_faits_bloquants_renvoient_avant_le_challenger(monde_d):
     monde_d.llm.reponses = [
         *TESTS_OK,
-        appel("ecrire", chemin="src/x.py", contenu="x = 1\n"), texte("Fait, les tests passent."),
+        appel("ecrire", chemin="src/x.py", contenu="from x.faux import y\n"), texte("fait"),
         verdict("ok"),
-        texte("rien à dire"),  # le challenger n'est pas appelé à ce passage
+        appel("ecrire", chemin="src/x.py", contenu="x = 1\n"), texte("corrigé"),
         *CONTROLES_OK,
     ]  # fmt: skip
     pid = await monde_d.lancer()
@@ -1017,4 +1016,16 @@ async def test_faits_bloquants_renvoient_avant_le_challenger(monde_d):
         m["content"] or "" for m in challenger["messages"]
     )
     code2 = appels_de(monde_d, "code")[-1]["messages"]
-    assert any("tests passent » sans commande" in (m["content"] or "") for m in code2)
+    assert any("import x.faux introuvable" in (m["content"] or "") for m in code2)
+
+
+async def test_affirmation_prouvee_par_la_verification_ne_renvoie_pas(monde_d):
+    # la phase `verification` vient de faire passer les tests : l'affirmation est vraie
+    monde_d.llm.reponses = [
+        *TESTS_OK,
+        appel("ecrire", chemin="src/x.py", contenu="x = 1\n"), texte("Fait, les tests passent."),
+        *CONTROLES_OK,
+    ]  # fmt: skip
+    pid = await monde_d.lancer()
+    ex, _tache, pipeline = await monde_d.etat(pid)
+    assert (pipeline.etat, ex.renvois) == ("terminee", 0)

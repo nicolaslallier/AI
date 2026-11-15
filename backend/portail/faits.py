@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from portail.db import CommandeLancee, Etape, Message
 from portail.execution import ConfigExecution, correspond
@@ -25,7 +26,11 @@ class Fait(BaseModel):
 _PYTHON = re.compile(r"^\+\s*(?:from\s+(\.*[\w.]+)\s+import|import\s+([\w.]+))")
 _TS = re.compile(r"""^\+.*\bfrom\s+['"](\.{1,2}/[^'"]+)['"]""")
 _EXT_TS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".vue"}
-_RESOLUTIONS_TS = ("", ".ts", ".tsx", ".js", ".vue", "/index.ts")
+_EXT_JS = {".js", ".jsx", ".mjs"}
+_RESOLUTIONS_TS = (
+    "", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".vue",
+    "/index.ts", "/index.tsx", "/index.js", "/index.vue",
+)  # fmt: skip
 
 
 def references_ajoutees(diff: str) -> list[tuple[str, str, str]]:
@@ -46,29 +51,53 @@ def references_ajoutees(diff: str) -> list[tuple[str, str, str]]:
 
 
 def _python_local_existe(racine: Path, module: str) -> bool | None:
-    """None : module tiers (rien à vérifier ici) ; sinon, le module local existe-t-il ?"""
+    """None : non vérifié (module tiers, ou dossier homonyme qui n'est pas un paquet) ;
+    sinon, le module local existe-t-il dans l'une des bases ?"""
     segments = module.split(".")
-    for base in (racine, racine / "backend", racine / "src"):
-        if (base / segments[0]).is_dir() or (base / f"{segments[0]}.py").is_file():
-            chemin = base.joinpath(*segments)
-            # ponytail: un dossier sans __init__.py (paquet espace de noms) compte comme existant
-            return (
-                chemin.with_name(chemin.name + ".py").is_file()
-                or (chemin / "__init__.py").is_file()
-                or chemin.is_dir()
-            )
-    return None
+    bases = [b for b in (racine, racine / "backend", racine / "src") if b.is_dir()]
+    locales = [
+        b
+        for b in bases
+        if (b / segments[0] / "__init__.py").is_file() or (b / f"{segments[0]}.py").is_file()
+    ]
+    if not locales:
+        return None
+    racine_abs = racine.resolve()
+    for base in locales:
+        chemin = base.joinpath(*segments).resolve()
+        if not chemin.is_relative_to(racine_abs):
+            continue
+        # ponytail: un dossier sans __init__.py (paquet espace de noms) compte comme existant
+        if (
+            chemin.with_name(chemin.name + ".py").is_file()
+            or (chemin / "__init__.py").is_file()
+            or chemin.is_dir()
+        ):
+            return True
+    return False
+
+
+def _ts_existe(racine: Path, fichier: str, cible: str) -> bool | None:
+    """None : la référence sort de l'espace de travail (ni fait, ni blocage)."""
+    racine_abs = racine.resolve()
+    parent = (racine / fichier).parent
+    base = Path(os.path.normpath(parent / cible.split("?")[0])).resolve()
+    if not parent.resolve().is_relative_to(racine_abs) or not base.is_relative_to(racine_abs):
+        return None
+    candidats = [str(base)]
+    if base.suffix in _EXT_JS:  # `./a.js` pour un `a.ts` (nodenext)
+        candidats.append(str(base.with_suffix("")))
+    return any(Path(c + ext).is_file() for c in candidats for ext in _RESOLUTIONS_TS)
 
 
 def verifier_references(racine: Path, refs, cfg: ConfigExecution) -> list[Fait]:
-    # ponytail: imports relatifs Python (`from .x`) et `./x.js` pour un `x.ts` non vérifiés
+    # ponytail: imports relatifs Python (`from .x`) non vérifiés
     faits = []
     for fichier, langage, cible in refs:
         if langage == "python":
             existe = None if cible.startswith(".") else _python_local_existe(racine, cible)
         else:
-            base = os.path.normpath((racine / fichier).parent / cible)
-            existe = any(Path(base + ext).is_file() for ext in _RESOLUTIONS_TS)
+            existe = _ts_existe(racine, fichier, cible)
         if existe is False:
             role = "tests" if correspond(fichier, cfg.chemins_tests) else "code"
             faits.append(
@@ -116,7 +145,7 @@ def verifier_affirmations(
     return faits
 
 
-def fait_lint(code: int | None, sortie: str, lint_base_ok: bool | None) -> Fait:
+def fait_lint(sortie: str, lint_base_ok: bool | None) -> Fait:
     """Bloquant seulement si le lint passait sur la base : sinon, une dette existante."""
     fin = sortie[-_SORTIE_MAX:]
     if lint_base_ok:
@@ -135,12 +164,32 @@ def fait_lint(code: int | None, sortie: str, lint_base_ok: bool | None) -> Fait:
 
 
 async def verifier_faits(
-    sessions, pipeline_id, racine, cfg, diff, lint, lint_base_ok
+    sessions: async_sessionmaker[AsyncSession],
+    pipeline_id: int,
+    racine: Path,
+    cfg: ConfigExecution,
+    diff: str,
+    lint: CommandeLancee | None,
+    lint_base_ok: bool | None,
 ) -> list[Fait]:
-    """Références du diff, affirmations des dernières étapes `tests` et `code`, et `lint`
-    (le résultat de la commande, ou None si non déclaré)."""
+    """Références du diff, affirmations des dernières étapes `tests` et `code` (les commandes de
+    la dernière `verification` comptent aussi comme preuve), et `lint` (le résultat de la
+    commande, ou None si non déclaré)."""
     faits = verifier_references(racine, references_ajoutees(diff), cfg)
     async with sessions() as s:
+        verif = await s.scalar(
+            select(Etape.id)
+            .where(Etape.pipeline_id == pipeline_id, Etape.action == "verification")
+            .order_by(Etape.ordre.desc())
+            .limit(1)
+        )
+        preuves_verif = list(
+            await s.scalars(
+                select(CommandeLancee)
+                .where(CommandeLancee.etape_id == verif)
+                .order_by(CommandeLancee.id)
+            )
+        )
         for role in ("tests", "code"):
             etape = await s.scalar(
                 select(Etape.id)
@@ -163,7 +212,7 @@ async def verifier_faits(
                     .order_by(CommandeLancee.id)
                 )
             )
-            faits += verifier_affirmations(message or "", commandes, role)
+            faits += verifier_affirmations(message or "", commandes + preuves_verif, role)
     if lint is not None and lint.code != 0:
-        faits.append(fait_lint(lint.code, lint.sortie, lint_base_ok))
+        faits.append(fait_lint(lint.sortie, lint_base_ok))
     return faits

@@ -82,7 +82,56 @@ def test_affirmation_dont_la_derniere_commande_echoue_bloque():
 
 @pytest.mark.parametrize(
     "texte",
-    ["les tests ne passent pas encore", "tests don't pass yet", "je ne peux pas dire : tests pass"],
+    [
+        "les tests ne passent pas encore",
+        "tests don't pass yet",
+        "je ne peux pas dire : tests pass",
+        "it's not true that all tests pass",
+        "je n'ai pas vu que les tests passent",
+    ],
 )
 def test_negation_ignoree(texte):
     assert verifier_affirmations(texte, [], "code") == []
+
+
+def test_dossier_homonyme_d_un_paquet_tiers_non_verifie(tmp_path):
+    (tmp_path / "alembic" / "versions").mkdir(parents=True)
+    (tmp_path / "alembic" / "env.py").write_text("")
+    refs = [("backend/a.py", "python", "alembic.config")]
+    assert verifier_references(tmp_path, refs, CFG) == []
+
+
+def test_python_local_trouve_dans_une_autre_base(tmp_path):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "__init__.py").write_text("")
+    (tmp_path / "backend" / "tests").mkdir(parents=True)
+    (tmp_path / "backend" / "tests" / "__init__.py").write_text("")
+    (tmp_path / "backend" / "tests" / "helpers.py").write_text("")
+    refs = [("backend/tests/a.py", "python", "tests.helpers")]
+    assert verifier_references(tmp_path, refs, CFG) == []
+
+
+def test_import_ts_resolutions_js_et_index(tmp_path):
+    web = tmp_path / "web"
+    (web / "lib").mkdir(parents=True)
+    (web / "comp").mkdir()
+    (web / "A.jsx").write_text("")
+    (web / "lib" / "index.js").write_text("")
+    (web / "comp" / "index.tsx").write_text("")
+    (web / "a.ts").write_text("")
+    (web / "m.mjs").write_text("")
+    (web / "t.txt").write_text("")
+    cibles = ("./A", "./lib", "./comp", "./a.js", "./m", "./t.txt?raw")
+    assert verifier_references(tmp_path, [("web/b.ts", "ts", c) for c in cibles], CFG) == []
+
+
+def test_import_ts_hors_de_l_espace_ignore(tmp_path):
+    racine = tmp_path / "espace"
+    (racine / "web").mkdir(parents=True)
+    (tmp_path / "secret.txt").write_text("")
+    refs = [
+        ("web/a.ts", "ts", "../../absent"),
+        ("web/a.ts", "ts", "../../secret.txt"),
+        ("../x/a.ts", "ts", "./absent"),
+    ]
+    assert verifier_references(racine, refs, CFG) == []
