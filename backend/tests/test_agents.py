@@ -320,3 +320,16 @@ def test_rangement_sans_groupe_hors_pipeline_et_agent_dans_deux_pipelines():
         }
     )
     assert rangement(cat) == [("x", ["a", "b"]), ("y", ["b"])]
+
+
+def test_rangement_agent_cite_seulement_dans_avis_est_hors_pipeline():
+    from tests.conftest import CATALOGUE_TEST
+
+    cat = CATALOGUE_TEST.model_copy(
+        update={
+            "agents": {k: v for k, v in CATALOGUE_TEST.agents.items() if k in ("a", "b")},
+            "pipelines": {"x": ["a"]},
+            "avis": {"plan": ["b"]},
+        }
+    )
+    assert rangement(cat) == [("x", ["a"]), (None, ["b"])]

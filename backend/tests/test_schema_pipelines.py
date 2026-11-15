@@ -18,10 +18,11 @@ def test_fleches_entre_etapes_qui_se_suivent():
 
 
 def test_hors_pipeline_sans_fleche():
-    sortie = mermaid(catalogue({"x": ["a"]}, "a", "d"))
+    sortie = mermaid(catalogue({"x": ["a"]}, "a", "d", "e"))
     assert 'subgraph g1["hors pipeline"]' in sortie
     assert 'g1_d["d"]' in sortie
-    assert not [ligne for ligne in sortie.splitlines() if "-->" in ligne and "g1_d" in ligne]
+    assert 'g1_e["e"]' in sortie
+    assert not [ligne for ligne in sortie.splitlines() if "-->" in ligne and "g1_" in ligne]
 
 
 def test_agent_dans_deux_pipelines_deux_noeuds():
@@ -50,3 +51,8 @@ def test_readme_a_jour():
     assert attendu == readme, (
         "README périmé : lancer `cd backend && uv run python -m portail.schema_pipelines`"
     )
+
+
+def test_remplacer_refuse_un_marqueur_en_double():
+    with pytest.raises(ValueError):
+        remplacer(f"{DEBUT}\nx\n{FIN}\n{DEBUT}\ny\n{FIN}\n", "z")

@@ -23,8 +23,8 @@ def mermaid(cat: Catalogue) -> str:
 
 def remplacer(texte: str, bloc: str) -> str:
     debut, fin = texte.find(DEBUT), texte.find(FIN)
-    if debut < 0 or fin < debut:
-        raise ValueError("marqueurs schema-pipelines absents ou dans le mauvais ordre")
+    if texte.count(DEBUT) != 1 or texte.count(FIN) != 1 or fin < debut:
+        raise ValueError("il faut un seul marqueur schema-pipelines de début puis un de fin")
     return texte[: debut + len(DEBUT)] + "\n" + bloc + "\n" + texte[fin:]
 
 
