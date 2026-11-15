@@ -17,23 +17,28 @@ from typing import Annotated, Literal
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
-from portail import journal
+from portail import journal, metriques
 from portail.agents import Agent, Catalogue, CatalogueInvalide
 from portail.boucle import (
     _IGNORE,
     _MAL_FORMES_MAX,
     _MAX_APPELS_PAR_TOUR,
     ErreurOutils,
+    ResultatBoucle,
     _libelle,
     _outil_mesure,
+    boucle_outils,
 )
 from portail.llm import ErreurLLM, FiltreReflexion, retirer_reflexion
 
 logger = logging.getLogger(__name__)
 
 CONTRAT = "v1"
+LIGNE_MAX = 4_000_000  # octets, une ligne de la réponse d'un agent
+LIGNES_MAX = 100_000  # lignes de la réponse d'un agent
+SANTE_MAX = 4096  # octets
 
 
 class _Forbid(BaseModel):
@@ -226,9 +231,145 @@ class Missions:
         if m in self._en_cours:
             self._en_cours.remove(m)
         taches = list(m.en_vol)
+        if m.tache is not None:  # le flux vers l'agent : sa connexion se coupe, l'agent annule
+            taches.append(m.tache)
         for t in taches:
             t.cancel()
         await asyncio.gather(*taches, return_exceptions=True)
+
+    async def sante(self, agent: Agent, delai_s: float = 2) -> Sante | None:
+        """`None` si l'agent est injoignable, trop lent, répond autre chose que 200 ou du n'importe quoi."""
+        try:
+            async with (
+                httpx.AsyncClient(transport=self.transport, timeout=delai_s) as client,
+                client.stream("GET", f"{agent.service}/sante") as r,
+            ):
+                if r.status_code != 200:
+                    return None
+                corps = b""
+                async for morceau in r.aiter_bytes():
+                    corps += morceau
+                    if len(corps) > SANTE_MAX:
+                        return None
+            return Sante.model_validate_json(corps)
+        except (httpx.HTTPError, ValueError):
+            return None
+
+    async def faire_tourner(
+        self,
+        llm,
+        agent: Agent,
+        messages: list[dict],
+        outils,
+        sur_appel: Callable[[str, str], Awaitable[None]],
+        *,
+        sur_texte: Callable[[str], Awaitable[None]] | None = None,
+        response_format: dict | None = None,
+    ) -> ResultatBoucle:
+        """Une mission dans le conteneur de l'agent. L'agent n'est pas fiable : seules les lignes
+        du contrat sont lues, et l'erreur que le portail a vue passe avant celle de l'agent."""
+        s = await self.sante(agent)
+        if s is None:
+            raise ErreurMission(f"agent « {agent.nom} » injoignable")
+        if s.contrat != CONTRAT:
+            raise ErreurMission(f"agent « {agent.nom} » : contrat {s.contrat} incompatible")
+        secret = self.secrets.get(agent.nom)
+        if secret is None:
+            raise ErreurMission(f"agent « {agent.nom} » : secret absent")
+        m, fin, echec = None, None, None
+        try:
+            m = self.ouvrir(llm, agent, outils, sur_appel, s.version)
+            try:
+                demande = DemandeMission(
+                    contrat=CONTRAT,
+                    mission=m.id,
+                    agent=agent.nom,
+                    jeton=m.jeton,
+                    messages=[MessageLLM.model_validate(x) for x in messages],
+                    outils=m.schemas,
+                    parametres=ParametresAgent(
+                        modele=agent.modele,
+                        temperature=agent.temperature,
+                        contexte_max=agent.contexte_max,
+                        tours_max=agent.tours_max,
+                        produit=agent.produit,
+                        role=agent.role,
+                    ),
+                    response_format=response_format,
+                    flux=sur_texte is not None and not m.schemas,
+                )
+            except ValidationError:  # le détail reprendrait le contenu des messages
+                raise ErreurMission(
+                    f"agent « {agent.nom} » : messages refusés par le contrat"
+                ) from None
+            m.tache = asyncio.ensure_future(self._lire(agent, secret, demande, sur_texte))
+            try:
+                async with asyncio.timeout(max(m.echeance - self.horloge(), 0)):
+                    await asyncio.wait({m.tache})
+            except TimeoutError:
+                echec = ErreurMission("durée de mission dépassée")
+            else:
+                if m.tache.cancelled():  # le portail a coupé le flux : `m.erreur` dira pourquoi
+                    echec = ErreurMission(f"agent « {agent.nom} » : mission interrompue")
+                else:
+                    echec = m.tache.exception()
+                    fin = None if echec else m.tache.result()
+        finally:
+            if m is not None:
+                await self.fermer(m)
+                if m.appels_modele:
+                    try:
+                        metriques.TOURS_MISSION.labels(agent=agent.nom).observe(m.appels_modele)
+                    except Exception:  # noqa: BLE001 (une métrique ne masque ni l'erreur ni l'annulation)
+                        journal.erreur(logger, "métrique des tours non enregistrée")
+        if m.erreur is not None:  # ce que le portail a vu prime sur ce que l'agent raconte
+            raise m.erreur
+        if echec is not None:
+            raise echec
+        messages[:] = [x.model_dump(exclude_none=True) for x in fin.messages]
+        return ResultatBoucle(
+            texte=fin.texte, limite_atteinte=m.limite_atteinte or fin.limite_atteinte
+        )
+
+    async def _lire(
+        self, agent: Agent, secret: str, demande: DemandeMission, sur_texte
+    ) -> LigneFin:
+        interrompue = ErreurMission(f"agent « {agent.nom} » : mission interrompue")
+        lignes = TypeAdapter(LigneMission)
+        try:
+            async with (
+                httpx.AsyncClient(
+                    transport=self.transport, timeout=httpx.Timeout(self.duree_s, connect=10)
+                ) as client,
+                client.stream(
+                    "POST",
+                    f"{agent.service}/missions",
+                    content=demande.model_dump_json(),  # le jeton est dans le corps, jamais journalisé
+                    headers={
+                        "Authorization": f"Bearer {secret}",
+                        "Content-Type": "application/json",
+                    },
+                ) as r,
+            ):
+                if r.status_code != 200:
+                    raise ErreurMission(
+                        f"agent « {agent.nom} » a refusé la mission ({r.status_code})"
+                    )
+                async for brut in _lignes_bornees(r):
+                    try:
+                        ligne = lignes.validate_json(brut)
+                    except ValidationError:  # le détail reprendrait la ligne de l'agent
+                        raise interrompue from None
+                    if isinstance(ligne, LigneTexte):
+                        if sur_texte is not None:
+                            await sur_texte(ligne.texte)
+                    elif isinstance(ligne, LigneFin):
+                        return ligne
+                    else:
+                        raise ErreurMission(f"agent « {agent.nom} » : {ligne.erreur[:300]}")
+        except httpx.HTTPError:
+            raise interrompue from None
+        raise interrompue  # flux fini sans ligne `fin`
 
     async def en_vol[T](self, m: Mission, attente: Awaitable[T]) -> T:
         """Exécute un appel comme tâche de la mission : annulé à sa fermeture, refusé après."""
@@ -246,6 +387,53 @@ class Missions:
             if m.fermee and asyncio.current_task().cancelling() == 0:
                 raise ErreurMission("mission arrêtée") from None
             raise
+
+
+async def _lignes_bornees(reponse: httpx.Response):
+    """Les lignes non vides de la réponse d'un agent, en nombre et en taille bornés."""
+    tampon, n = b"", 0
+    async for morceau in reponse.aiter_bytes():
+        tampon += morceau
+        while (i := tampon.find(b"\n")) >= 0:
+            ligne, tampon = tampon[:i], tampon[i + 1 :]
+            n += 1
+            if n > LIGNES_MAX or len(ligne) > LIGNE_MAX:
+                raise ErreurMission("mission interrompue")
+            if ligne.strip():
+                yield ligne
+        if len(tampon) > LIGNE_MAX:
+            raise ErreurMission("mission interrompue")
+    if tampon.strip():
+        yield tampon
+
+
+async def _rien(libelle: str, resultat: str) -> None:
+    return None
+
+
+async def tourner(llm, missions: Missions | None, agent: Agent, messages, outils, sur_appel):
+    """`boucle_outils` dans le portail, ou une mission dans le conteneur si l'agent a un `service:`."""
+    if agent.service is None:
+        return await boucle_outils(llm, agent, messages, outils, sur_appel)
+    if missions is None:
+        raise ErreurMission("registre des missions absent")
+    return await missions.faire_tourner(llm, agent, messages, outils, sur_appel)
+
+
+async def completer(llm, missions: Missions | None, agent: Agent, messages, response_format) -> str:
+    """Une réponse structurée sans outils ; avec un `service:`, c'est une nouvelle mission."""
+    if agent.service is None:
+        reponse = await llm.completer(
+            agent.modele, messages, agent.temperature, response_format=response_format
+        )
+        return retirer_reflexion(reponse.get("content") or "")
+    if missions is None:
+        raise ErreurMission("registre des missions absent")
+    # copie : l'historique de l'appelant est le sien, comme avec l'appel direct
+    r = await missions.faire_tourner(
+        llm, agent, list(messages), None, _rien, response_format=response_format
+    )
+    return r.texte
 
 
 def lire_secrets(catalogue: Catalogue, environ: Mapping[str, str]) -> dict[str, str]:
