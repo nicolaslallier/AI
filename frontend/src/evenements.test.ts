@@ -34,6 +34,13 @@ it('kanban appelle kanban(projetId)', () => {
   expect(kanban).toHaveBeenNthCalledWith(2, null)
 })
 
+it('bureau appelle bureau()', () => {
+  const bureau = vi.fn()
+  ecouterEvenements({ bureau })
+  FauxEventSource.derniere.emettre('bureau')
+  expect(bureau).toHaveBeenCalledOnce()
+})
+
 it('pipelines appelle pipelines()', () => {
   const pipelines = vi.fn()
   ecouterEvenements({ pipelines })

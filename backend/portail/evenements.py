@@ -1,5 +1,5 @@
 """Bus d'événements en mémoire : les écritures en base y déposent des signaux d'invalidation,
-diffusés en SSE aux vues kanban et pipelines (le sondage du front reste le filet de sécurité)."""
+diffusés en SSE aux vues kanban, pipelines et bureau (le sondage du front reste le filet de sécurité)."""
 
 import asyncio
 import logging
@@ -10,11 +10,21 @@ from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from portail.chat import _sse
-from portail.db import Etape, ExecutionDev, Pipeline, Proposition, Tache
+from portail.db import (
+    ActionConversation,
+    AppelLLM,
+    Avis,
+    Conversation,
+    Etape,
+    ExecutionDev,
+    Pipeline,
+    Proposition,
+    Tache,
+)
 
 logger = logging.getLogger(__name__)
 
-Signal = tuple[Literal["kanban", "pipelines"], int | None]
+Signal = tuple[Literal["kanban", "pipelines", "bureau"], int | None]
 
 
 class Bus:
@@ -40,6 +50,8 @@ class Bus:
 bus = Bus()
 
 _PIPELINES = (Pipeline, Etape, ExecutionDev)
+# ce que le bureau affiche et que les signaux ci-dessus ne couvrent pas ; le signal ne porte rien
+_BUREAU = (Conversation, ActionConversation, Avis, AppelLLM)
 
 
 def _signal(objet: object) -> Signal | None:
@@ -47,6 +59,8 @@ def _signal(objet: object) -> Signal | None:
         return ("kanban", objet.projet_id)
     if isinstance(objet, _PIPELINES):
         return ("pipelines", None)
+    if isinstance(objet, _BUREAU):
+        return ("bureau", None)
     return None
 
 
@@ -67,6 +81,8 @@ def _avant_execution(etat) -> None:
         s: Signal | None = ("kanban", None)
     elif classe in _PIPELINES:
         s = ("pipelines", None)
+    elif classe in _BUREAU:
+        s = ("bureau", None)
     else:
         return
     etat.session.info.setdefault("signaux", set()).add(s)

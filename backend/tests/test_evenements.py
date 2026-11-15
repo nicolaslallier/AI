@@ -6,7 +6,7 @@ from sqlalchemy import update
 
 from portail.api import create_app
 from portail.config import Reglages
-from portail.db import Pipeline
+from portail.db import ActionConversation, AppelLLM, Pipeline
 from portail.evenements import Bus, bus, flux
 from tests.conftest import CATALOGUE_TEST, URL, FauxLLM
 
@@ -50,6 +50,46 @@ async def test_update_en_masse_pipeline_signale(sessions):
         assert _vider(file) == [("pipelines", None)]
     finally:
         bus.desabonner(file)
+
+
+async def test_conversation_signale_bureau(client):
+    file = bus.abonner()
+    try:
+        assert (await client.post("/api/conversations")).status_code == 201
+        assert ("bureau", None) in _vider(file)
+    finally:
+        bus.desabonner(file)
+
+
+async def test_appel_llm_signale_bureau(sessions):
+    file = bus.abonner()
+    try:
+        async with sessions() as s, s.begin():
+            s.add(AppelLLM(agent="a", modele="m", duree_ms=1, issue="ok"))
+        assert _vider(file) == [("bureau", None)]
+    finally:
+        bus.desabonner(file)
+
+
+async def test_mise_a_jour_en_masse_signale_bureau(sessions):
+    file = bus.abonner()
+    try:
+        async with sessions() as s:
+            await s.execute(update(ActionConversation).values(etat="perimee"))
+            await s.commit()
+        assert _vider(file) == [("bureau", None)]
+    finally:
+        bus.desabonner(file)
+
+
+async def test_flux_relaye_bureau():
+    b = Bus()
+    it = flux(b)
+    tache = asyncio.ensure_future(anext(it))
+    await asyncio.sleep(0)
+    b.publier(("bureau", None))
+    assert await tache == "event: bureau\ndata: {}\n\n"
+    await it.aclose()
 
 
 async def test_flux_format():
