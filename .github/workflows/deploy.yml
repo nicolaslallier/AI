@@ -188,6 +188,7 @@ jobs:
           PORTAINER_API_KEY= scripts/vault-render-env.sh
           # Le tag que le job image vient de pousser (metadata-action : sha-<7 car.>).
           printf 'IMAGE_TAG=sha-%s\n' "${GITHUB_SHA_FULL::7}" >> "$PORTAIL_STACK_ENV"
+          printf 'DEPLOYE_LE=%s\n' "$(date +%s)" >> "$PORTAIL_STACK_ENV"
           # Digest de l'image d'exécution que le job image vient de pousser.
           printf 'EXECUTION_DIGEST=%s\n' "$EXECUTION_DIGEST" >> "$PORTAIL_STACK_ENV"
           BAO_TOKEN= scripts/portainer-stack.sh up

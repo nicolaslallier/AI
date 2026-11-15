@@ -310,3 +310,13 @@ class FauxGitHub:
 @pytest.fixture
 def faux_github():
     return FauxGitHub()
+
+
+# --- métriques ---------------------------------------------------------
+
+
+def valeur(nom: str, **etiquettes: str) -> float:
+    """Valeur courante d'un échantillon du registre ; les tests comparent avant et après."""
+    from prometheus_client import REGISTRY
+
+    return REGISTRY.get_sample_value(nom, etiquettes) or 0.0

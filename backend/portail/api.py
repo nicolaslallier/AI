@@ -7,15 +7,16 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from portail import journal, resume
+from portail import journal, metriques, resume
 from portail.agents import Catalogue, charger_catalogue
 from portail.arbitre import Arbitre, LLMArbitre
 from portail.audit import auteur_de, inscrire
@@ -377,6 +378,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.reglages = r
+        metriques.initialiser(r)
         app.state.catalogue = catalogue or charger_catalogue(r.agents_fichier)
         app.state.llm = llm or ClientLLM(r.litellm_url, r.litellm_cle)
         moteur = creer_moteur(r.database_url)
@@ -850,6 +852,10 @@ def create_app(
     @app.get("/api/evenements")
     async def evenements():
         return _flux(flux_evenements(bus))
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics():
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     if r.static_dir:
         racine = r.static_dir.resolve()

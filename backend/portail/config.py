@@ -32,6 +32,8 @@ class Reglages(BaseSettings):
     url_publique: str = ""
     resume_heure: str = "07:00"  # HH:MM à Toronto ; "" désactive le résumé du matin
     delai_commentaires_s: int = 600
+    version: str = ""  # PORTAIL_VERSION : tag de l'image déployée
+    deploye_le: int = 0  # PORTAIL_DEPLOYE_LE : secondes Unix du déploiement
 
     @field_validator("resume_heure")
     @classmethod

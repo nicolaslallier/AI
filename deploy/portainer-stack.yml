@@ -2,6 +2,8 @@ services:
   portail:
     image: ghcr.io/nicolaslallier/ai-portail:${IMAGE_TAG:-latest}
     environment:
+      PORTAIL_VERSION: ${IMAGE_TAG:-latest}
+      PORTAIL_DEPLOYE_LE: ${DEPLOYE_LE:-0}
       PORTAIL_DATABASE_URL: postgresql+psycopg://portail:${PORTAIL_DB_PASSWORD:?}@postgres:5432/portail
       PORTAIL_LITELLM_URL: http://litellm:4000
       PORTAIL_LITELLM_CLE: ${PORTAIL_LITELLM_CLE:?}
