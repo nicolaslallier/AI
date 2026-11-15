@@ -11,6 +11,7 @@ from test_dev import BRANCHE, CATALOGUE, CIBLES, CODE_OK, CONFIG, TESTS_OK, Mond
 
 from portail.api import create_app
 from portail.db import (
+    Audit,
     Etape,
     ExecutionDev,
     Pipeline,
@@ -442,6 +443,24 @@ async def test_reprise_passe_avant_les_taches_pretes(tmp_path, sessions):
         async with sessions() as s:
             assert (await s.get(Tache, 1)).colonne == "prete"
             assert (await s.get(Tache, t2)).colonne == "en_cours"
+    finally:
+        await _arreter(m)
+
+
+async def test_reprise_lancee_inscrit_l_audit(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    t2 = await _en_revue(sessions, 1, 2000)
+    pid = await _reprise(m, t2)
+    m.llm.reponses = [asyncio.Event()]
+    try:
+        await Ordonnanceur(sessions, m.orch, 1).tour()
+        async with sessions() as s:
+            lignes = (
+                await s.scalars(select(Audit).where(Audit.action == "pipeline.reprendre"))
+            ).all()
+        assert [(x.auteur, x.objet, x.objet_id) for x in lignes] == [
+            ("ordonnanceur", "pipeline", pid)
+        ]
     finally:
         await _arreter(m)
 

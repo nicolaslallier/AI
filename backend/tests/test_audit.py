@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from portail.audit import auteur_de, inscrire
-from portail.db import ActionConversation, Audit, Conversation
+from portail.db import ActionConversation, Audit, Conversation, Tache
 
 MOI = {"X-Auth-Request-Email": "n@exemple.net"}
 
@@ -145,3 +145,20 @@ async def test_audit_en_echec_ne_casse_pas_la_route(client, monkeypatch, caplog)
         r = await client.post("/api/conversations")
     assert r.status_code == 201  # l'action a eu lieu : pas de 500, pas de rejeu
     assert "SQLAlchemyError" in caplog.text and secret not in caplog.text
+
+
+async def test_audit_en_echec_la_route_relit_apres(client, sessions, monkeypatch):
+    # `annuler_tache` relit la tâche après `_tracer` : si le commit de l'audit échoue, la session
+    # doit avoir été remise d'aplomb, sinon PendingRollbackError et 500 alors que l'action a eu lieu
+    pid = (await client.post("/api/projets", json={"nom": "P"})).json()["id"]
+    tid = (await client.post(f"/api/projets/{pid}/taches", json={"titre": "T"})).json()["id"]
+    p = (await client.post("/api/pipelines", json={"projet_id": pid, "type": "spec"})).json()
+    async with sessions() as s:
+        x = await s.get(Tache, tid)
+        x.verrou, x.colonne = p["id"], "en_cours"
+        await s.commit()
+    vrai = inscrire
+    monkeypatch.setattr("portail.api.inscrire", lambda s, _a, *r: vrai(s, None, *r))  # NOT NULL
+    r = await client.post(f"/api/taches/{tid}/annuler")
+    assert r.status_code == 200
+    assert (r.json()["verrou"], r.json()["colonne"]) == (None, "a_faire")
