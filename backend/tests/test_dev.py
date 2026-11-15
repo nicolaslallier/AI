@@ -529,6 +529,8 @@ async def test_renvoi_aux_tests_rouge_sur_les_seuls_fichiers_du_renvoi(monde):
     assert lances == [
         CIBLES, CIBLES, "pytest tests/test_y.py", "pytest tests/test_x.py tests/test_y.py"
     ]  # fmt: skip
+    code2 = monde.llm.appels[-2]["messages"]  # l'agent de code après le rouge du renvoi
+    assert any("tester y" in (m["content"] or "") for m in code2)
 
 
 async def test_trois_renvois_ouvre_quand_meme_avec_remarques(monde):
@@ -772,7 +774,7 @@ async def test_compteur_partage(monde_d):
     pid = await monde_d.lancer()
     ex, _tache, pipeline = await monde_d.etat(pid)
     assert pipeline.etat == "terminee" and ex.renvois == 2
-    assert ex.remarques == ["c toujours faux"]
+    assert ex.remarques == ["challenger : c toujours faux"]
     noms = await etapes_apres(monde_d, "securite")  # après le renvoi de la sécurité
     assert noms[-4:] == ["challenger", "securite", "doc", "pr"]
     corps = monde_d.github.prs[1]["corps"]
@@ -884,3 +886,58 @@ async def test_relance_en_controles_reprend_au_bon_index(monde_d):
         "challenger", "securite", "doc", "pr"
     ]  # fmt: skip
     assert len(appels_de(monde_d, "revue")) == 2  # rien de rejoué
+
+
+async def test_renvoi_aux_tests_deja_verts_aboutit(monde):
+    monde.lanceur.codes = {CIBLES: [1]}  # le nouveau test passe : le code gère déjà le cas
+    monde.llm.reponses = [
+        *TESTS_OK,
+        *CODE_OK,
+        verdict("renvoyer_tests", "tester le cas y"),
+        appel("ecrire", chemin="tests/test_y.py", contenu="def test_y(): ..."),
+        texte("ajouté"),
+        verdict("ok"),
+    ]
+    pid = await monde.lancer()
+    ex, tache, pipeline = await monde.etat(pid)
+    assert (pipeline.etat, tache.colonne) == ("terminee", "en_revue") and monde.github.prs
+    assert (ex.renvois, ex.fichiers_rouge) == (1, [])
+    assert await etapes_apres(monde, "revue") == ["tests", "rouge", "verification", "revue", "pr"]
+
+
+async def test_regles_du_challenger_lues_a_la_base(monde_d):
+    amont = monde_d.origine.parent / "amont"
+    (amont / "AGENTS.md").write_text("Règle de base.\n")
+    git(amont, "add", "-A")
+    git(amont, "commit", "-m", "règles")
+    git(amont, "push", "origin", "main")
+    monde_d.llm.reponses = [
+        *TESTS_OK,
+        appel("ecrire", chemin="AGENTS.md", contenu="Règle de l'auteur.\n"),
+        *CODE_OK,
+        *CONTROLES_OK,
+    ]
+    await monde_d.lancer()
+    (challenger,) = appels_de(monde_d, "challenger")
+    annexes = "\n".join(m["content"] or "" for m in challenger["messages"])
+    assert "Règles du dépôt (AGENTS.md) :\n\nRègle de base." in annexes
+    assert "Règles du dépôt (AGENTS.md) :\n\nRègle de l'auteur." not in annexes
+
+
+def verdict_note(decision, note):
+    return texte(json.dumps({"decision": decision, "remarques": ["r"], "notes": [note]}))
+
+
+async def test_notes_d_un_controle_rejoue_dedoublonnees(monde):
+    monde.lanceur.codes = {CIBLES: [1]}
+    monde.llm.reponses = [
+        *TESTS_OK,
+        *CODE_OK,
+        verdict_note("renvoyer_code", "nommage"),
+        texte("corrigé"),
+        verdict_note("ok", "nommage"),
+    ]
+    pid = await monde.lancer()
+    ex, _tache, _pipeline = await monde.etat(pid)
+    assert ex.notes == [{"agent": "revue", "texte": "nommage"}]
+    assert monde.github.prs[1]["corps"].count("nommage") == 1

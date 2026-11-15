@@ -570,6 +570,9 @@ async def test_reprise_passe_par_tous_les_controles(monde_d):
         m["content"] or "" for m in appels_de(monde_d, "challenger")[-1]["messages"]
     )
     assert "corrige a" in annexes and "a = 2" in annexes
+    # sans commentaire `doc`, l'agent de doc garde la consigne générale
+    doc = "\n".join(m["content"] or "" for m in appels_de(monde_d, "doc")[-1]["messages"])
+    assert "Mets à jour la documentation" in doc and "commentaires de Nicolas sur la doc" not in doc
 
 
 async def test_reprise_commentaire_doc_passe_par_l_agent_doc(monde_d):

@@ -15,7 +15,7 @@ import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from posixpath import basename
 from typing import Literal
 
@@ -52,7 +52,7 @@ from portail.lanceur import ErreurLanceur, Resultat
 from portail.llm import ErreurLLM, retirer_reflexion
 from portail.moteur import Refus
 from portail.notifications import Notifieur, lien_absolu, raison_courte
-from portail.outils import OutilsDepot, OutilsEspace, apercu, empreinte
+from portail.outils import OutilsDepot, OutilsEspace, _secret_chemin, apercu, empreinte
 from portail.protections import (
     COURRIEL_CODE,
     COURRIEL_DOC,
@@ -77,6 +77,7 @@ MANIFESTE_A_NICOLAS = (
 )
 _TEXTE_MAX = 20_000
 _FIN_SORTIE = 3000
+_REGLES_MAX = 50_000  # par fichier de règles donné au challenger
 
 
 class _Blocage(Exception):
@@ -799,6 +800,10 @@ class Orchestrateur:
             raise _Blocage(f"commande de tests invalide :\n{r.sortie[-_FIN_SORTIE:]}")
         if r.code == 5:
             raise _Blocage("aucun test écrit (aucun test collecté)")
+        # `fichiers_rouge` n'est rempli que par une passe de tests après un renvoi
+        renvoi = bool(ctx.ex.fichiers_rouge)
+        if r.code == 0 and renvoi:  # test d'un cas déjà géré : attendu, le code existe
+            return await self._transition(ctx, "verification", fichiers_rouge=[])
         if r.code == 0:
             async with self._sessions() as s:
                 deja = await s.scalar(
@@ -811,8 +816,10 @@ class Orchestrateur:
             if deja:
                 raise _Blocage(PASSENT_DEJA)
             return await self._transition(ctx, "tests", PASSENT_DEJA, remarques=[PASSENT_DEJA])
+        # les remarques du renvoi vont jusqu'à l'agent de code ; `PASSENT_DEJA` est effacé
+        remarques = ctx.ex.remarques if renvoi else []
         return await self._transition(
-            ctx, "code", sortie_rouge=r.sortie, remarques=[], fichiers_rouge=[]
+            ctx, "code", sortie_rouge=r.sortie, remarques=remarques, fichiers_rouge=[]
         )
 
     async def _code(self, ctx: _Ctx) -> str:
@@ -878,9 +885,12 @@ class Orchestrateur:
                     categories = {"tests", "code", "doc", "reponse"}
                     annexes.append(await self._annexe_commentaires(ctx, categories))
                 if nom == "challenger":
-                    annexes += self._regles(ctx)
+                    annexes += await self._regles(ctx)
                 verdict = await self._verdict(ctx, nom, annexes)
-                notes += [{"agent": nom, "texte": n} for n in verdict.notes]
+                # un contrôle rejoué après un renvoi ne répète pas ses notes
+                notes += [
+                    n for n in ({"agent": nom, "texte": t} for t in verdict.notes) if n not in notes
+                ]
                 if verdict.decision != "ok":
                     if ctx.ex.renvois < self._reglages.renvois_max:
                         suivante = "tests" if verdict.decision == "renvoyer_tests" else "code"
@@ -888,7 +898,7 @@ class Orchestrateur:
                             ctx, suivante, renvois=ctx.ex.renvois + 1,
                             remarques=verdict.remarques, controle_courant=0, notes=notes,
                         )  # fmt: skip
-                    remarques += verdict.remarques or [
+                    remarques += [f"{nom} : {r}" for r in verdict.remarques] or [
                         f"{nom} : {verdict.decision} après le dernier renvoi"
                     ]
             # écrit avant le contrôle suivant : une relance repart d'ici, sans rien rejouer
@@ -925,7 +935,7 @@ class Orchestrateur:
         """L'agent de doc écrit dans `chemins_doc` ; tout le reste est annulé. Jamais de renvoi."""
         reprise = ctx.ex.mode == "reprise"
         consigne = "Mets à jour la documentation de cette tâche."
-        if reprise:
+        if reprise and any(c.tri == "doc" for c in await self._commentaires(ctx)):
             annexes.append(await self._annexe_commentaires(ctx, {"doc"}))
             consigne = "Traite les commentaires de Nicolas sur la documentation."
         outils = OutilsEspace(ctx.racine, "doc", ctx.cfg, self._lancer_controle(ctx))
@@ -941,13 +951,22 @@ class Orchestrateur:
         titre = f"docs: {ctx.tache.titre}" + (" (reprise)" if reprise else "")
         await ctx.espace.commiter(*AUTEUR_DOC, titre)  # vide : rien
 
-    def _regles(self, ctx: _Ctx) -> list[str]:
-        """Règles du dépôt données au challenger : CLAUDE.md, AGENTS.md et `cfg.regles`."""
-        lecteur = OutilsDepot(ctx.racine)  # confiné à l'espace, secrets refusés
+    async def _regles(self, ctx: _Ctx) -> list[str]:
+        """Règles du dépôt données au challenger : CLAUDE.md, AGENTS.md et `cfg.regles`, lues à
+        la base de la branche : un agent ne réécrit jamais les règles qui le jugent."""
         blocs = []
         for chemin in dict.fromkeys((*REGLES_DU_DEPOT, ctx.cfg.regles)):
-            if chemin and not (texte := lecteur.lire(chemin)).startswith("erreur : "):
-                blocs.append(f"Règles du dépôt ({chemin}) :\n\n{texte}")
+            if not chemin:
+                continue
+            parties = PurePosixPath(chemin).parts
+            if chemin.startswith(("/", ":")) or ".." in parties or _secret_chemin(parties):
+                continue  # jamais hors du dépôt, jamais un secret
+            try:
+                texte = await ctx.espace.fichier_a(ctx.ex.base_sha, chemin)
+            except ErreurDepot:  # un dossier, un chemin refusé par git : pas de règles ici
+                texte = None
+            if texte is not None:
+                blocs.append(f"Règles du dépôt ({chemin}) :\n\n{texte[:_REGLES_MAX]}")
         return blocs
 
     async def _pr(self, ctx: _Ctx) -> str:
