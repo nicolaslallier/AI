@@ -599,6 +599,22 @@ async def test_reprise_regles_du_challenger_lues_a_la_base(monde_d):
     assert "Règle de l'auteur." not in annexes
 
 
+async def test_reprise_sans_base_fusionnee_bloque_au_lieu_de_juger_sans_regles(
+    monde_d, monkeypatch
+):
+    pousser_sur_main(monde_d, "CLAUDE.md", "Règle de base.\n")
+    monkeypatch.setattr("portail.dev.BASE_FUSIONNEE", "refs/portail/absente")
+    monde_d.llm.reponses = [
+        tri((1, "code", "corrige a")),
+        modifier("src/a.py", "a = 2\n"), texte("fait"),
+        *CONTROLES_OK,
+    ]  # fmt: skip
+    pid = await reprendre(monde_d, [commentaire("revue", 10)])
+    _ex, _tache, pipeline = await monde_d.etat(pid)
+    assert pipeline.etat == "echouee"
+    assert "base fusionnée absente : relancer la reprise" in monde_d.github.commentaires[0][1]
+
+
 async def test_reprise_commentaire_doc_passe_par_l_agent_doc(monde_d):
     monde_d.llm.reponses = [
         tri((1, "doc", "documente l'équipe")),

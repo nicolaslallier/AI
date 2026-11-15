@@ -1008,6 +1008,11 @@ class Orchestrateur:
         la base de la branche : un agent ne réécrit jamais les règles qui le jugent. En reprise,
         `base_sha` est la pointe de la PR (commits des agents) : on lit la base fusionnée."""
         rev = BASE_FUSIONNEE if ctx.ex.mode == "reprise" else ctx.ex.base_sha
+        if ctx.ex.mode == "reprise":
+            try:  # sans la base, le challenger jugerait sans règles : échec fermé
+                await ctx.espace._git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
+            except ErreurDepot:
+                raise _Blocage("base fusionnée absente : relancer la reprise") from None
         blocs = []
         for chemin in dict.fromkeys((*REGLES_DU_DEPOT, ctx.cfg.regles)):
             if not chemin:
