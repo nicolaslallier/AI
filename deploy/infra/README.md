@@ -74,7 +74,7 @@ Sans cette PR, `/metrics` répond sur `infra-net` sans être lu : rien ne casse.
    section « Agents en conteneur » du README ; aucun agent ne migre dans ce lot).
 
 5. Avant de poser le premier `service:` :
-   - Depuis un conteneur de test attaché à `portail_portail-agents`, `nc -zv 172.31.250.1 22`
+   - Depuis un conteneur de test attaché à `portail_portail-agents`, `nc -zv 10.250.250.1 22`
      (et chaque autre port ouvert de l'hôte) doit échouer : un réseau `internal: true` peut
      garder l'adresse de passerelle sur le pont de l'hôte, donc exposer ses services. Si c'est
      ouvert : `driver_opts: {com.docker.network.bridge.inhibit_ipv4: "true"}` sur
@@ -86,4 +86,4 @@ Les services `agent-<nom>` sont tous sur le réseau `portail-agents` (interne) :
 portail, pas l'Infra, ni la base, ni LiteLLM, ni le lanceur, ni Internet. Ils partagent ce
 réseau entre eux ; seul le secret propre à chaque agent les empêche de se parler utilement.
 
-Le sous-réseau `172.31.250.0/24` de `portail-agents` est réservé ; s'il entre en collision, le changer aux deux endroits de `deploy/portainer-stack.yml` (`ipam` et `PORTAIL_RESEAU_AGENTS`) et dans le README principal.
+Le sous-réseau `10.250.250.0/24` de `portail-agents` est réservé ; s'il entre en collision, le changer aux deux endroits de `deploy/portainer-stack.yml` (`ipam` et `PORTAIL_RESEAU_AGENTS`) et dans le README principal.
