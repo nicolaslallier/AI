@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from portail.agents import Catalogue, charger_catalogue
+from portail.arbitre import Arbitre, LLMArbitre
 from portail.chat import Diffuseur, ServiceChat, annexes
 from portail.config import Reglages
 from portail.contexte import construire, jauge
@@ -341,9 +342,11 @@ def create_app(
             await depots.nettoyer(garder=en_attente)
         except ErreurDepot:
             logger.exception("nettoyage des arbres de travail incomplet")
+        arbitre = Arbitre()
+        interactif = LLMArbitre(app.state.llm, arbitre, "interactif")
         app.state.diffuseur = Diffuseur()
         app.state.chat = ServiceChat(
-            app.state.sessions, app.state.catalogue, app.state.llm, app.state.diffuseur, depots
+            app.state.sessions, app.state.catalogue, interactif, app.state.diffuseur, depots
         )
 
         async def annuler_tache(tache_id: int) -> None:
@@ -353,7 +356,7 @@ def create_app(
         app.state.conversations = ServiceConversation(
             app.state.sessions,
             app.state.catalogue,
-            app.state.llm,
+            interactif,
             Diffuseur(),
             app.state.chat,
             annuler_tache,
@@ -363,7 +366,7 @@ def create_app(
             await app.state.conversations.recuperer_interrompues(s)
             await s.commit()
         orch = orchestrateur or _orchestrateur(
-            r, app.state.sessions, app.state.catalogue, app.state.llm
+            r, app.state.sessions, app.state.catalogue, LLMArbitre(app.state.llm, arbitre, "fond")
         )
         app.state.orchestrateur, app.state.ordonnanceur, boucles = orch, None, []
         if orch:
