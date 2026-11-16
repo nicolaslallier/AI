@@ -5,7 +5,7 @@ from sqlalchemy import select
 from test_etapes_depot import _attendre, _planifier, _projet
 
 from portail.db import Etape, Pipeline, Proposition, Tache, TacheEvenement
-from portail.propositions import lire_propositions
+from portail.propositions import Modification, enregistrer_propositions, lire_propositions
 from portail.schemas import DonneesTache
 from portail.taches import creer_tache
 
@@ -49,6 +49,15 @@ def test_lire_propositions(texte, attendu):
 def test_lire_propositions_cible_non_modifiable(prop, attendu):
     with pytest.raises(ValueError, match=attendu):
         lire_propositions(_json(prop), {1: None, 2: "tâche protégée"})
+
+
+def test_lire_propositions_toutes_les_cibles_non_modifiables():
+    with pytest.raises(ValueError) as e:
+        lire_propositions(_json(_m(2, "x"), _m(9, "y"), _m(2, "z")), {1: None, 2: "tâche protégée"})
+    assert (
+        str(e.value)
+        == "T2 : tâche protégée; T9 : tâche absente du projet ; propose une tâche nouvelle"
+    )
 
 
 def test_lire_propositions_depend_d_une_protegee():
@@ -409,3 +418,17 @@ async def test_sans_validation_modification_reste_en_place(client, sessions, fau
     await _lancer(client, sessions, faux_llm, _json(_m(tid, "Par l'agent")), pid=pid)
     async with sessions() as s:
         assert (await s.get(Tache, tid)).colonne == "a_faire"
+    async with sessions() as s:
+        assert (await s.get(Tache, tid)).titre == "Par l'agent"
+
+
+async def test_enregistrer_propositions_refuse_une_cible_protegee(client, sessions, faux_llm):
+    pid = await _projet(sessions)
+    tid = (await client.post(f"/api/projets/{pid}/taches", json={"titre": "Manuelle"})).json()["id"]
+    _, _, eid = await _lancer(client, sessions, faux_llm, _json(_n("n1")), pid=pid)
+    async with sessions() as s:
+        etape = await s.get(Etape, eid)
+        refus = await enregistrer_propositions(
+            s, etape, [Modification(sorte="modification", tache_id=tid, titre="x")], "agent:taches"
+        )
+    assert refus == [f"T{tid} : tâche protégée"]

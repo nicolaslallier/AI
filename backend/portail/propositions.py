@@ -76,14 +76,17 @@ def lire_propositions(texte: str, taches: dict[int, str | None]) -> list[Proposi
     cles = [p.cle for p in lues if isinstance(p, Nouvelle)]
     if doubles := sorted({c for c in cles if cles.count(c) > 1}):
         raise ValueError(f"clé en double : {', '.join(doubles)}")
+    refus = {}
     for p in lues:
         if not isinstance(p, Nouvelle):
             if p.tache_id not in taches:
-                raise ValueError(
-                    f"T{p.tache_id} : tâche absente du projet ; propose une tâche nouvelle"
-                )
-            if raison := taches[p.tache_id]:
-                raise ValueError(f"T{p.tache_id} : {raison} ; propose une tâche nouvelle")
+                refus.setdefault(p.tache_id, "tâche absente du projet")
+            elif raison := taches[p.tache_id]:
+                refus.setdefault(p.tache_id, raison)
+    if refus:
+        liste = "; ".join(f"T{i} : {r}" for i, r in refus.items())
+        raise ValueError(f"{liste} ; propose une tâche nouvelle")
+    for p in lues:
         nom = p.cle if isinstance(p, Nouvelle) else f"T{getattr(p, 'tache_id', '')}"
         for d in getattr(p, "depend_de", []):
             if d == nom:
