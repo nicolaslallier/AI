@@ -1,5 +1,6 @@
 """Propositions de l'agent de tâches : lecture de sa réponse, enregistrement, acceptation."""
 
+import copy
 import re
 from typing import Annotated, Literal
 
@@ -64,6 +65,19 @@ class _Reponse(BaseModel):
 
 SCHEMA_PROPOSITIONS = _Reponse.model_json_schema()
 _REF = re.compile(r"T(\d+)")
+
+
+def schema_propositions(modifiables: list[int]) -> dict:
+    """Schéma imposé au modèle : `tache_id` limité aux tâches modifiables ;
+    sans aucune, des tâches nouvelles seulement (le modèle n'invente plus de cible)."""
+    s = copy.deepcopy(SCHEMA_PROPOSITIONS)
+    if not modifiables:
+        s["$defs"] = {"Nouvelle": s["$defs"]["Nouvelle"]}
+        s["properties"]["propositions"]["items"] = {"$ref": "#/$defs/Nouvelle"}
+        return s
+    for sorte in ("Modification", "Retrait"):
+        s["$defs"][sorte]["properties"]["tache_id"]["enum"] = modifiables
+    return s
 
 
 def lire_propositions(

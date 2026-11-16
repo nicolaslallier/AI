@@ -43,12 +43,12 @@ from portail.moteur import (
 )
 from portail.outils import OutilsDepot, apercu
 from portail.propositions import (
-    SCHEMA_PROPOSITIONS,
     PropositionLue,
     _raison,
     enregistrer_propositions,
     lire_propositions,
     plan_du_pipeline,
+    schema_propositions,
     tout_accepter,
 )
 from portail.taches import deplacer_tache
@@ -365,7 +365,10 @@ class ServiceChat:
         """Réponse JSON de l'agent de tâches ; une seule relance si elle est invalide."""
         format_ = {
             "type": "json_schema",
-            "json_schema": {"name": "propositions", "schema": SCHEMA_PROPOSITIONS},
+            "json_schema": {
+                "name": "propositions",
+                "schema": schema_propositions(sorted(i for i, r in taches.items() if r is None)),
+            },
         }
         for essai in range(2):
             texte = (await completer(self._llm, self._missions, agent, demande, format_)).strip()
