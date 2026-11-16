@@ -370,7 +370,7 @@ class ServiceChat:
         for essai in range(2):
             texte = (await completer(self._llm, self._missions, agent, demande, format_)).strip()
             try:
-                return lire_propositions(texte, taches)
+                return lire_propositions(texte, taches, ecarter=bool(essai))
             except ValueError as e:
                 if essai:
                     raise ValueError(f"propositions invalides : {e}") from None

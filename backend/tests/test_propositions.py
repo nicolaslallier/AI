@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select
 from test_etapes_depot import _attendre, _planifier, _projet
 
-from portail.db import Etape, Pipeline, Proposition, Tache, TacheEvenement
+from portail.db import Etape, Message, Pipeline, Proposition, Tache, TacheEvenement
 from portail.propositions import Modification, enregistrer_propositions, lire_propositions
 from portail.schemas import DonneesTache
 from portail.taches import creer_tache
@@ -58,6 +58,14 @@ def test_lire_propositions_toutes_les_cibles_non_modifiables():
         str(e.value)
         == "T2 : tâche protégée; T9 : tâche absente du projet ; propose une tâche nouvelle"
     )
+
+
+def test_lire_propositions_ecarter_garde_le_reste():
+    texte = _json(_m(2, "x"), _n("n1"))
+    assert [p.sorte for p in lire_propositions(texte, {2: "tâche protégée"}, ecarter=True)] == [
+        "modification", "nouvelle"]  # fmt: skip
+    with pytest.raises(ValueError, match="T2 : tâche protégée"):  # rien d'autre : échec
+        lire_propositions(_json(_m(2, "x")), {2: "tâche protégée"}, ecarter=True)
 
 
 def test_lire_propositions_depend_d_une_protegee():
@@ -230,6 +238,18 @@ async def test_proposition_sur_tache_protegee_deux_fois_echoue(client, sessions,
         etape = await s.get(Etape, eid)
     assert etape.etat == "echouee"
     assert "tâche protégée" in etape.erreur
+
+
+async def test_proposition_sur_tache_protegee_deux_fois_ecartee(client, sessions, faux_llm):
+    pid = await _projet(sessions)
+    tid = (await client.post(f"/api/projets/{pid}/taches", json={"titre": "Manuelle"})).json()["id"]
+    m = _json(_m(tid, "Réécrite"), _n("n1"))
+    _, _, eid = await _lancer(client, sessions, faux_llm, m, m, pid=pid)
+    assert [p.sorte for p in await _propositions(sessions, eid)] == ["nouvelle"]
+    async with sessions() as s:
+        assert (await s.get(Etape, eid)).etat != "echouee"
+        contenus = (await s.scalars(select(Message.contenu).where(Message.etape_id == eid))).all()
+    assert f"propositions écartées : T{tid} : tâche protégée" in contenus
 
 
 async def test_proposition_perimee(client, sessions, faux_llm):
