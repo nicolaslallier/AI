@@ -4,8 +4,8 @@ import pytest
 from sqlalchemy import select
 from test_etapes_depot import _attendre, _planifier, _projet
 
-from portail.db import Etape, Message, Pipeline, Proposition, Tache, TacheEvenement
-from portail.propositions import lire_propositions
+from portail.db import Etape, Pipeline, Proposition, Tache, TacheEvenement
+from portail.propositions import Modification, enregistrer_propositions, lire_propositions
 from portail.schemas import DonneesTache
 from portail.taches import creer_tache
 
@@ -37,11 +37,38 @@ def _json(*props) -> str:
 )
 def test_lire_propositions(texte, attendu):
     with pytest.raises(ValueError, match=attendu):
-        lire_propositions(texte, {1, 2})
+        lire_propositions(texte, {1: None, 2: None})
+
+
+@pytest.mark.parametrize(
+    "prop, attendu",
+    [(_m(2, "x"), "T2 : tâche protégée ; propose une tâche nouvelle"),
+     (_m(9, "x"), "T9 : tâche absente du projet"),
+     ({"sorte": "retrait", "tache_id": 2, "raison": "r"}, "T2 : tâche protégée")],
+)  # fmt: skip
+def test_lire_propositions_cible_non_modifiable(prop, attendu):
+    with pytest.raises(ValueError, match=attendu):
+        lire_propositions(_json(prop), {1: None, 2: "tâche protégée"})
+
+
+def test_lire_propositions_toutes_les_cibles_non_modifiables():
+    with pytest.raises(ValueError) as e:
+        lire_propositions(_json(_m(2, "x"), _m(9, "y"), _m(2, "z")), {1: None, 2: "tâche protégée"})
+    assert (
+        str(e.value)
+        == "T2 : tâche protégée; T9 : tâche absente du projet ; propose une tâche nouvelle"
+    )
+
+
+def test_lire_propositions_depend_d_une_protegee():
+    (n,) = lire_propositions(_json(_n("n1", depend_de=["T2"])), {2: "tâche protégée"})
+    assert n.depend_de == ["T2"]
 
 
 def test_lire_propositions_valide():
-    lues = lire_propositions(_json(_n("n1", depend_de=["T1"]), _n("n2", depend_de=["n1"])), {1})
+    lues = lire_propositions(
+        _json(_n("n1", depend_de=["T1"]), _n("n2", depend_de=["n1"])), {1: None}
+    )
     assert [p.cle for p in lues] == ["n1", "n2"]
 
 
@@ -183,22 +210,26 @@ async def test_modifier_puis_accepter_protege(client, sessions, faux_llm):
     assert (ev.type, ev.auteur) == ("creation", "nicolas")
 
 
-async def test_proposition_sur_tache_protegee_ecartee(client, sessions, faux_llm):
+async def test_proposition_sur_tache_protegee_relance(client, sessions, faux_llm):
     pid = await _projet(sessions)
-    r = await client.post(f"/api/projets/{pid}/taches", json={"titre": "Manuelle"})
-    tid = r.json()["id"]
+    tid = (await client.post(f"/api/projets/{pid}/taches", json={"titre": "Manuelle"})).json()["id"]
     _, _, eid = await _lancer(
-        client, sessions, faux_llm, _json(_m(tid, "Réécrite"), _n("n1")), pid=pid
+        client, sessions, faux_llm, _json(_m(tid, "Réécrite"), _n("n1")), _json(_n("n1")), pid=pid
     )
-    props = await _propositions(sessions, eid)
-    assert [p.sorte for p in props] == ["nouvelle"]
+    assert [p.sorte for p in await _propositions(sessions, eid)] == ["nouvelle"]
+    dernier = faux_llm.appels[-1]["messages"][-1]["content"]
+    assert f"T{tid} : tâche protégée ; propose une tâche nouvelle" in dernier
+
+
+async def test_proposition_sur_tache_protegee_deux_fois_echoue(client, sessions, faux_llm):
+    pid = await _projet(sessions)
+    tid = (await client.post(f"/api/projets/{pid}/taches", json={"titre": "Manuelle"})).json()["id"]
+    m = _json(_m(tid, "Réécrite"))
+    _, _, eid = await _lancer(client, sessions, faux_llm, m, m, pid=pid)
     async with sessions() as s:
-        msgs = (
-            await s.scalars(
-                select(Message).where(Message.etape_id == eid, Message.role == "system")
-            )
-        ).all()
-    assert [m.contenu for m in msgs] == [f"propositions écartées : T{tid} : tâche protégée"]
+        etape = await s.get(Etape, eid)
+    assert etape.etat == "echouee"
+    assert "tâche protégée" in etape.erreur
 
 
 async def test_proposition_perimee(client, sessions, faux_llm):
@@ -341,7 +372,9 @@ async def test_modification_partielle_garde_le_reste(client, sessions, faux_llm)
 
 
 def test_modification_sans_titre_valide():
-    (m,) = lire_propositions(_json({"sorte": "modification", "tache_id": 1, "criteres": []}), {1})
+    (m,) = lire_propositions(
+        _json({"sorte": "modification", "tache_id": 1, "criteres": []}), {1: None}
+    )
     assert m.model_dump(exclude_unset=True) == {
         "sorte": "modification",
         "tache_id": 1,
@@ -361,6 +394,41 @@ async def test_sans_validation_les_taches_vont_au_kanban(client, sessions, faux_
     assert [p.etat for p in await _propositions(sessions, eid)] == ["acceptee", "acceptee"]
     kanban = (await client.get(f"/api/projets/{pid}/kanban")).json()
     assert kanban["propositions"] == []
-    assert len(kanban["taches"]) == 2
+    taches = sorted(kanban["taches"], key=lambda t: t["rang"])
+    assert [(t["titre"], t["colonne"]) for t in taches] == [("n1", "prete"), ("n2", "prete")]
+    async with sessions() as s:
+        evs = (
+            await s.scalars(
+                select(TacheEvenement)
+                .where(TacheEvenement.type == "deplacement")
+                .order_by(TacheEvenement.id)
+            )
+        ).all()
+    assert [(e.auteur, e.donnees["vers"]) for e in evs] == [("agent:taches", "prete")] * 2
     deps, _ = await _deps(client, pid)
     assert sorted(len(d) for d in deps.values()) == [0, 1]
+
+
+async def test_sans_validation_modification_reste_en_place(client, sessions, faux_llm, monkeypatch):
+    from conftest import CATALOGUE_TEST
+
+    monkeypatch.setattr(CATALOGUE_TEST.agents["taches"], "sans_validation", True)
+    pid = await _projet(sessions)
+    tid = await _tache_agent(sessions, pid)
+    await _lancer(client, sessions, faux_llm, _json(_m(tid, "Par l'agent")), pid=pid)
+    async with sessions() as s:
+        assert (await s.get(Tache, tid)).colonne == "a_faire"
+    async with sessions() as s:
+        assert (await s.get(Tache, tid)).titre == "Par l'agent"
+
+
+async def test_enregistrer_propositions_refuse_une_cible_protegee(client, sessions, faux_llm):
+    pid = await _projet(sessions)
+    tid = (await client.post(f"/api/projets/{pid}/taches", json={"titre": "Manuelle"})).json()["id"]
+    _, _, eid = await _lancer(client, sessions, faux_llm, _json(_n("n1")), pid=pid)
+    async with sessions() as s:
+        etape = await s.get(Etape, eid)
+        refus = await enregistrer_propositions(
+            s, etape, [Modification(sorte="modification", tache_id=tid, titre="x")], "agent:taches"
+        )
+    assert refus == [f"T{tid} : tâche protégée"]
