@@ -5,7 +5,12 @@ from sqlalchemy import select
 from test_etapes_depot import _attendre, _planifier, _projet
 
 from portail.db import Etape, Message, Pipeline, Proposition, Tache, TacheEvenement
-from portail.propositions import Modification, enregistrer_propositions, lire_propositions
+from portail.propositions import (
+    Modification,
+    enregistrer_propositions,
+    lire_propositions,
+    schema_propositions,
+)
 from portail.schemas import DonneesTache
 from portail.taches import creer_tache
 
@@ -66,6 +71,15 @@ def test_lire_propositions_ecarter_garde_le_reste():
         "modification", "nouvelle"]  # fmt: skip
     with pytest.raises(ValueError, match="T2 : tâche protégée"):  # rien d'autre : échec
         lire_propositions(_json(_m(2, "x")), {2: "tâche protégée"}, ecarter=True)
+
+
+def test_schema_propositions_limite_les_cibles():
+    defs = schema_propositions([4, 7])["$defs"]
+    assert defs["Modification"]["properties"]["tache_id"]["enum"] == [4, 7]
+    assert defs["Retrait"]["properties"]["tache_id"]["enum"] == [4, 7]
+    vide = schema_propositions([])  # aucune tâche modifiable : seulement des nouvelles
+    assert vide["properties"]["propositions"]["items"] == {"$ref": "#/$defs/Nouvelle"}
+    assert set(vide["$defs"]) == {"Nouvelle"}
 
 
 def test_lire_propositions_depend_d_une_protegee():
@@ -227,6 +241,12 @@ async def test_proposition_sur_tache_protegee_relance(client, sessions, faux_llm
     assert [p.sorte for p in await _propositions(sessions, eid)] == ["nouvelle"]
     dernier = faux_llm.appels[-1]["messages"][-1]["content"]
     assert f"T{tid} : tâche protégée ; propose une tâche nouvelle" in dernier
+
+
+async def test_projet_sans_tache_schema_sans_modification(client, sessions, faux_llm):
+    await _lancer(client, sessions, faux_llm, _json(_n("n1")))
+    schema = faux_llm.appels[-1]["response_format"]["json_schema"]["schema"]
+    assert set(schema["$defs"]) == {"Nouvelle"}
 
 
 async def test_proposition_sur_tache_protegee_deux_fois_echoue(client, sessions, faux_llm):
