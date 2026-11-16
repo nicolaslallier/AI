@@ -51,6 +51,7 @@ from portail.propositions import (
     plan_du_pipeline,
     tout_accepter,
 )
+from portail.taches import deplacer_tache
 
 logger = logging.getLogger(__name__)
 
@@ -396,6 +397,15 @@ class ServiceChat:
             await s.flush()
         if agent.sans_validation:  # le plan validé vaut accord : droit au kanban
             await tout_accepter(s, etape.id)
+            # les tâches créées (pas les modifiées) partent en Prête, que le dev les prenne
+            for tid in await s.scalars(
+                select(Proposition.tache_creee_id)
+                .where(Proposition.etape_id == etape.id, Proposition.tache_creee_id.is_not(None))
+                .order_by(Proposition.id)
+            ):
+                await deplacer_tache(
+                    s, await s.get(Tache, tid), "prete", None, f"agent:{agent.nom}"
+                )
         ouvertes = await s.scalar(
             select(func.count()).where(
                 Proposition.etape_id == etape.id, Proposition.etat == "ouverte"

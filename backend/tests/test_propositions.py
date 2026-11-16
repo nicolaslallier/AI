@@ -385,6 +385,27 @@ async def test_sans_validation_les_taches_vont_au_kanban(client, sessions, faux_
     assert [p.etat for p in await _propositions(sessions, eid)] == ["acceptee", "acceptee"]
     kanban = (await client.get(f"/api/projets/{pid}/kanban")).json()
     assert kanban["propositions"] == []
-    assert len(kanban["taches"]) == 2
+    taches = sorted(kanban["taches"], key=lambda t: t["rang"])
+    assert [(t["titre"], t["colonne"]) for t in taches] == [("n1", "prete"), ("n2", "prete")]
+    async with sessions() as s:
+        evs = (
+            await s.scalars(
+                select(TacheEvenement)
+                .where(TacheEvenement.type == "deplacement")
+                .order_by(TacheEvenement.id)
+            )
+        ).all()
+    assert [(e.auteur, e.donnees["vers"]) for e in evs] == [("agent:taches", "prete")] * 2
     deps, _ = await _deps(client, pid)
     assert sorted(len(d) for d in deps.values()) == [0, 1]
+
+
+async def test_sans_validation_modification_reste_en_place(client, sessions, faux_llm, monkeypatch):
+    from conftest import CATALOGUE_TEST
+
+    monkeypatch.setattr(CATALOGUE_TEST.agents["taches"], "sans_validation", True)
+    pid = await _projet(sessions)
+    tid = await _tache_agent(sessions, pid)
+    await _lancer(client, sessions, faux_llm, _json(_m(tid, "Par l'agent")), pid=pid)
+    async with sessions() as s:
+        assert (await s.get(Tache, tid)).colonne == "a_faire"
