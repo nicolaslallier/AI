@@ -45,6 +45,7 @@ from portail.outils import OutilsDepot, apercu
 from portail.propositions import (
     SCHEMA_PROPOSITIONS,
     PropositionLue,
+    _raison,
     enregistrer_propositions,
     lire_propositions,
     plan_du_pipeline,
@@ -358,7 +359,7 @@ class ServiceChat:
         return visible, resultat.limite_atteinte
 
     async def _proposer(
-        self, agent: Agent, demande: list[dict], cles: set[int]
+        self, agent: Agent, demande: list[dict], taches: dict[int, str | None]
     ) -> list[PropositionLue]:
         """Réponse JSON de l'agent de tâches ; une seule relance si elle est invalide."""
         format_ = {
@@ -368,7 +369,7 @@ class ServiceChat:
         for essai in range(2):
             texte = (await completer(self._llm, self._missions, agent, demande, format_)).strip()
             try:
-                return lire_propositions(texte, cles)
+                return lire_propositions(texte, taches)
             except ValueError as e:
                 if essai:
                     raise ValueError(f"propositions invalides : {e}") from None
@@ -423,9 +424,10 @@ class ServiceChat:
                 action = etape.action
                 consigne = agent.consigne_redaction if action != "repondre" else None
                 demande = await self._demande(s, etape, agent, consigne)
-                cles = set(
-                    (await s.scalars(select(Tache.id).where(Tache.projet_id == projet.id))).all()
-                )
+                cles = {
+                    t.id: _raison(t, projet.id)
+                    for t in await s.scalars(select(Tache).where(Tache.projet_id == projet.id))
+                }
             limite, visible, suivante, a_relire = False, "", None, None
             erreur = None
             for essai in range(2):  # un produit d'architecture au bloc invalide : une relance

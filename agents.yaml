@@ -88,6 +88,8 @@ agents:
       - modification : "tache_id" (tâche existante), seulement les champs à changer parmi les
         précédents (les autres restent tels quels ; "depend_de" remplace toute la liste), et "raison".
       - retrait : "tache_id" et "raison".
+      Une tâche protégée, verrouillée ou hors a_faire/prete ne se modifie pas et ne se retire pas :
+      une étape du plan devient une tâche nouvelle (elle peut en dépendre avec "T<id>").
       Une tâche = un comportement testable. Une clé inconnue ou une dépendance à soi-même
       rend la réponse invalide.
   tests:

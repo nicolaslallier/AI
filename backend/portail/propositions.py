@@ -66,7 +66,8 @@ SCHEMA_PROPOSITIONS = _Reponse.model_json_schema()
 _REF = re.compile(r"T(\d+)")
 
 
-def lire_propositions(texte: str, cles_existantes: set[int]) -> list[PropositionLue]:
+def lire_propositions(texte: str, taches: dict[int, str | None]) -> list[PropositionLue]:
+    """`taches` : chaque tâche du projet → raison de non-modification, ou None."""
     try:
         lues = _Reponse.model_validate_json(texte).propositions
     except ValidationError as e:
@@ -76,13 +77,20 @@ def lire_propositions(texte: str, cles_existantes: set[int]) -> list[Proposition
     if doubles := sorted({c for c in cles if cles.count(c) > 1}):
         raise ValueError(f"clé en double : {', '.join(doubles)}")
     for p in lues:
+        if not isinstance(p, Nouvelle):
+            if p.tache_id not in taches:
+                raise ValueError(
+                    f"T{p.tache_id} : tâche absente du projet ; propose une tâche nouvelle"
+                )
+            if raison := taches[p.tache_id]:
+                raise ValueError(f"T{p.tache_id} : {raison} ; propose une tâche nouvelle")
         nom = p.cle if isinstance(p, Nouvelle) else f"T{getattr(p, 'tache_id', '')}"
         for d in getattr(p, "depend_de", []):
             if d == nom:
                 raise ValueError(f"{nom} dépend d'elle-même")
             if d in cles:
                 continue
-            if (m := _REF.fullmatch(d)) and int(m[1]) in cles_existantes:
+            if (m := _REF.fullmatch(d)) and int(m[1]) in taches:
                 continue
             if m:
                 raise ValueError(f"{nom} : la tâche {d} n'existe pas dans le projet")
