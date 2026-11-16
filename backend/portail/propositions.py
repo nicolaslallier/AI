@@ -66,8 +66,12 @@ SCHEMA_PROPOSITIONS = _Reponse.model_json_schema()
 _REF = re.compile(r"T(\d+)")
 
 
-def lire_propositions(texte: str, taches: dict[int, str | None]) -> list[PropositionLue]:
-    """`taches` : chaque tâche du projet → raison de non-modification, ou None."""
+def lire_propositions(
+    texte: str, taches: dict[int, str | None], ecarter: bool = False
+) -> list[PropositionLue]:
+    """`taches` : chaque tâche du projet → raison de non-modification, ou None.
+    `ecarter` : une cible non modifiable ne bloque que si rien d'autre ne reste ;
+    `enregistrer_propositions` l'écarte ensuite."""
     try:
         lues = _Reponse.model_validate_json(texte).propositions
     except ValidationError as e:
@@ -83,7 +87,8 @@ def lire_propositions(texte: str, taches: dict[int, str | None]) -> list[Proposi
                 refus.setdefault(p.tache_id, "tâche absente du projet")
             elif raison := taches[p.tache_id]:
                 refus.setdefault(p.tache_id, raison)
-    if refus:
+    reste = [p for p in lues if isinstance(p, Nouvelle) or p.tache_id not in refus]
+    if refus and not (ecarter and reste):
         liste = "; ".join(f"T{i} : {r}" for i, r in refus.items())
         raise ValueError(f"{liste} ; propose une tâche nouvelle")
     for p in lues:
