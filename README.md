@@ -91,11 +91,11 @@ flowchart LR
 
 Pour un projet, le pipeline `architecture` produit un document d'architecture (TOGAF, modèle ArchiMate 3.2) à partir d'une vision. Huit étapes, dans l'ordre : `archi-entreprise` (discussion avec Nicolas, qui rédige la vision), puis les volets `archi-affaires`, `archi-donnees`, `archi-applicatif`, `archi-techno`, `archi-securite` et `archi-solution`, enfin `archi-entreprise-synthese` (sommaire, registres des décisions, dérogations et dette, modèle fusionné). Deux validations seulement : la vision, puis l'architecture ; les six volets s'enchaînent sans attendre. Deux téléchargements : le document d'architecture et le modèle ArchiMate (fichier d'échange importable dans Archi).
 
-- **Modèles** : ces huit agents seuls utilisent `cloud-anthropic`, `cloud-openai` et `cloud-gemini` (les trois noms déclarés dans LiteLLM, ajoutés à `modeles_permis`) ; tous les autres agents gardent leur modèle local.
+- **Modèles** : ces huit agents seuls utilisent `cloud-openai` (ChatGPT, nom déclaré dans LiteLLM) ; `cloud-anthropic` et `cloud-gemini` restent dans `modeles_permis` pour choisir un autre modèle à une étape ; tous les autres agents gardent leur modèle local.
 - **Clé LiteLLM** : réémettre `PORTAIL_LITELLM_CLE` limitée aux nouveaux `modeles_permis`, et vérifier que l'équipe de la clé a le droit d'appeler les modèles `cloud-*`. Le LiteLLM de Nicolas applique la barrière `cloud_pii` : permission par équipe et masquage des données personnelles avant qu'une requête quitte la maison ; les noms d'une vision peuvent donc arriver masqués au modèle.
 - **Sortie** : champ facultatif `sortie_max` d'un agent (entier > 0), envoyé au modèle comme `max_tokens` ; les huit agents `archi-*` le fixent à 16000, les autres n'en envoient pas. Un agent dont le modèle refuse la température (`cloud-anthropic`, `cloud-openai`) ne déclare pas `temperature` ; un modèle choisi pour une étape, autre que celui de l'agent, ne reçoit pas la température de l'agent.
 - **Secrets** : huit `PORTAIL_AGENT_SECRET_ARCHI_*` à créer dans OpenBao (`infra/portail`, 32 caractères au moins), voir « Étapes manuelles ».
-- **Confidentialité** : ces agents envoient le contenu des visions, des architectures et des fichiers du dépôt qu'ils lisent à Anthropic, à OpenAI et à Google.
+- **Confidentialité** : ces agents envoient le contenu des visions, des architectures et des fichiers du dépôt qu'ils lisent à OpenAI (et à Anthropic ou Google si on choisit leur modèle pour une étape).
 
 ## Agents en conteneur
 
