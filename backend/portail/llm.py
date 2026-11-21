@@ -20,6 +20,16 @@ class ErreurLLM(Exception):
     pass
 
 
+_SANS_QUESTION = "Poursuis."
+
+
+def _avec_user(messages: list[dict]) -> list[dict]:
+    """Le template Qwen3 d'Ollama rejette (500) une requête sans message user non vide."""
+    if any(m.get("role") == "user" and str(m.get("content") or "").strip() for m in messages):
+        return messages
+    return [*messages, {"role": "user", "content": _SANS_QUESTION}]
+
+
 class ClientLLM:
     def __init__(
         self,
@@ -92,7 +102,7 @@ class ClientLLM:
     ) -> AsyncIterator[str]:
         corps: dict = {
             "model": modele,
-            "messages": messages,
+            "messages": _avec_user(messages),
             "stream": True,
             "stream_options": {"include_usage": True},
         }
@@ -163,7 +173,7 @@ class ClientLLM:
         sortie_max: int | None = None,
         reflexion: bool = True,
     ) -> dict:
-        corps: dict = {"model": modele, "messages": messages, "stream": False}
+        corps: dict = {"model": modele, "messages": _avec_user(messages), "stream": False}
         if temperature is not None:
             corps["temperature"] = temperature
         if sortie_max is not None:
