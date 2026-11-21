@@ -105,11 +105,26 @@ def test_elagage():
     ]
     n = elaguer_resultats_outils(messages, 1000)
     assert n >= 1
-    assert messages[2]["content"] == "[résultat retiré : relire si besoin]"
+    assert (
+        messages[2]["content"]
+        == "[résultat retiré faute de place : ne relis pas le fichier entier, seulement la plage utile]"
+    )
     assert messages[0]["content"] == "s" and messages[1]["content"] == "u"
     assert messages[3]["content"] == messages[4]["content"] == gros  # arrêt dès sous 0,75
     assert n == 1
     assert json.dumps(messages)  # reste sérialisable
+
+
+def test_lire_plafonne_survit_a_l_elagage(tmp_path):
+    # pipeline 28 : un lire de 100 Ko était retiré aussitôt, d'où des relectures sans fin
+    (tmp_path / "gros.py").write_text("\n".join("x = 1  # " + "y" * 60 for _ in range(1500)))
+    resultat = OutilsDepot(tmp_path, max_octets=32768).lire("gros.py")
+    messages = [
+        {"role": "system", "content": "s" * 40_000},  # base de mission ~10 k jetons
+        {"role": "tool", "tool_call_id": "1", "content": resultat},
+    ]
+    elaguer_resultats_outils(messages, 32768)
+    assert messages[-1]["content"] == resultat
 
 
 def test_elagage_sous_le_seuil():

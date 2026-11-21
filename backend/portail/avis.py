@@ -154,7 +154,12 @@ class ServiceAvis:
                 projet.id, projet.depot_url, projet.branche_ref, etape.id, etape.sha
             )
             resultat = await tourner(
-                self._llm, self._missions, agent, demande, OutilsDepot(arbre), _rien
+                self._llm,
+                self._missions,
+                agent,
+                demande,
+                OutilsDepot(arbre, max_octets=agent.contexte_max),
+                _rien,
             )
             texte = resultat.texte
         else:

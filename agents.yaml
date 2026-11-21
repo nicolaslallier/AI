@@ -57,7 +57,7 @@ agents:
     produit: plan
     auto: true
     outils: [lister, lire, chercher]
-    tours_max: 20
+    tours_max: 12
     prompt_systeme: |
       Tu rédiges le plan d'implémentation d'un projet logiciel, en français, à partir de la spec
       et du code du dépôt que tu lis avec tes outils (lecture seule : lister, lire, chercher).

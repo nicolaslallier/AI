@@ -131,8 +131,11 @@ SCHEMAS_ECRITURE: dict[str, dict] = {
 
 
 class OutilsDepot:
-    def __init__(self, racine: Path):
+    def __init__(self, racine: Path, max_octets: int | None = None):
         self.racine = Path(racine).resolve()
+        # max_octets explicite = agent en lecture seule au contexte compté : plafond et anti-relecture
+        self.max_octets = max_octets or _MAX_OCTETS
+        self._demandes: dict[tuple[str, str], int] | None = {} if max_octets else None
 
     def schemas(self) -> list[dict]:
         return list(SCHEMAS_OUTILS.values())
@@ -209,12 +212,21 @@ class OutilsDepot:
         choisies = lignes[a:b]
         tronque = len(choisies) > _MAX_LIGNES or partiel
         corps = "\n".join(choisies[:_MAX_LIGNES])
-        marqueur = f"[… tronqué : {'au moins ' if partiel else ''}{total} lignes au total]"
-        reserve = len(marqueur.encode()) + 1
-        if len(corps.encode()) + (reserve if tronque else 0) > _MAX_OCTETS:
+        pire = f"[… tronqué : lignes {total}–{total} sur au moins {total} ; suite : lire({chemin!r}, debut={total + 1})]"
+        reserve = len(pire.encode()) + 1
+        if len(corps.encode()) + (reserve if tronque else 0) > self.max_octets:
             tronque = True
-            corps = corps.encode()[: _MAX_OCTETS - reserve].decode(errors="ignore")
-        return corps + ("\n" + marqueur if tronque else "")
+            corps = corps.encode()[: max(self.max_octets - reserve, 0)].decode(errors="ignore")
+            if "\n" in corps:  # pas de ligne coupée : la suite reprend sans trou
+                corps = corps[: corps.rfind("\n")]
+        if not tronque:
+            return corps
+        der = a + corps.count("\n") + 1
+        au_moins = "au moins " if partiel else ""
+        return (
+            f"{corps}\n[… tronqué : lignes {a + 1}–{der} sur {au_moins}{total} ;"
+            f" suite : lire({chemin!r}, debut={der + 1})]"
+        )
 
     async def chercher(self, motif: str, chemin: str | None = None) -> str:
         if not isinstance(motif, str):
@@ -301,10 +313,23 @@ class OutilsDepot:
             inspect.signature(fn).bind(**args)
         except TypeError:
             return f"erreur : arguments manquants ou inattendus pour {nom}", True
+        if self._demandes is not None:
+            cle = (nom, json.dumps(args, sort_keys=True))
+            self._demandes[cle] = self._demandes.get(cle, 0) + 1
+            if self._demandes[cle] > 2:
+                return (
+                    "déjà lu deux fois dans cette mission : ne relis pas ;"
+                    " lis une autre plage ou rédige maintenant"
+                ), False
         try:
             resultat = fn(**args)
             if inspect.isawaitable(resultat):
                 resultat = await resultat
+            if self._demandes is not None and nom in ("chercher", "lister"):
+                marque = "\n[… tronqué : précise le motif ou le chemin]"
+                if len(resultat.encode()) > self.max_octets:
+                    garde = self.max_octets - len(marque.encode())
+                    resultat = resultat.encode()[: max(garde, 0)].decode(errors="ignore") + marque
             return resultat, False
         except OSError as e:  # sans le message complet : il contient des chemins de l'hôte
             return f"erreur : {e.strerror or type(e).__name__}", False

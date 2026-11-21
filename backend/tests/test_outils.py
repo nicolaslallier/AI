@@ -40,7 +40,9 @@ def test_lire_plage_de_lignes(racine):
 def test_lire_tronque_par_lignes(racine):
     (racine / "a.txt").write_text("\n".join(str(i) for i in range(2500)))
     sortie = OutilsDepot(racine).lire("a.txt")
-    assert sortie.endswith("[… tronqué : 2500 lignes au total]")
+    assert sortie.endswith(
+        "[… tronqué : lignes 1–2000 sur 2500 ; suite : lire('a.txt', debut=2001)]"
+    )
     assert "1999" in sortie
     assert "\n2000\n" not in sortie
 
@@ -199,3 +201,50 @@ async def test_chercher_ligne_geante(racine):
     (racine / "g.txt").write_text("tas" * 500_000 + "\n")
     sortie = await valider(racine).chercher("tas")
     assert sortie == "[… résultats tronqués]"
+
+
+def test_lire_plafond_explicite_et_suite_sans_trou(racine):
+    lignes = [f"ligne {i}" for i in range(1, 3001)]
+    (racine / "a.txt").write_text("\n".join(lignes) + "\n")
+    o = OutilsDepot(racine, max_octets=2000)
+    lu, debut = [], 1
+    while True:
+        sortie = o.lire("a.txt", debut=debut)
+        assert len(sortie.encode()) <= 2000
+        corps, _, marque = sortie.rpartition("\n[… tronqué : ")
+        if not marque.startswith("lignes"):
+            lu += sortie.split("\n")
+            break
+        assert "sur 3000" in marque
+        lu += corps.split("\n")
+        debut = int(marque.rsplit("debut=", 1)[1].rstrip(")]"))
+        o._demandes.clear()
+    assert lu == lignes
+
+
+async def test_troisieme_demande_identique_refusee(racine):
+    (racine / "a.txt").write_text("bonjour\n")
+    o = OutilsDepot(racine, max_octets=32768)
+    args = json.dumps({"chemin": "a.txt"})
+    assert await o.executer("lire", args) == ("bonjour", False)
+    assert await o.executer("lire", '{ "chemin" : "a.txt" }') == ("bonjour", False)
+    texte, mal = await o.executer("lire", args)
+    assert texte.startswith("déjà lu deux fois") and mal is False
+    assert (await o.executer("lire", json.dumps({"chemin": "a.txt", "debut": 1})))[0] == "bonjour"
+
+
+async def test_sans_plafond_pas_de_dedoublonnage(racine):
+    (racine / "a.txt").write_text("bonjour\n")
+    o = OutilsDepot(racine)
+    for _ in range(4):
+        assert await o.executer("lire", '{"chemin": "a.txt"}') == ("bonjour", False)
+
+
+async def test_chercher_plafonne(racine):
+    for i in range(50):
+        (racine / f"f{i}.txt").write_text("cible " * 50 + "\n")
+    valider(racine)
+    o = OutilsDepot(racine, max_octets=1000)
+    texte, _ = await o.executer("chercher", '{"motif": "cible"}')
+    assert len(texte.encode()) <= 1000
+    assert texte.endswith("[… tronqué : précise le motif ou le chemin]")

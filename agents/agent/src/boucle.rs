@@ -16,7 +16,8 @@ const IGNORE: &str = "ignoré : une action attend la confirmation de Nicolas";
 /// Bornes du portail (`missions.AppelOutil`) : au-delà, le rejeu serait refusé en 422.
 const ID_MAX: usize = 200;
 const NOM_MAX: usize = 128;
-const RESULTAT_RETIRE: &str = "[résultat retiré : relire si besoin]";
+const RESULTAT_RETIRE: &str =
+    "[résultat retiré faute de place : ne relis pas le fichier entier, seulement la plage utile]";
 
 pub fn par_defaut(m: Mission, p: Portail, s: Sortie) -> BoxFuture<'static, Result<Fin, String>> {
     Box::pin(async move { executer(m, p, s).await })
