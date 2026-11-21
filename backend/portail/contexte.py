@@ -36,7 +36,9 @@ def estimer_jetons(messages: list[dict]) -> int:
     return sum(len(m.get("content") or "") // 4 + 4 for m in messages)
 
 
-RESULTAT_RETIRE = "[résultat retiré : relire si besoin]"
+RESULTAT_RETIRE = (
+    "[résultat retiré faute de place : ne relis pas le fichier entier, seulement la plage utile]"
+)
 
 
 def elaguer_resultats_outils(messages: list[dict], contexte_max: int) -> int:

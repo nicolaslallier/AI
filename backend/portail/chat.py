@@ -352,7 +352,12 @@ class ServiceChat:
             self.diffuseur.publier(etape_id, {"type": "outil", "libelle": libelle})
 
         resultat = await tourner(
-            self._llm, self._missions, agent, demande, OutilsDepot(arbre), sur_appel
+            self._llm,
+            self._missions,
+            agent,
+            demande,
+            OutilsDepot(arbre, max_octets=agent.contexte_max),
+            sur_appel,
         )
         visible = resultat.texte.strip()
         if visible:
