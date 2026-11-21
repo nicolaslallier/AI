@@ -53,6 +53,37 @@ async def test_reponse_message():
     assert "contextId" not in json.loads(t.vues[0].content)["params"]["message"]
 
 
+async def test_reponse_message_a2a_1_0():
+    # Forme de a2a-sdk 1.1 : MessageToDict(SendMessageResponse(message=new_text_message(...)))
+    t = _rpc(
+        {
+            "message": {
+                "messageId": "m1",
+                "contextId": "c1",
+                "role": "ROLE_AGENT",
+                "parts": [{"text": "A"}, {"text": "B"}],
+            }
+        }
+    )
+    r = await demander("http://l", "k", "x", None, transport=t)
+    assert r == {"texte": "A\n\nB", "context_id": "c1"}
+
+
+async def test_reponse_task_a2a_1_0():
+    t = _rpc(
+        {
+            "task": {
+                "id": "t1",
+                "contextId": "c2",
+                "status": {"state": "TASK_STATE_COMPLETED"},
+                "artifacts": [{"artifactId": "a", "parts": [{"text": "Abbey Road"}]}],
+            }
+        }
+    )
+    r = await demander("http://l", "k", "x", "c0", transport=t)
+    assert r == {"texte": "Abbey Road", "context_id": "c2"}
+
+
 @pytest.mark.parametrize("statut", [403, 500])
 async def test_erreur_http(statut):
     t = httpx.MockTransport(lambda r: httpx.Response(statut, text="non"))
