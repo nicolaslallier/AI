@@ -20,7 +20,7 @@ class ErreurLLM(Exception):
     pass
 
 
-_SANS_QUESTION = "Continue."
+_SANS_QUESTION = "Poursuis."
 
 
 def _avec_user(messages: list[dict]) -> list[dict]:

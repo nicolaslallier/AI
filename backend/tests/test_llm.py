@@ -230,3 +230,23 @@ async def test_completer_garantit_un_message_user():
     for corps in vues:
         assert any(m["role"] == "user" and (m["content"] or "").strip() for m in corps["messages"])
     assert len(messages) == 2  # la liste de l'appelant n'est pas modifiée
+
+
+@pytest.mark.parametrize(
+    ("messages", "ajout"),
+    [
+        ([{"role": "system", "content": "s"}, {"role": "user", "content": "q"}], False),
+        ([{"role": "system", "content": "s"}, {"role": "user", "content": None}], True),
+    ],
+)
+async def test_completer_message_user_inchange_ou_complete(messages, ajout):
+    vues = []
+
+    def handler(requete: httpx.Request) -> httpx.Response:
+        vues.append(json.loads(requete.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = ClientLLM("http://l", "k", transport=httpx.MockTransport(handler))
+    await client.completer("m", messages, None)
+    attendu = messages + ([{"role": "user", "content": "Poursuis."}] if ajout else [])
+    assert vues[0]["messages"] == attendu
