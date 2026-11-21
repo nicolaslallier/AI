@@ -41,8 +41,9 @@ class Reglages(BaseSettings):
         ""  # PORTAIL_RESEAU_AGENTS : CIDR du réseau des agents ; vide : aucun filtrage
     )
     llm_delai_s: int = Field(
-        default=300, gt=0, lt=450
-    )  # PORTAIL_LLM_DELAI_S : délai de lecture LiteLLM ; 2 essais < 900, DELAI_LECTURE de l'agent
+        default=440, gt=0, lt=450
+    )  # PORTAIL_LLM_DELAI_S : délai de lecture LiteLLM ; 2 essais < 900, DELAI_LECTURE de l'agent.
+    # Couvre le timeout du MacBook (120 s, ordre 1 dans Infra litellm/config.yaml) + la reprise sur le Studio.
     deploye_le: int = 0  # PORTAIL_DEPLOYE_LE : secondes Unix du déploiement
 
     @field_validator("reseau_agents")
