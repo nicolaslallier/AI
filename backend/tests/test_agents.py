@@ -89,7 +89,14 @@ def test_agents_yaml_du_depot_est_valide():
     cat = charger_catalogue(racine / "agents.yaml")
     assert "spec" in cat.pipelines
     assert cat.pipelines["planification"] == ["plan", "taches"]
-    assert cat.pipelines["dev"] == ["tests", "code", "revue", "challenger", "securite", "doc"]
+    assert cat.pipelines["dev"] == [
+        "tests",
+        "code",
+        "revue",
+        "challenger",
+        "securite",
+        "documentaliste",
+    ]
     assert cat.avis == {"spec": ["challenger"], "plan": ["architecte", "challenger"]}
     assert "pm" not in cat.pipelines
     a = cat.agents

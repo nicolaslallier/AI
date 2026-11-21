@@ -799,7 +799,7 @@ agents:
 pipelines:
   spec: [spec]
   planification: [plan, taches]
-  dev: [tests, code, revue, challenger, securite, doc]
+  dev: [tests, code, revue, challenger, securite, documentaliste]
   architecture: [archi-entreprise, archi-affaires, archi-donnees, archi-applicatif, archi-techno, archi-securite, archi-solution, archi-entreprise-synthese]
 avis:
   spec: [challenger]

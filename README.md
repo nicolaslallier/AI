@@ -54,12 +54,12 @@ flowchart LR
     g2_revue["revue"]
     g2_challenger["challenger"]
     g2_securite["securite"]
-    g2_doc["doc"]
+    g2_documentaliste["documentaliste"]
     g2_tests --> g2_code
     g2_code --> g2_revue
     g2_revue --> g2_challenger
     g2_challenger --> g2_securite
-    g2_securite --> g2_doc
+    g2_securite --> g2_documentaliste
   end
   subgraph g3["architecture"]
     g3_archi_entreprise["archi-entreprise"]
@@ -81,7 +81,7 @@ flowchart LR
   subgraph g4["hors pipeline"]
     g4_orchestrateur["orchestrateur"]
     g4_architecte["architecte"]
-    g4_documentaliste["documentaliste"]
+    g4_doc["doc"]
     g4_pm["pm"]
     g4_tri["tri"]
   end
