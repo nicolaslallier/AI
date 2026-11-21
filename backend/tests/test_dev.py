@@ -997,6 +997,37 @@ async def test_doc_hors_chemins_restaure(monde_d):
     assert any("src/a.py" in n and "notes.txt" in n for n in notes)
 
 
+async def _tache_doc(monde):
+    async with monde.sessions() as s:
+        (await s.get(Tache, 1)).doc = True
+        await s.commit()
+
+
+async def test_tache_doc_seule_ouvre_une_pr_de_doc(monde_d):
+    await _tache_doc(monde_d)
+    monde_d.llm.reponses = [
+        appel("ecrire", chemin="docs/equipe.md", contenu="# Équipe\n"),
+        texte("fait"),
+    ]
+    pid = await monde_d.lancer()
+    ex, tache, pipeline = await monde_d.etat(pid)
+    assert (pipeline.etat, ex.mode, tache.colonne) == ("terminee", "doc", "en_revue")
+    assert monde_d.auteurs() == ["agent-doc@portail.local"]
+    assert monde_d.github.prs[1]["titre"] == "Ajouter l'équipe"
+    assert await etapes_apres(monde_d, "preparation") == ["doc", "pr"]
+    doc = appels_de(monde_d, "doc")[0]
+    assert any("Rédige la documentation demandée" in (m["content"] or "") for m in doc["messages"])
+
+
+async def test_tache_doc_sans_changement_bloque(monde_d):
+    await _tache_doc(monde_d)
+    monde_d.llm.reponses = [texte("rien")]
+    pid = await monde_d.lancer()
+    _ex, tache, pipeline = await monde_d.etat(pid)
+    assert (pipeline.etat, tache.colonne) == ("echouee", "bloquee")
+    assert 1 not in monde_d.github.prs
+
+
 async def test_relance_en_controles_reprend_au_bon_index(monde_d):
     monde_d.llm.reponses = [
         *TESTS_OK, *CODE_OK,

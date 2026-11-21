@@ -35,6 +35,8 @@ Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolas
 
 Schéma généré depuis `agents.yaml` ; après un changement, lancer `cd backend && uv run python -m portail.schema_pipelines`.
 
+Une tâche du kanban cochée « Documentation seulement » (champ `doc` de l'API des tâches) passe par le pipeline `dev` sans tests ni code : une fois *Prête*, seul l'agent de doc (`documentaliste`) tourne, sur la consigne de la tâche, puis le portail ouvre la PR. Sans changement de doc, la tâche est bloquée.
+
 La page Bureau (`/bureau`) montre en direct l'état de chaque agent, rangé comme ce schéma.
 
 <!-- schema-pipelines:debut -->

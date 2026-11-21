@@ -256,7 +256,7 @@ class Orchestrateur:
             ExecutionDev(
                 pipeline_id=pipeline.id, tache_id=tache.id, n=n, branche=branche,
                 espace=f"tache-{tache.id}-{n}", base=base, base_sha="", phase="preparation",
-                remarques=[], fichiers_tests=[],
+                mode="doc" if tache.doc else "normal", remarques=[], fichiers_tests=[],
             )
         )  # fmt: skip
         await deplacer_tache(session, tache, "en_cours", None, "portail")
@@ -430,6 +430,8 @@ class Orchestrateur:
                 "code": self._code, "verification": self._verification,
                 "controles": self._controles, "reponses": self._reponses,
             }  # fmt: skip
+        elif ctx.ex.mode == "doc":
+            phases = {"preparation": self._preparation, "doc": self._doc_seule, "pr": self._pr}
         else:
             phases = {
                 "preparation": self._preparation, "tests": self._tests, "rouge": self._rouge,
@@ -644,7 +646,8 @@ class Orchestrateur:
         if not reprise and "lint" in ctx.cfg.commandes:  # la dette existante ne bloque pas
             lint = await self._commande(ctx, "lint", tout_lecture_seule=True)
             champs["lint_base_ok"] = lint.code == 0
-        return await self._transition(ctx, "tri" if reprise else "tests", base_sha=sha, **champs)
+        suivante = "tri" if reprise else "doc" if ctx.ex.mode == "doc" else "tests"
+        return await self._transition(ctx, suivante, base_sha=sha, **champs)
 
     async def _tri(self, ctx: _Ctx) -> str:
         pris = await self._commentaires(ctx)
@@ -1016,10 +1019,23 @@ class Orchestrateur:
         await self._message(ctx, "system", _resume(verdict))
         return verdict
 
-    async def _doc(self, ctx: _Ctx, nom: str, annexes: list[str]) -> None:
+    async def _doc_seule(self, ctx: _Ctx) -> str:
+        """Tâche de doc seule : les agents de rôle doc de `pipelines.dev`, sans tests ni code."""
+        for nom in self._catalogue.pipelines["dev"]:
+            if self._catalogue.agents[nom].role == "doc":
+                consigne = "Rédige la documentation demandée par cette tâche."
+                await self._doc(ctx, nom, [_texte_tache(ctx.tache)], consigne)
+                await self._transition(ctx, "doc")
+        if not await ctx.espace.diff(ctx.ex.base_sha):
+            raise _Blocage("aucune documentation produite")
+        return "pr"
+
+    async def _doc(
+        self, ctx: _Ctx, nom: str, annexes: list[str], consigne: str | None = None
+    ) -> None:
         """L'agent de doc écrit dans `chemins_doc` ; tout le reste est annulé. Jamais de renvoi."""
         reprise = ctx.ex.mode == "reprise"
-        consigne = "Mets à jour la documentation de cette tâche."
+        consigne = consigne or "Mets à jour la documentation de cette tâche."
         if reprise and any(c.tri == "doc" for c in await self._commentaires(ctx)):
             annexes.append(await self._annexe_commentaires(ctx, {"doc"}))
             consigne = "Traite les commentaires de Nicolas sur la documentation."

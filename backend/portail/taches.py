@@ -5,7 +5,7 @@ from portail.db import Projet, Tache, TacheDependance, TacheEvenement
 from portail.moteur import Refus
 from portail.schemas import DonneesTache, DonneesTachePartielles
 
-CHAMPS = ("titre", "description", "criteres", "fichiers")
+CHAMPS = ("titre", "description", "criteres", "fichiers", "doc")
 
 
 def verifier_modifiable(tache: Tache) -> None:

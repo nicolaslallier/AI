@@ -195,6 +195,7 @@ class Tache(Base):
     origine: Mapped[str] = mapped_column(String)  # "agent" | "manuel"
     document_id: Mapped[int | None] = mapped_column(ForeignKey("document.id", ondelete="SET NULL"))
     protegee: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    doc: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     verrou: Mapped[int | None] = mapped_column(ForeignKey("pipeline.id", ondelete="SET NULL"))
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     resume_blocage: Mapped[str | None] = mapped_column(Text)
