@@ -81,6 +81,7 @@ flowchart LR
   subgraph g4["hors pipeline"]
     g4_orchestrateur["orchestrateur"]
     g4_architecte["architecte"]
+    g4_documentaliste["documentaliste"]
     g4_pm["pm"]
     g4_tri["tri"]
   end

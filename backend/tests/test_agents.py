@@ -119,6 +119,10 @@ def test_agents_yaml_du_depot_est_valide():
     d = a["doc"]
     assert (d.produit, d.role) == ("travail", "doc")
     assert d.outils == ["lister", "lire", "chercher", "ecrire", "supprimer"]
+    doc2 = a["documentaliste"]
+    assert (doc2.produit, doc2.role, doc2.modele) == ("travail", "doc", "gemma4:26b-a4b-it-qat")
+    assert doc2.outils == ["lister", "lire", "chercher", "ecrire", "supprimer"]
+    assert doc2.tours_max <= 30 and "à confirmer" in doc2.prompt_systeme
     pm = a["pm"]
     assert (
         set(pm.outils) == set(OUTILS_PORTAIL) - set(OUTILS_ACTIONS_PORTAIL) and pm.tours_max == 10
@@ -517,7 +521,7 @@ def test_agents_yaml_reel_bureau_d_architectes():
         "sol-",
         "ent-",
     ]
-    locaux = {"qwen3.8:27b-mlx", "mlx-community/GLM-4.7-Flash-8bit"}
+    locaux = {"qwen3.8:27b-mlx", "mlx-community/GLM-4.7-Flash-8bit", "gemma4:26b-a4b-it-qat"}
     for nom, a in cat.agents.items():
         assert nom.startswith("archi-") or a.modele in locaux, nom
     for a in cat.pipelines["architecture"][1:]:
