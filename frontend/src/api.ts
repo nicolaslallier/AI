@@ -347,10 +347,6 @@ export async function lireArchitecture(pipelineId: number): Promise<string> {
 export const urlDocumentArchitecture = (pipelineId: number) => `/api/pipelines/${pipelineId}/architecture.md`
 export const urlModeleArchimate = (pipelineId: number) => `/api/pipelines/${pipelineId}/architecture.xml`
 
-export interface ReponseMusique {
-  texte: string
-  context_id: string | null
-}
-export function demanderMusique(texte: string, contextId: string | null): Promise<ReponseMusique> {
-  return appel('POST', '/musique', { texte, context_id: contextId })
+export async function demanderMusique(texte: string): Promise<string> {
+  return (await appel<{ texte: string }>('POST', '/musique', { texte })).texte
 }

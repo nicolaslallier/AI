@@ -824,16 +824,17 @@ def create_app(
         return await _vue(s, tache_id)
 
     class MusiqueIn(BaseModel):
-        texte: str = Field(min_length=1)
-        context_id: str | None = None
+        texte: str = Field(min_length=1, max_length=4000, pattern=r"\S")
 
     @app.post("/api/musique")
-    async def musique(corps: MusiqueIn, request: Request):
+    async def musique(corps: MusiqueIn, request: Request, s: Session):
         r = request.app.state.reglages
         try:
-            return await demander(r.litellm_url, r.litellm_cle, corps.texte, corps.context_id)
+            texte = await demander(r.litellm_url, r.litellm_cle, corps.texte)
         except ErreurMusique as e:
             raise HTTPException(502, str(e)) from e
+        await _tracer(s, request, "musique.message", "musique", 0)
+        return {"texte": texte}
 
     class MessageIn(BaseModel):
         contenu: str
