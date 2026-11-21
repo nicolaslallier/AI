@@ -6,8 +6,8 @@ use std::time::Duration;
 use bollard::Docker;
 use bollard::errors::Error as ErreurBollard;
 use bollard::models::{
-    ContainerCreateBody, EndpointSettings, HostConfig, HostConfigLogConfig, Mount, MountType,
-    MountVolumeOptions, NetworkCreateRequest, NetworkingConfig,
+    ContainerCreateBody, EndpointSettings, HostConfig, HostConfigLogConfig, Ipam, IpamConfig,
+    Mount, MountType, MountVolumeOptions, NetworkCreateRequest, NetworkingConfig,
 };
 use bollard::query_parameters::{
     CreateContainerOptions, CreateImageOptions, ListContainersOptions, LogsOptions,
@@ -100,6 +100,22 @@ pub fn espace_valide(e: &str) -> bool {
 pub fn reseau_services(espace: &str) -> String {
     format!("portail-svc-{espace}")
 }
+
+/// Sous-réseau /28 du réseau de services d'un espace, dans 10.251.0.0/16.
+/// Sans plage explicite, Docker prend la suivante libre : une fois 172.17-31 épuisées,
+/// il attribue 192.168.0.0/20, qui chevauche le LAN (Ollama injoignable pendant le
+/// pipeline). Même raison que le sous-réseau fixe de `portail-agents` (10.250.250.0/24).
+/// Hash FNV-1a écrit ici : stable d'une version de Rust à l'autre, contrairement à
+/// `DefaultHasher`. `essai` passe au /28 suivant si celui-ci est déjà pris.
+pub fn sous_reseau_services(espace: &str, essai: u32) -> String {
+    let hash = espace.bytes().fold(0x811c_9dc5_u32, |h, o| {
+        (h ^ u32::from(o)).wrapping_mul(0x0100_0193)
+    });
+    let index = hash.wrapping_add(essai) % 4096;
+    format!("10.251.{}.{}/28", index / 16, (index % 16) * 16)
+}
+
+const ESSAIS_SOUS_RESEAU: u32 = 8;
 
 pub fn valider_services(cfg: &Config, d: &DemandeServices) -> Result<(), String> {
     for s in &d.services {
@@ -414,13 +430,36 @@ impl Moteur for Docker {
     async fn services(&self, cfg: &Config, d: &DemandeServices) -> Result<(), Erreur> {
         let reseau = reseau_services(&d.espace);
         if self.inspect_network(&reseau, None).await.is_err() {
-            self.create_network(NetworkCreateRequest {
-                name: reseau.clone(),
-                internal: Some(true),
-                labels: Some(libelle(&d.espace)),
-                ..Default::default()
-            })
-            .await?;
+            let mut essai = 0;
+            loop {
+                let creation = self
+                    .create_network(NetworkCreateRequest {
+                        name: reseau.clone(),
+                        internal: Some(true),
+                        labels: Some(libelle(&d.espace)),
+                        ipam: Some(Ipam {
+                            config: Some(vec![IpamConfig {
+                                subnet: Some(sous_reseau_services(&d.espace, essai)),
+                                ..Default::default()
+                            }]),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    })
+                    .await;
+                match creation {
+                    // Plage déjà prise par un autre réseau : on tente le /28 suivant.
+                    Err(ErreurBollard::DockerResponseServerError { ref message, .. })
+                        if message.contains("overlaps") && essai + 1 < ESSAIS_SOUS_RESEAU =>
+                    {
+                        essai += 1;
+                    }
+                    autre => {
+                        autre?;
+                        break;
+                    }
+                }
+            }
         }
         for s in &d.services {
             // Toujours la référence épinglée de la liste, jamais celle de la demande.
@@ -515,6 +554,36 @@ mod tests {
 
     const IMAGE: &str = "ghcr.io/x/execution:1";
     const ESPACE: &str = "tache-1-1";
+
+    #[test]
+    fn sous_reseau_services_est_un_28_dans_10_251() {
+        for essai in 0..20 {
+            for espace in [ESPACE, "tache-2-7", "", "x"] {
+                let s = sous_reseau_services(espace, essai);
+                let (ip, masque) = s.split_once('/').unwrap();
+                assert_eq!(masque, "28");
+                let o: Vec<u8> = ip.split('.').map(|x| x.parse().unwrap()).collect();
+                assert_eq!(&o[..2], &[10, 251], "{s}");
+                assert_eq!(o[3] % 16, 0, "{s}");
+            }
+        }
+    }
+
+    #[test]
+    fn sous_reseau_services_deterministe_et_change_selon_l_essai() {
+        assert_eq!(
+            sous_reseau_services(ESPACE, 0),
+            sous_reseau_services(ESPACE, 0)
+        );
+        assert_ne!(
+            sous_reseau_services(ESPACE, 0),
+            sous_reseau_services(ESPACE, 1)
+        );
+        assert_ne!(
+            sous_reseau_services(ESPACE, 0),
+            sous_reseau_services("tache-1-2", 0)
+        );
+    }
 
     fn spec(ro: &[&str]) -> Result<ContainerCreateBody, String> {
         let ro: Vec<String> = ro.iter().map(|c| c.to_string()).collect();
