@@ -9,7 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from test_dev import BRANCHE, CATALOGUE, CIBLES, CODE_OK, CONFIG, TESTS_OK, Monde, texte, verdict
 
-from portail.api import create_app
+from portail.api import _orchestrateur, create_app
+from portail.config import Reglages
 from portail.db import (
     Audit,
     Etape,
@@ -518,3 +519,13 @@ async def test_reprise_en_attente_tache_annulee_abandonnee(tmp_path, sessions):
     assert m.orch.taches == {}
     _ex, tache, pipeline = await m.etat(pid)
     assert (pipeline.etat, tache.colonne) == ("echouee", "a_faire")
+
+
+def test_ordonnanceur_eteint_nomme_les_cles_absentes(caplog):
+    r = Reglages(database_url="x", github_app_id="", github_app_cle="", lanceur_secret="s3cr3t")
+    with caplog.at_level("WARNING", logger="portail.api"):
+        assert _orchestrateur(r, None, None, None, None) is None
+    assert "ordonnanceur éteint : PORTAIL_GITHUB_APP_ID, PORTAIL_GITHUB_APP_CLE absentes" in (
+        caplog.text
+    )
+    assert "PORTAIL_LANCEUR_SECRET" not in caplog.text and "s3cr3t" not in caplog.text

@@ -383,8 +383,23 @@ async def _annuler_tache(state, s: AsyncSession, tache_id: int) -> None:
 
 
 def _orchestrateur(r: Reglages, sessions, catalogue, llm, missions) -> Orchestrateur | None:
-    """Seulement si l'App GitHub et le lanceur sont configurés ; sinon rien, sans erreur."""
-    if not (r.github_app_id and r.github_app_cle and r.lanceur_secret):
+    """Seulement si l'App GitHub et le lanceur sont configurés ; sinon un avertissement qui nomme
+    les variables absentes (jamais leurs valeurs) et pas d'ordonnanceur."""
+    manquantes = [
+        nom
+        for nom, valeur in (
+            ("PORTAIL_GITHUB_APP_ID", r.github_app_id),
+            ("PORTAIL_GITHUB_APP_CLE", r.github_app_cle),
+            ("PORTAIL_LANCEUR_SECRET", r.lanceur_secret),
+        )
+        if not valeur
+    ]
+    if manquantes:
+        logger.warning(
+            "ordonnanceur éteint : %s absente%s",
+            ", ".join(manquantes),
+            "s" if len(manquantes) > 1 else "",
+        )
         return None
     try:
         github = GitHubApp(r.github_app_id, r.github_app_cle)
