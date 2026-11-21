@@ -40,6 +40,8 @@ class Agent(BaseModel):
     temperature: float | None = None
     # plafond de jetons de la réponse ; absent : aucune limite envoyée au modèle
     sortie_max: int | None = Field(default=None, gt=0)
+    # false : envoie reasoning_effort « none » (seul réglage qui coupe la réflexion de qwen via LiteLLM)
+    reflexion: bool = True
     consigne_redaction: str | None = None
     produit: Literal[
         "spec", "plan", "taches", "travail", "verdict", "vision", "volet", "architecture"
@@ -155,11 +157,11 @@ class Catalogue(BaseModel):
 def agent_effectif(cat: Catalogue, nom: str, modele: str | None) -> Agent | None:
     """L'agent du catalogue, avec le modèle choisi pour l'étape s'il est encore permis (le catalogue reste intact).
 
-    La température de l'agent est réglée pour son propre modèle : un autre modèle ne la reçoit pas
-    (cloud-anthropic et cloud-openai la refusent)."""
+    La température et la réflexion de l'agent sont réglées pour son propre modèle : un autre modèle
+    ne les reçoit pas (cloud-anthropic et cloud-openai refusent la température)."""
     agent = cat.agents.get(nom)
     if agent and modele in cat.modeles_permis and modele != agent.modele:
-        return agent.model_copy(update={"modele": modele, "temperature": None})
+        return agent.model_copy(update={"modele": modele, "temperature": None, "reflexion": True})
     return agent
 
 

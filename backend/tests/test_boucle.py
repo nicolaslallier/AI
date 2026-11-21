@@ -325,3 +325,10 @@ async def test_tours_non_observes_sans_appel_et_observe_garde(outils, monkeypatc
     llm.reponses = [_texte("Fini")]
     resultat, _, _ = await _go(llm, outils)  # l'observation qui lève ne masque pas le résultat
     assert resultat.texte == "Fini"
+
+
+async def test_boucle_transmet_la_reflexion_de_l_agent(outils):
+    llm = FauxLLM()
+    llm.reponses = [_appel(), _texte("Fini")]
+    await _go(llm, outils, agent=_agent(reflexion=False))
+    assert [a["reflexion"] for a in llm.appels] == [False, False]

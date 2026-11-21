@@ -497,6 +497,7 @@ async def completer(
             agent.temperature,
             response_format=response_format,
             sortie_max=agent.sortie_max,
+            reflexion=agent.reflexion,
         )
         return retirer_reflexion(reponse.get("content") or "")
     if missions is None:
@@ -636,7 +637,7 @@ def _erreur_modele(m: Mission, e: Exception) -> ErreurLLM:
 async def _pomper(m: Mission, messages: list[dict], file: asyncio.Queue) -> None:
     try:
         async for morceau in m.llm.flux(
-            m.agent.modele, messages, m.agent.temperature, m.agent.sortie_max
+            m.agent.modele, messages, m.agent.temperature, m.agent.sortie_max, m.agent.reflexion
         ):
             await file.put(morceau)  # file bornée : un agent qui ne lit plus ralentit le modèle
         await file.put(None)
@@ -747,6 +748,7 @@ async def modele(request: Request):
                     outils=offerts,
                     response_format=d.response_format,
                     sortie_max=agent.sortie_max,
+                    reflexion=agent.reflexion,
                 ),
             )
         except ErreurMission:
