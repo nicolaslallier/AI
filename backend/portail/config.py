@@ -40,6 +40,9 @@ class Reglages(BaseSettings):
     reseau_agents: str = (
         ""  # PORTAIL_RESEAU_AGENTS : CIDR du réseau des agents ; vide : aucun filtrage
     )
+    llm_delai_s: int = Field(
+        default=300, gt=0
+    )  # PORTAIL_LLM_DELAI_S : délai de lecture des appels LiteLLM
     deploye_le: int = 0  # PORTAIL_DEPLOYE_LE : secondes Unix du déploiement
 
     @field_validator("reseau_agents")

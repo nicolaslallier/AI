@@ -38,12 +38,14 @@ class ClientLLM:
         transport: httpx.AsyncBaseTransport | None = None,
         sessions: async_sessionmaker[AsyncSession] | None = None,
         version: str = "",
+        delai_s: int = 300,
     ):
         self._url = url.rstrip("/")
         self._cle = cle
         self._transport = transport
         self._sessions = sessions
         self._version = version
+        self._delai_s = delai_s
 
     @staticmethod
     def _mesurer(ctx: dict, modele: str, issue: str, usage: dict, duree: float) -> None:
@@ -117,7 +119,7 @@ class ClientLLM:
             for essai in (1, 2):
                 async with (
                     httpx.AsyncClient(
-                        timeout=httpx.Timeout(300, connect=10), transport=self._transport
+                        timeout=httpx.Timeout(self._delai_s, connect=10), transport=self._transport
                     ) as client,
                     client.stream(
                         "POST",
@@ -187,7 +189,7 @@ class ClientLLM:
         debut = time.monotonic()
         try:
             async with httpx.AsyncClient(
-                timeout=httpx.Timeout(300, connect=10), transport=self._transport
+                timeout=httpx.Timeout(self._delai_s, connect=10), transport=self._transport
             ) as client:
                 reponse = await client.post(
                     f"{self._url}/v1/chat/completions",

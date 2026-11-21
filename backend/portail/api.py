@@ -435,7 +435,11 @@ def create_app(
         moteur = creer_moteur(r.database_url)
         app.state.sessions = fabrique_sessions(moteur)
         app.state.llm = llm or ClientLLM(
-            r.litellm_url, r.litellm_cle, sessions=app.state.sessions, version=r.version
+            r.litellm_url,
+            r.litellm_cle,
+            sessions=app.state.sessions,
+            version=r.version,
+            delai_s=r.llm_delai_s,
         )
         async with app.state.sessions() as s:
             await recuperer_interrompues(s)
