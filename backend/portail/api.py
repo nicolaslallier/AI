@@ -9,11 +9,11 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,6 +56,7 @@ from portail.lanceur import ClientLanceur
 from portail.llm import ClientLLM
 from portail.missions import ROUTEUR_INTERNE, Missions, lire_secrets
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
+from portail.musique import ErreurMusique, demander
 from portail.notifications import Notifieur
 from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
@@ -821,6 +822,18 @@ def create_app(
         await _annuler_tache(request.app.state, s, tache_id)
         await _tracer(s, request, "tache.annuler", "tache", tache_id)
         return await _vue(s, tache_id)
+
+    class MusiqueIn(BaseModel):
+        texte: str = Field(min_length=1)
+        context_id: str | None = None
+
+    @app.post("/api/musique")
+    async def musique(corps: MusiqueIn, request: Request):
+        r = request.app.state.reglages
+        try:
+            return await demander(r.litellm_url, r.litellm_cle, corps.texte, corps.context_id)
+        except ErreurMusique as e:
+            raise HTTPException(502, str(e)) from e
 
     class MessageIn(BaseModel):
         contenu: str

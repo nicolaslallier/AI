@@ -7,6 +7,7 @@ import KanbanView from './views/KanbanView.vue'
 import ChatView from './views/ChatView.vue'
 import BureauView from './views/BureauView.vue'
 import AuditView from './views/AuditView.vue'
+import MusiqueView from './views/MusiqueView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -18,6 +19,7 @@ export const router = createRouter({
     { path: '/pipelines/:id', name: 'pipeline', component: PipelineView, props: true },
     { path: '/bureau', name: 'bureau', component: BureauView },
     { path: '/audit', name: 'audit', component: AuditView },
+    { path: '/musique', name: 'musique', component: MusiqueView },
     { path: '/chat', name: 'chat', component: ChatView },
     { path: '/chat/:id', name: 'conversation', component: ChatView, props: true },
   ],
