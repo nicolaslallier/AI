@@ -14,7 +14,7 @@ use bollard::query_parameters::{
 use futures_util::{FutureExt, StreamExt};
 use lanceur::config::Config;
 use lanceur::conteneurs::{
-    DemandeLancer, DemandeServices, Erreur, Moteur, Resultat, Service, nom_service,
+    DemandeLancer, DemandeServices, Erreur, Moteur, Resultat, Service, nom_service, reseau_services,
 };
 
 const IMAGE: &str = "busybox:1.36";
@@ -289,6 +289,19 @@ async fn service_postgres_demarre() {
             .services(&b.cfg, &postgres(&b.espace))
             .await
             .unwrap();
+        // Sous-réseau explicite, jamais une plage par défaut de Docker (192.168 coupe le LAN).
+        let ipam = b
+            .docker
+            .inspect_network(&reseau_services(&b.espace), None)
+            .await
+            .unwrap()
+            .ipam
+            .unwrap();
+        let sous_reseau = ipam.config.unwrap()[0].subnet.clone().unwrap();
+        assert!(
+            sous_reseau.starts_with("10.251.") && sous_reseau.ends_with("/28"),
+            "{sous_reseau}"
+        );
         let nom = nom_service(&b.espace, "db");
         let debut = Instant::now();
         while exec(&b.docker, &nom, &["pg_isready", "-h", "127.0.0.1"]).await != Some(0) {
