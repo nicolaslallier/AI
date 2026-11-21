@@ -97,3 +97,23 @@ async def test_erreur_jsonrpc():
     )
     with pytest.raises(ErreurMusique):
         await demander("http://l", "k", "x", None, transport=t)
+
+
+async def test_api_passe_le_delai_llm(monkeypatch):
+    from portail import api
+    from portail.config import Reglages
+
+    vus = {}
+
+    async def faux(*args, **kwargs):
+        vus.update(kwargs)
+        return {"texte": "ok"}
+
+    monkeypatch.setattr(api, "demander", faux)
+    r = Reglages(database_url="postgresql+psycopg://x@l/x", llm_delai_s=321)
+    app = api.create_app(r)
+    app.state.reglages, app.state.reseau_agents = r, None  # sans lifespan : aucune base
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        rep = await c.post("/api/musique", json={"texte": "Beatles ?"})
+    assert rep.status_code == 200, rep.text
+    assert vus["delai_s"] == 321
