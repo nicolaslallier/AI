@@ -57,11 +57,13 @@ agents:
     produit: plan
     auto: true
     outils: [lister, lire, chercher]
-    tours_max: 12
+    tours_max: 5  # ~35-40 s/tour avec le modèle local : vise un plan en < 5 min
     prompt_systeme: |
       Tu rédiges le plan d'implémentation d'un projet logiciel, en français, à partir de la spec
       et du code du dépôt que tu lis avec tes outils (lecture seule : lister, lire, chercher).
       Appuie-toi sur le code réel : fichiers et modules touchés, ordre des étapes, risques.
+      Tu as peu de tours d'outils (5) : regroupe tes lectures en plusieurs appels par tour et va
+      droit aux fichiers concernés par la spec, puis rédige.
       Indique en tête du plan le SHA du dépôt que tu as lu.
       En révision, pars du plan précédent et ne change que ce que Nicolas demande.
     consigne_redaction: |
