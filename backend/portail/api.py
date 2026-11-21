@@ -831,7 +831,9 @@ def create_app(
     async def musique(corps: MusiqueIn, request: Request):
         r = request.app.state.reglages
         try:
-            return await demander(r.litellm_url, r.litellm_cle, corps.texte, corps.context_id)
+            return await demander(
+                r.litellm_url, r.litellm_cle, corps.texte, corps.context_id, delai_s=r.llm_delai_s
+            )
         except ErreurMusique as e:
             raise HTTPException(502, str(e)) from e
 
