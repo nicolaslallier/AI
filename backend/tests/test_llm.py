@@ -157,11 +157,29 @@ async def test_completer_envoie_tools_et_lit_le_message():
 
 
 async def test_completer_erreur_http():
-    client = ClientLLM(
-        "http://l", "", transport=httpx.MockTransport(lambda r: httpx.Response(500, text="boum"))
-    )
+    appels = []
+
+    def handler(r):
+        appels.append(r)
+        return httpx.Response(500, text="boum")
+
+    client = ClientLLM("http://l", "", transport=httpx.MockTransport(handler))
     with pytest.raises(ErreurLLM, match="500"):
         await client.completer("m", [], None)
+    assert len(appels) == 1
+
+
+async def test_completer_injoignable_sans_reessai():
+    appels = []
+
+    def handler(r):
+        appels.append(r)
+        raise httpx.ConnectError("refus")
+
+    client = ClientLLM("http://l", "", transport=httpx.MockTransport(handler))
+    with pytest.raises(ErreurLLM, match="injoignable"):
+        await client.completer("m", [], None)
+    assert len(appels) == 1
 
 
 async def test_completer_envoie_response_format():
@@ -268,7 +286,7 @@ async def test_delai_configure_arrive_au_timeout():
     assert all(d["connect"] == 10 for d in delais)
 
 
-@pytest.mark.parametrize("delai", [0, 900])
+@pytest.mark.parametrize("delai", [0, 450])
 def test_delai_hors_bornes_refuse(delai):
     from pydantic import ValidationError
 
