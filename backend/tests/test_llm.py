@@ -193,3 +193,21 @@ async def test_sortie_max_part_en_max_tokens_des_deux_chemins():
     _ = [m async for m in client.flux("m", [], None)]
     await client.completer("m", [], None)
     assert [v.get("max_tokens") for v in vues] == [500, 500, None, None]
+
+
+async def test_reflexion_coupee_part_en_reasoning_effort_none_des_deux_chemins():
+    vues = []
+
+    def handler(requete: httpx.Request) -> httpx.Response:
+        corps = json.loads(requete.content)
+        vues.append(corps)
+        if corps["stream"]:
+            return httpx.Response(200, text=_sse({"content": "a"}))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = ClientLLM("http://l", "k", transport=httpx.MockTransport(handler))
+    _ = [m async for m in client.flux("m", [], None, reflexion=False)]
+    await client.completer("m", [], None, reflexion=False)
+    _ = [m async for m in client.flux("m", [], None)]
+    await client.completer("m", [], None)
+    assert [v.get("reasoning_effort") for v in vues] == ["none", "none", None, None]

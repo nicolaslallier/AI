@@ -550,6 +550,13 @@ def test_agents_yaml_sortie_max_et_temperature_du_bureau_d_architectes():
     assert cat.agents["orchestrateur"].sortie_max is None
 
 
+def test_agents_yaml_reflexion_coupee_pour_les_agents_de_dev():
+    cat = charger_catalogue(RACINE / "agents.yaml")
+    for nom in ("tests", "code", "revue"):
+        assert cat.agents[nom].reflexion is False, nom
+    assert cat.agents["spec"].reflexion is True  # défaut
+
+
 def test_sortie_max_doit_etre_positive():
     with pytest.raises(ValueError):
         Agent(
@@ -560,12 +567,14 @@ def test_sortie_max_doit_etre_positive():
 def test_agent_effectif():
     from conftest import _agent
 
-    spec = _agent("spec").model_copy(update={"temperature": 0.3})
+    spec = _agent("spec").model_copy(update={"temperature": 0.3, "reflexion": False})
     cat = Catalogue(modeles_permis=["m", "g"], agents={"spec": spec}, pipelines={})
     assert agent_effectif(cat, "spec", None).temperature == 0.3
     assert agent_effectif(cat, "spec", "m").temperature == 0.3
     autre = agent_effectif(cat, "spec", "g")
     assert (autre.modele, autre.temperature) == ("g", None)  # cloud-anthropic refuse la température
+    assert autre.reflexion is True  # le réglage vaut pour le modèle de l'agent seulement
+    assert agent_effectif(cat, "spec", "m").reflexion is False
     assert cat.agents["spec"].modele == "m"  # le catalogue n'est pas modifié
     assert agent_effectif(cat, "spec", "retire").modele == "m"  # retiré d'agents.yaml : repli
     assert agent_effectif(cat, "absent", "g") is None
