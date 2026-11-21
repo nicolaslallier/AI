@@ -10,12 +10,14 @@ class ErreurMusique(Exception):
 
 
 def _textes(parts: list | None) -> list[str]:
-    return [p["text"] for p in parts or [] if p.get("kind") == "text" and p.get("text")]
+    return [p["text"] for p in parts or [] if p.get("kind", "text") == "text" and p.get("text")]
 
 
 def texte_de(resultat: dict) -> str:
-    """Concatène les parts texte d'un résultat A2A : Message, ou Task (artefacts, sinon statut)."""
-    if resultat.get("kind") == "message":
+    """Concatène les parts texte d'un résultat A2A : Message, ou Task (artefacts, sinon statut).
+
+    A2A 0.3 marque Message/Task et parts par `kind` ; A2A 1.0 n'a plus de `kind`."""
+    if resultat.get("kind", "message" if "parts" in resultat else "task") == "message":
         return "\n\n".join(_textes(resultat.get("parts")))
     morceaux = [t for a in resultat.get("artifacts") or [] for t in _textes(a.get("parts"))]
     if not morceaux:
@@ -66,6 +68,8 @@ async def demander(
         if reponse.get("error"):  # message fixe : jamais le texte amont
             raise ErreurMusique("L'agent musique a renvoyé une erreur.")
         resultat = reponse["result"]
+        # A2A 1.0 enveloppe le résultat : {"message": {...}} ou {"task": {...}}
+        resultat = resultat.get("message") or resultat.get("task") or resultat
         return {"texte": texte_de(resultat), "context_id": resultat.get("contextId") or context_id}
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise ErreurMusique("Réponse de l'agent musique illisible.") from e
