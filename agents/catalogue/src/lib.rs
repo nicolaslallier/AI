@@ -15,6 +15,7 @@ pub const NOMS: [&str; 22] = [
     "challenger",
     "securite",
     "doc",
+    "documentaliste",
     "pm",
     "tri",
     "archi-entreprise",
@@ -25,7 +26,6 @@ pub const NOMS: [&str; 22] = [
     "archi-securite",
     "archi-solution",
     "archi-entreprise-synthese",
-    "documentaliste",
 ];
 
 /// Le travail d'un agent. Un agent sur mesure gagne ici sa branche et son module.
