@@ -250,3 +250,29 @@ async def test_completer_message_user_inchange_ou_complete(messages, ajout):
     await client.completer("m", messages, None)
     attendu = messages + ([{"role": "user", "content": "Poursuis."}] if ajout else [])
     assert vues[0]["messages"] == attendu
+
+
+async def test_delai_configure_arrive_au_timeout():
+    delais = []
+
+    def handler(requete: httpx.Request) -> httpx.Response:
+        delais.append(requete.extensions["timeout"])
+        if json.loads(requete.content).get("stream"):
+            return httpx.Response(200, text=_sse({"content": "a"}))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = ClientLLM("http://l", "k", transport=httpx.MockTransport(handler), delai_s=900)
+    _ = [m async for m in client.flux("m", [], None)]
+    await client.completer("m", [], None)
+    assert [d["read"] for d in delais] == [900, 900]
+    assert all(d["connect"] == 10 for d in delais)
+
+
+@pytest.mark.parametrize("delai", [0, 900])
+def test_delai_hors_bornes_refuse(delai):
+    from pydantic import ValidationError
+
+    from portail.config import Reglages
+
+    with pytest.raises(ValidationError):
+        Reglages(database_url="postgresql://x", llm_delai_s=delai)
