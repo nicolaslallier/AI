@@ -240,6 +240,7 @@ class DonneesTache(BaseModel):
     criteres: list[str] = []
     fichiers: list[str] = []
     depend_de: list[int] = []
+    doc: bool = False  # tâche de documentation seule : l'agent de doc, puis la PR
 
     _titre = field_validator("titre")(_titre_valide)
 
@@ -250,10 +251,11 @@ class DonneesTachePartielles(BaseModel):
     criteres: list[str] | None = None
     fichiers: list[str] | None = None
     depend_de: list[int] | None = None
+    doc: bool | None = None
 
     _titre = field_validator("titre")(_titre_valide)
 
-    @field_validator("description", "criteres", "fichiers", "depend_de")
+    @field_validator("description", "criteres", "fichiers", "depend_de", "doc")
     @classmethod
     def _pas_nul(cls, v):
         if v is None:
@@ -273,6 +275,7 @@ class TacheVue(BaseModel):
     origine: str
     document_id: int | None
     protegee: bool
+    doc: bool = False
     verrou: int | None
     version: int
     cree_le: datetime

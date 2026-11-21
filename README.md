@@ -35,6 +35,8 @@ Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolas
 
 Schéma généré depuis `agents.yaml` ; après un changement, lancer `cd backend && uv run python -m portail.schema_pipelines`.
 
+Une tâche du kanban cochée « Documentation seulement » (champ `doc` de l'API des tâches) passe par le pipeline `dev` sans tests ni code : une fois *Prête*, seul l'agent de doc (`documentaliste`) tourne, sur la consigne de la tâche, puis le portail ouvre la PR. Sans changement de doc, la tâche est bloquée.
+
 La page Bureau (`/bureau`) montre en direct l'état de chaque agent, rangé comme ce schéma.
 
 <!-- schema-pipelines:debut -->
@@ -54,12 +56,12 @@ flowchart LR
     g2_revue["revue"]
     g2_challenger["challenger"]
     g2_securite["securite"]
-    g2_doc["doc"]
+    g2_documentaliste["documentaliste"]
     g2_tests --> g2_code
     g2_code --> g2_revue
     g2_revue --> g2_challenger
     g2_challenger --> g2_securite
-    g2_securite --> g2_doc
+    g2_securite --> g2_documentaliste
   end
   subgraph g3["architecture"]
     g3_archi_entreprise["archi-entreprise"]
@@ -81,6 +83,7 @@ flowchart LR
   subgraph g4["hors pipeline"]
     g4_orchestrateur["orchestrateur"]
     g4_architecte["architecte"]
+    g4_doc["doc"]
     g4_pm["pm"]
     g4_tri["tri"]
   end
@@ -161,6 +164,7 @@ Le dépôt est public : rien de secret n'y entre, tout passe par OpenBao.
 11. Rendre le runner auto-hébergé `ai` éphémère (un job, puis il est recréé). Le dépôt est public : une PR de fork peut AJOUTER son propre workflow `on: pull_request` avec `runs-on: [self-hosted, ai]`, donc le contenu des workflows de `main` ne protège pas le runner ; seuls l'approbation de tout fork et l'éphémérité le font.
 12. **Avant la fusion du lot I** : ranger dans OpenBao, dans le secret `infra/portail`, une clé par agent `PORTAIL_AGENT_SECRET_<NOM>` : `SPEC`, `ORCHESTRATEUR`, `PLAN`, `TACHES`, `TESTS`, `CODE`, `REVUE`, `ARCHITECTE`, `CHALLENGER`, `SECURITE`, `DOC`, `PM`, `TRI` (13 clés, chacune tirée de `openssl rand -hex 32`). Sans elles, le déploiement s'arrête proprement sur « clé absente ».
     **Bureau d'architectes** : huit clés de plus dans le même secret, `PORTAIL_AGENT_SECRET_ARCHI_ENTREPRISE`, `…_ARCHI_AFFAIRES`, `…_ARCHI_DONNEES`, `…_ARCHI_APPLICATIF`, `…_ARCHI_TECHNO`, `…_ARCHI_SECURITE`, `…_ARCHI_SOLUTION` et `…_ARCHI_ENTREPRISE_SYNTHESE` (32 caractères au moins chacune), à créer avant le déploiement : sans elles la pile ne démarre pas.
+    **Documentaliste** : **avant la fusion de la PR #50**, ajouter `PORTAIL_AGENT_SECRET_DOCUMENTALISTE` (`openssl rand -hex 32`) au même secret, sinon le déploiement s'arrête sur « clé absente ».
 13. Ajouter le contrôle `agents` à la protection de `main` (avec `backend`, `frontend`, `lanceur` et `securite`).
 14. **Après la fusion** : ouvrir la PR Infra du lot I (`deploy/infra/README.md`).
 15. **Avant le premier `service:`** : vérifier que le réseau `portail_portail-agents` n'ouvre pas l'hôte (`nc -zv 10.250.250.1 22` depuis un conteneur de test doit échouer) et que le paquet GHCR `ai-agents` peut être tiré par Portainer et Trivy (voir `deploy/infra/README.md`).

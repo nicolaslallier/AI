@@ -59,6 +59,7 @@ export interface Tache {
   origine: string
   document_id: number | null
   protegee: boolean
+  doc: boolean
   verrou: number | null
   version: number
   cree_le: string
@@ -75,6 +76,7 @@ export interface DonneesTache {
   criteres: string[]
   fichiers: string[]
   depend_de: number[]
+  doc?: boolean
 }
 export interface Proposition {
   id: number

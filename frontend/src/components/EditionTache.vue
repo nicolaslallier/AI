@@ -16,6 +16,7 @@ const titre = ref(src.titre ?? '')
 const description = ref(src.description ?? '')
 const criteres = ref((src.criteres ?? []).join('\n'))
 const fichiers = ref((src.fichiers ?? []).join('\n'))
+const doc = ref(src.doc ?? false)
 const dependances = ref<number[]>([...(props.tache?.depend_de ?? props.initiale?.depend_de ?? [])])
 const erreur = defineModel<string>('erreur', { default: '' })
 const apercu = computed(() => rendreMarkdown(description.value))
@@ -28,6 +29,7 @@ function valider() {
     criteres: lignes(criteres.value),
     fichiers: lignes(fichiers.value),
     depend_de: dependances.value,
+    doc: doc.value,
   })
 }
 function supprimer() {
@@ -45,6 +47,9 @@ function supprimer() {
       <div v-if="description" class="apercu markdown" v-html="apercu" />
       <label>Critères (un par ligne) <textarea v-model="criteres" rows="3" /></label>
       <label>Fichiers (un par ligne) <textarea v-model="fichiers" rows="3" /></label>
+      <label class="dep">
+        <input v-model="doc" type="checkbox" /> Documentation seulement (l'agent de doc, puis la PR)
+      </label>
       <fieldset v-if="autres.length">
         <legend>Dépend de</legend>
         <label v-for="a in autres" :key="a.id" class="dep">

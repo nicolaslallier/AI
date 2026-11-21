@@ -4,7 +4,7 @@ import type { Tache } from './api'
 
 const t = (id: number, colonne: string, rang: number, titre = 'x', description = ''): Tache => ({
   id, projet_id: 1, titre, description, criteres: [], fichiers: [], colonne, rang, origine: 'nicolas',
-  document_id: null, protegee: false, verrou: null, version: 1, cree_le: '', maj_le: '',
+  document_id: null, protegee: false, doc: false, verrou: null, version: 1, cree_le: '', maj_le: '',
   depend_de: [], dependances_non_terminees: [], pr_url: null, resume_blocage: null, reprise: false,
 })
 
