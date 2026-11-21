@@ -1,4 +1,4 @@
-modeles_permis: [qwen3.8:27b-mlx, mlx-community/GLM-4.7-Flash-8bit, gemma4:26b-a4b-it-qat, cloud-anthropic, cloud-openai, cloud-gemini]
+modeles_permis: [qwen3.8:27b-mlx, gemma4:26b-a4b-it-qat, cloud-anthropic, cloud-openai, cloud-gemini]
 agents:
   spec:
     description: Discute avec Nicolas pour écrire la spec d'un projet.
@@ -169,7 +169,7 @@ agents:
   challenger:
     description: Conteste le travail ou le document avec un regard indépendant.
     modele: qwen3.8:27b-mlx
-    modele_si_meme: mlx-community/GLM-4.7-Flash-8bit
+    modele_si_meme: gemma4:26b-a4b-it-qat
     contexte_max: 32768
     temperature: 0.3
     produit: verdict

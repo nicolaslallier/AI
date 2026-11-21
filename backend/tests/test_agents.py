@@ -118,7 +118,7 @@ def test_agents_yaml_du_depot_est_valide():
     )
     c = a["challenger"]
     assert (c.produit, c.role, c.modele) == ("verdict", "revue", "qwen3.8:27b-mlx")
-    assert c.modele_si_meme == "mlx-community/GLM-4.7-Flash-8bit"
+    assert c.modele_si_meme == "gemma4:26b-a4b-it-qat"
     assert c.outils == ["lister", "lire", "chercher"] and c.consigne_avis
     s = a["securite"]
     assert (s.produit, s.role) == ("verdict", "revue")
@@ -528,7 +528,7 @@ def test_agents_yaml_reel_bureau_d_architectes():
         "sol-",
         "ent-",
     ]
-    locaux = {"qwen3.8:27b-mlx", "mlx-community/GLM-4.7-Flash-8bit", "gemma4:26b-a4b-it-qat"}
+    locaux = {"qwen3.8:27b-mlx", "gemma4:26b-a4b-it-qat"}
     for nom, a in cat.agents.items():
         assert nom.startswith("archi-") or a.modele in locaux, nom
     for a in cat.pipelines["architecture"][1:]:
