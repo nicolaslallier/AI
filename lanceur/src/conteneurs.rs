@@ -205,8 +205,9 @@ pub fn specification(
             pids_limit: Some(512),
             network_mode: Some(cfg.reseau.clone()),
             tmpfs: Some(HashMap::from([
-                ("/tmp".into(), String::new()),
-                ("/home/agent".into(), String::new()),
+                ("/tmp".into(), "mode=1777".into()),
+                // sans options, Docker le crée root:root 755 : l'agent (1000) n'y écrit pas
+                ("/home/agent".into(), "uid=1000,gid=1000,mode=0700".into()),
             ])),
             mounts: Some(montages),
             log_config: Some(journaux()),
@@ -629,7 +630,11 @@ mod tests {
             ])
         );
         let tmpfs = h.tmpfs.as_ref().unwrap();
-        assert!(tmpfs.contains_key("/tmp") && tmpfs.contains_key("/home/agent"));
+        assert_eq!(tmpfs.get("/tmp").map(String::as_str), Some("mode=1777"));
+        assert_eq!(
+            tmpfs.get("/home/agent").map(String::as_str),
+            Some("uid=1000,gid=1000,mode=0700")
+        );
         assert_eq!(c.cmd, Some(vec!["sh".into(), "-c".into(), "pytest".into()]));
         assert_eq!(c.working_dir.as_deref(), Some("/travail"));
         assert_eq!(
