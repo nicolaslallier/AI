@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -58,6 +59,7 @@ from portail.missions import ROUTEUR_INTERNE, Missions, lire_secrets
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
 from portail.musique import ErreurMusique, demander
 from portail.notifications import Notifieur
+from portail.obsidian import Coffre, creer_coffre
 from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.propositions import tout_accepter as accepter_tout
@@ -420,12 +422,14 @@ def create_app(
     catalogue: Catalogue | None = None,
     orchestrateur: Orchestrateur | None = None,
     missions: Missions | None = None,
+    coffre: Coffre | None = None,
 ) -> FastAPI:
     r = reglages or Reglages()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.reglages = r
+        app.state.coffre = coffre or creer_coffre(r)  # sans secret S3 : None, le Portail démarre
         app.state.reseau_agents = ipaddress.ip_network(r.reseau_agents) if r.reseau_agents else None
         metriques.initialiser(r)
         app.state.catalogue = catalogue or charger_catalogue(r.agents_fichier)
@@ -836,6 +840,34 @@ def create_app(
             )
         except ErreurMusique as e:
             raise HTTPException(502, str(e)) from e
+
+    def _coffre(request: Request) -> Coffre:
+        c = request.app.state.coffre
+        if c is None:
+            raise HTTPException(503, "coffre Obsidian non configuré")
+        return c
+
+    async def _lire_coffre(appel):
+        try:
+            return await appel
+        except FileNotFoundError:
+            raise HTTPException(404, "note introuvable") from None
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        except (BotoCoreError, ClientError) as e:
+            code = (
+                e.response.get("Error", {}).get("Code", "?") if isinstance(e, ClientError) else ""
+            )
+            journal.erreur(logger, "coffre Obsidian injoignable %s", code)
+            raise HTTPException(502, "coffre Obsidian injoignable") from None
+
+    @app.get("/api/coffre/arbre")
+    async def coffre_arbre(request: Request, dossier: str = ""):
+        return await _lire_coffre(_coffre(request).lister(dossier))
+
+    @app.get("/api/coffre/note")
+    async def coffre_note(request: Request, chemin: str):
+        return {"chemin": chemin, "contenu": await _lire_coffre(_coffre(request).lire(chemin))}
 
     class MessageIn(BaseModel):
         contenu: str

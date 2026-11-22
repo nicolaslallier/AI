@@ -6,6 +6,7 @@
       <RouterLink to="/projets">Projets</RouterLink>
       <RouterLink to="/chat">Chat</RouterLink>
       <RouterLink to="/musique">Musique</RouterLink>
+      <RouterLink to="/coffre">Coffre</RouterLink>
       <RouterLink to="/bureau">Bureau</RouterLink>
       <RouterLink to="/audit">Audit</RouterLink>
     </nav>

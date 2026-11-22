@@ -44,6 +44,11 @@ class Reglages(BaseSettings):
         default=440, gt=0, lt=450
     )  # PORTAIL_LLM_DELAI_S : délai de lecture LiteLLM ; 2 essais < 900, DELAI_LECTURE de l'agent.
     # Couvre le timeout du MacBook (120 s, ordre 1 dans Infra litellm/config.yaml) + la reprise sur le Studio.
+    s3_url: str = "http://s3:8333"
+    s3_bucket: str = "obsidian"
+    s3_access_key: str = "portail"
+    s3_secret_key: str = ""  # PORTAIL_S3_SECRET_KEY ; vide : coffre Obsidian éteint
+    coffre_prefixe: str = ""  # PORTAIL_COFFRE_PREFIXE = ORGANIZER_VAULT_PREFIX d'Infra
     deploye_le: int = 0  # PORTAIL_DEPLOYE_LE : secondes Unix du déploiement
 
     @field_validator("reseau_agents")

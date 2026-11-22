@@ -23,7 +23,7 @@ Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolas
   - Environnement GitHub `production` (Settings → Environments), limité à la branche `main`, qui porte les secrets `PORTAINER_API_KEY` (jeton d'accès Portainer) et `BAO_TOKEN` (jeton OpenBao, lecture seule de `infra/data/portail`). Le job `deploy` ne tourne que sur `main`.
   - Le jeton OpenBao est périodique (32 jours) et renouvelé à chaque déploiement ; sans déploiement pendant 32 jours, en créer un nouveau.
   - Variables du dépôt : `PORTAINER_URL` (défaut `https://portainer.infra.famillelallier.net`), `VAULT_URL` (défaut `https://vault.infra.famillelallier.net`), `PORTAINER_ENDPOINT_ID` (obligatoire), `VAULT_SECRET_PATH` (défaut `infra/data/portail`), `INFRA_CA_CERT_PATH` (chemin de la CA de l'Infra dans le runner, défaut `/etc/ai/infra-ca.crt`).
-  - Clés du secret KV v2 `infra/portail` (lu via l'API à `infra/data/portail`) : `PORTAIL_DB_PASSWORD`, `PORTAIL_LITELLM_CLE`, `PORTAIL_GITHUB_JETON`, `PORTAIL_GITHUB_APP_ID`, `PORTAIL_GITHUB_APP_CLE`, `PORTAIL_LANCEUR_SECRET`, `PORTAIL_NTFY_JETON`, `PORTAIL_LLM_DELAI_S` (facultative).
+  - Clés du secret KV v2 `infra/portail` (lu via l'API à `infra/data/portail`) : `PORTAIL_DB_PASSWORD`, `PORTAIL_LITELLM_CLE`, `PORTAIL_GITHUB_JETON`, `PORTAIL_GITHUB_APP_ID`, `PORTAIL_GITHUB_APP_CLE`, `PORTAIL_LANCEUR_SECRET`, `PORTAIL_NTFY_JETON`, `PORTAIL_LLM_DELAI_S` (facultative), `PORTAIL_S3_SECRET_KEY` et `PORTAIL_COFFRE_PREFIXE` (facultatives, voir « Coffre Obsidian »).
   - Aucun workflow du dépôt ne doit avoir de déclencheur `pull_request`, `pull_request_target`, `issue_comment` ou `workflow_run` pouvant atteindre le label self-hosted `ai` : une PR de fork peut modifier `ci.yml` elle-même. Le dépôt est public : exiger l'approbation pour tous les collaborateurs externes (Settings → Actions → General → Fork pull request workflows from outside collaborators), et le runner `ai` doit être éphémère (conteneur neuf par job, aucun volume de travail persistant).
   - Le déploiement rejoue la CI (`ci.yml`, appelée par `deploy.yml`) et ne construit rien si elle échoue. Elle comprend les audits de dépendances (`pip-audit`, `npm audit`, `cargo audit`), la recherche de secrets (`gitleaks`) et, après chaque construction, l'analyse Trivy des images (CRITICAL/HIGH corrigeables). Actions et images de base sont épinglées par SHA ou digest ; Renovate propose les mises à jour le samedi (`renovate.json`).
   - Étapes manuelles (réglages GitHub, hors dépôt) :
@@ -191,6 +191,16 @@ Quand Nicolas commente la PR d'une tâche *En revue*, le portail reprend la bouc
 - Seuls les commentaires de `PORTAIL_GITHUB_PROPRIETAIRE` déclenchent une reprise.
 - Une revue part tout de suite ; des commentaires isolés partent 10 minutes après le dernier.
 - Recommenter relance une reprise échouée.
+
+### Coffre Obsidian
+
+La vue **Coffre** (`/coffre`) affiche en lecture seule le coffre Obsidian rangé dans le bucket S3 `obsidian` de l'Infra (SeaweedFS, `http://s3:8333`, identité `portail`). Le code (`backend/portail/obsidian.py`) lit tout le coffre sauf `.obsidian/` et `.trash/`, et n'écrira que sous `01 - Projets/<Projet>/Docs/` ; il ne supprime jamais rien.
+
+Étape manuelle (Infra puis OpenBao) :
+1. Dans l'Infra, provisionner l'identité S3 `portail` (`Read,Write,List` sur `obsidian`) avec `PORTAIL_S3_SECRET_KEY` de `infra/env` (`openssl rand -hex 24`).
+2. Recopier la **même valeur** dans OpenBao, secret `infra/portail`, clé `PORTAIL_S3_SECRET_KEY`. Si le coffre n'est pas à la racine du bucket, ajouter `PORTAIL_COFFRE_PREFIXE` égale à `ORGANIZER_VAULT_PREFIX` de l'Infra.
+
+Les deux clés sont facultatives : absentes, `scripts/vault-render-env.sh` les écrit vides, le Portail démarre avec l'avertissement `coffre Obsidian éteint : PORTAIL_S3_SECRET_KEY absente` et `/api/coffre/*` répond 503. Rotation : changer la clé dans `infra/env`, reprovisionner, la recopier dans `infra/portail`, puis redéployer.
 
 Les projets nomment les images par `nom:tag` (`ghcr.io/nicolaslallier/ai-execution:latest`, `postgres:16-alpine`, `pgvector/pgvector:pg16`) : le lanceur démarre la référence épinglée par digest de `LANCEUR_IMAGES` / `LANCEUR_IMAGES_SERVICES`, et refuse tout autre tag ou digest. Pour MinIO, il faudra nommer le tag daté retenu dans la pile (pas `latest`) dès qu'il y sera épinglé.
 
