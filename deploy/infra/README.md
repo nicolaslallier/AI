@@ -87,3 +87,23 @@ portail, pas l'Infra, ni la base, ni LiteLLM, ni le lanceur, ni Internet. Ils pa
 réseau entre eux ; seul le secret propre à chaque agent les empêche de se parler utilement.
 
 Le sous-réseau `10.250.250.0/24` de `portail-agents` est réservé ; s'il entre en collision, le changer aux deux endroits de `deploy/portainer-stack.yml` (`ipam` et `PORTAIL_RESEAU_AGENTS`) et dans le README principal.
+
+# agent-doc (jeton de service)
+
+Toutes ces étapes sont faites par Nicolas, dans cet ordre :
+
+1. Recopier `deploy/nginx/portail.conf` dans l'Infra (plan 3 du projet 2, tâche 9) : `/service`
+   doit être fermé sur le vhost **avant** qu'un jeton existe.
+2. `openssl rand -hex 32` (32 caractères au moins, sinon le déploiement s'arrête) ; ranger la
+   valeur dans OpenBao : `infra/portail` clé `PORTAIL_JETON_SERVICE`, et `infra/env` clé
+   `AGENT_DOC_PORTAIL_JETON` (même valeur).
+3. Fusionner la PR du Portail (le Portail se redéploie).
+4. Clé locale : après `make litellm-provision` dans l'Infra (plan 3 du projet 2, tâche 1), ranger
+   la clé `portail-agents` dans `infra/portail`, clé `PORTAIL_LITELLM_CLE_AGENTS`, puis
+   redéployer le Portail ; vérifier que la page Musique répond toujours. C'est seulement après
+   cela que l'Infra retire `apps` d'agent-musique (plan 5).
+5. Vérifier :
+   - `curl -sk -o /dev/null -w '%{http_code}' -X POST https://portail.infra.famillelallier.net/service/taches-doc` rend `404` ;
+   - depuis un conteneur d'`infra-net`, le même `POST` sur `http://portail:8000/service/taches-doc`
+     sans jeton rend `401`, et avec le jeton et un dépôt qui a un projet, `201` avec un lien ;
+     la tâche apparaît dans la colonne « Prête » puis part en exécution.

@@ -12,6 +12,9 @@ class Reglages(BaseSettings):
     database_url: str
     litellm_url: str = "http://litellm:4000"
     litellm_cle: str = ""
+    # PORTAIL_LITELLM_CLE_AGENTS : clé de l'équipe `agents` (modèles locaux) pour les agents A2A ;
+    # vide : repli sur litellm_cle
+    litellm_cle_agents: str = ""
     agents_fichier: Path = Path("agents.yaml")
     exiger_utilisateur: bool = False
     static_dir: Path | None = None
@@ -31,6 +34,7 @@ class Reglages(BaseSettings):
     ntfy_sujet: str = "portail"
     ntfy_jeton: str = ""
     url_publique: str = ""
+    jeton_service: str = ""  # PORTAIL_JETON_SERVICE : route /service/ ; vide : 503
     resume_heure: str = "07:00"  # HH:MM à Toronto ; "" désactive le résumé du matin
     delai_commentaires_s: int = 600
     version: str = ""  # PORTAIL_VERSION : tag de l'image déployée

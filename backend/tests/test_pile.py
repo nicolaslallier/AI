@@ -70,7 +70,9 @@ def test_coffre_rend_chaque_secret():
         assert _secret(n) not in facultatives
 
 
-def _lancer_coffre(tmp_path: Path, court: bool, **extra: str) -> subprocess.CompletedProcess:
+def _lancer_coffre(
+    tmp_path: Path, court: bool, autres: dict | None = None, **extra: str
+) -> subprocess.CompletedProcess:
     secrets = {
         k: "v" * 40
         for k in (
@@ -81,6 +83,7 @@ def _lancer_coffre(tmp_path: Path, court: bool, **extra: str) -> subprocess.Comp
             *(_secret(n) for n in NOMS),
         )
     }
+    secrets.update(autres or {})
     if court:
         secrets[_secret(NOMS[0])] = "court-" + "9" * 25  # 31 caractères
     bin_ = tmp_path / "bin"
@@ -157,3 +160,34 @@ def test_reseau_des_agents_fixe_et_connu_du_portail():
 def test_digests_verifies_au_deploiement():
     wf = (RACINE / ".github" / "workflows" / "deploy.yml").read_text()
     assert wf.count("sha256:[0-9a-f]{64}") == 1 and "for v in EXECUTION_DIGEST AGENTS_DIGEST" in wf
+
+
+def _facultatives(rendu: str) -> str:
+    return re.search(r'FACULTATIVES="([^"]*)"', rendu).group(1)
+
+
+def test_service_ferme_sur_le_vhost_et_jeton_facultatif():
+    conf = (RACINE / "deploy" / "nginx" / "portail.conf").read_text()
+    assert re.search(r"location \^~ /service \{\s*return 404;\s*\}", conf)
+    pile = (RACINE / "deploy" / "portainer-stack.yml").read_text()
+    assert "PORTAIL_JETON_SERVICE: ${PORTAIL_JETON_SERVICE:-}" in pile
+    rendu = VAULT.read_text()
+    assert "PORTAIL_JETON_SERVICE=PORTAIL_JETON_SERVICE" in rendu
+    assert " PORTAIL_JETON_SERVICE " in _facultatives(rendu)
+
+
+def test_cle_des_agents_facultative_dans_la_pile():
+    pile = (RACINE / "deploy" / "portainer-stack.yml").read_text()
+    assert "PORTAIL_LITELLM_CLE_AGENTS: ${PORTAIL_LITELLM_CLE_AGENTS:-}" in pile
+    rendu = VAULT.read_text()
+    assert "PORTAIL_LITELLM_CLE_AGENTS=PORTAIL_LITELLM_CLE_AGENTS" in rendu
+    assert " PORTAIL_LITELLM_CLE_AGENTS " in _facultatives(rendu)
+
+
+def test_jeton_service_court_refuse_vide_admis(tmp_path):
+    (tmp_path / "a").mkdir()
+    r = _lancer_coffre(tmp_path / "a", court=False, autres={"PORTAIL_JETON_SERVICE": "x" * 31})
+    assert r.returncode != 0 and "PORTAIL_JETON_SERVICE trop court" in r.stderr
+    (tmp_path / "b").mkdir()
+    r = _lancer_coffre(tmp_path / "b", court=False, autres={"PORTAIL_JETON_SERVICE": ""})
+    assert r.returncode == 0, r.stderr
