@@ -356,3 +356,18 @@ export interface ReponseMusique {
 export function demanderMusique(texte: string, contextId: string | null): Promise<ReponseMusique> {
   return appel('POST', '/musique', { texte, context_id: contextId })
 }
+
+export interface NoteCoffre {
+  chemin: string
+  taille: number
+  modifie: string
+}
+export interface ArbreCoffre {
+  dossiers: string[]
+  notes: NoteCoffre[]
+  tronque: boolean
+}
+export const lireArbreCoffre = (dossier = '') =>
+  appel<ArbreCoffre>('GET', `/coffre/arbre?dossier=${encodeURIComponent(dossier)}`)
+export const lireNoteCoffre = (chemin: string) =>
+  appel<{ chemin: string; contenu: string }>('GET', `/coffre/note?chemin=${encodeURIComponent(chemin)}`)

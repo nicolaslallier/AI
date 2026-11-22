@@ -8,6 +8,7 @@ import ChatView from './views/ChatView.vue'
 import BureauView from './views/BureauView.vue'
 import AuditView from './views/AuditView.vue'
 import MusiqueView from './views/MusiqueView.vue'
+import CoffreView from './views/CoffreView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -20,6 +21,7 @@ export const router = createRouter({
     { path: '/bureau', name: 'bureau', component: BureauView },
     { path: '/audit', name: 'audit', component: AuditView },
     { path: '/musique', name: 'musique', component: MusiqueView },
+    { path: '/coffre', name: 'coffre', component: CoffreView },
     { path: '/chat', name: 'chat', component: ChatView },
     { path: '/chat/:id', name: 'conversation', component: ChatView, props: true },
   ],
