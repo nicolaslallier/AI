@@ -713,7 +713,9 @@ async def test_delai_depasse_en_verification_bloque(monde):
 
 
 async def test_duree_max_tache(monde):
-    monde.reglages.duree_max_tache_s = 0.1
+    # le délai doit tomber pendant l'attente du modèle, pas avant la 1re étape : à 0,1 s, une
+    # préparation (git) lente en CI le dépassait déjà, et aucune étape n'était encore en cours
+    monde.reglages.duree_max_tache_s = 1
     monde.llm.reponses = [asyncio.Event()]
     pid = await monde.lancer()
     _ex, tache, pipeline = await monde.etat(pid)

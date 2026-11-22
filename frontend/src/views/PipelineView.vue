@@ -115,7 +115,7 @@ onBeforeUnmount(() => {
       <h1>{{ pipeline.type }} n°{{ pipeline.id }}</h1>
       <EtatBadge :etat="pipeline.etat" />
       <button
-        v-if="pipeline.etat !== 'terminee' && !pipeline.etapes.some((e) => e.erreur === 'annulé')"
+        v-if="pipeline.type !== 'doc' && pipeline.etat !== 'terminee' && !pipeline.etapes.some((e) => e.erreur === 'annulé')"
         class="danger pousse"
         @click="annuler"
       >
@@ -196,6 +196,7 @@ onBeforeUnmount(() => {
           :outils="outils[e.id]"
           :propositions="e.produit === 'taches' ? propositions.filter((x) => x.etape_id === e.id && x.etat === 'ouverte').length : undefined"
           :projet-id="pipeline.projet.id"
+          :lecture-seule="pipeline.type === 'doc'"
           :message="e.document ? '' : message"
           @envoyer="(c, vider, m) => action(() => envoyerMessage(e.id, c, m)).then((ok) => ok && vider())"
           @rediger="action(() => rediger(e.id))"

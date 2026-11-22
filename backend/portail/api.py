@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -33,6 +33,7 @@ from portail.conversations import ServiceConversation
 from portail.db import (
     Audit,
     Avis,
+    CarteDoc,
     CommandeLancee,
     CommentairePris,
     Document,
@@ -59,7 +60,7 @@ from portail.missions import ROUTEUR_INTERNE, Missions, lire_secrets
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
 from portail.musique import ErreurMusique, demander
 from portail.notifications import Notifieur
-from portail.obsidian import Coffre, creer_coffre
+from portail.obsidian import Coffre, chemin_doc, creer_coffre, verifier_ecriture
 from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.propositions import tout_accepter as accepter_tout
@@ -68,6 +69,9 @@ from portail.schemas import (
     AuditOut,
     AvisOut,
     Bureau,
+    CarteDocIn,
+    CarteDocPatch,
+    CarteDocVue,
     CommandeVue,
     CommentaireVue,
     ConversationDetail,
@@ -93,8 +97,10 @@ from portail.schemas import (
     ProjetPatch,
     ProjetRef,
     PropositionVue,
+    Renvoi,
     SpecCourante,
     TacheVue,
+    Validation,
     verifier_depot,
 )
 from portail.suivi_pr import SuiviPR
@@ -104,6 +110,8 @@ from portail.taches import (
     modifier_tache,
     supprimer_tache,
 )
+from portail.usine_doc import EN_COURS as DOC_EN_COURS
+from portail.usine_doc import UsineDoc
 
 logger = logging.getLogger(__name__)
 
@@ -349,6 +357,8 @@ async def _annuler(state, s: AsyncSession, pipeline_id: int, clos: bool) -> None
     if p is None:
         raise Refus(404, "pipeline introuvable")
     type_, etat = p.type, p.etat
+    if type_ == "doc":  # mené par l'usine de doc : rien à annuler côté chat
+        raise Refus(409, "un pipeline doc se gère depuis sa carte du kanban doc")
     mode = await s.scalar(select(ExecutionDev.mode).where(ExecutionDev.pipeline_id == pipeline_id))
     reprise = mode == "reprise" and etat == Etat.EN_COURS
     await s.rollback()
@@ -508,8 +518,18 @@ def create_app(
             app.state.missions,
         )
         app.state.orchestrateur, app.state.ordonnanceur = orch, None
-        if orch:
-            app.state.ordonnanceur = Ordonnanceur(app.state.sessions, orch, r.paralleles_max)
+        app.state.usine = None
+        if "doc" in app.state.catalogue.pipelines:
+            app.state.usine = UsineDoc(
+                app.state.sessions, app.state.catalogue, LLMArbitre(app.state.llm, arbitre, "fond"),
+                depots, app.state.coffre, r,
+                Notifieur(r.ntfy_url, r.ntfy_sujet, r.ntfy_jeton), app.state.missions,
+            )  # fmt: skip
+            await app.state.usine.reprendre()
+        if orch:  # ponytail: l'usine de doc tourne seulement avec l'ordonnanceur de dev
+            app.state.ordonnanceur = Ordonnanceur(
+                app.state.sessions, orch, r.paralleles_max, app.state.usine
+            )
             await reprendre_interrompues(app.state.sessions, orch, app.state.ordonnanceur.lancer)
             suivi = SuiviPR(
                 app.state.sessions, orch._github, orch, app.state.ordonnanceur,
@@ -528,6 +548,8 @@ def create_app(
         taches += boucles
         if orch:
             taches += [*orch.taches.values()]
+        if app.state.usine:
+            taches += [*app.state.usine.taches.values()]
         for t in taches:
             t.cancel()
         await asyncio.gather(*taches, return_exceptions=True)
@@ -826,6 +848,116 @@ def create_app(
         await _annuler_tache(request.app.state, s, tache_id)
         await _tracer(s, request, "tache.annuler", "tache", tache_id)
         return await _vue(s, tache_id)
+
+    # --- kanban doc -----------------------------------------------------------
+
+    async def _carte(s: AsyncSession, carte_id: int, verrou: bool = False) -> CarteDoc:
+        q = select(CarteDoc).where(CarteDoc.id == carte_id)
+        carte = await s.scalar(q.with_for_update() if verrou else q)
+        if carte is None:
+            raise Refus(404, "carte introuvable")
+        return carte
+
+    async def _vues_doc(s: AsyncSession, *conditions) -> list[CarteDocVue]:
+        lignes = await s.execute(
+            select(CarteDoc, Projet.nom)
+            .join(Projet, Projet.id == CarteDoc.projet_id)
+            .where(*conditions)
+            .order_by(CarteDoc.id)
+            .execution_options(populate_existing=True)
+        )
+        return [
+            CarteDocVue.model_validate(
+                {**{k: getattr(c, k) for k in CarteDocVue.model_fields if k != "projet_nom"},
+                 "projet_nom": nom}
+            )
+            for c, nom in lignes.all()
+        ]  # fmt: skip
+
+    async def _vue_doc(s: AsyncSession, carte_id: int) -> CarteDocVue:
+        return (await _vues_doc(s, CarteDoc.id == carte_id))[0]
+
+    async def _modifier_carte(
+        s: AsyncSession, request: Request, carte_id: int, action: str, **champs
+    ):
+        """Hors rédaction et revue seulement : l'usine écrit la carte pendant ce temps."""
+        carte = await _carte(s, carte_id, verrou=True)
+        if carte.colonne in DOC_EN_COURS:
+            raise Refus(409, "carte en cours de rédaction ou de revue")
+        for k, v in champs.items():
+            setattr(carte, k, v)
+        inscrire(s, auteur_de(request), action, "carte_doc", carte_id)
+        try:
+            await s.commit()
+        except IntegrityError as e:
+            raise Refus(409, "ce chemin du coffre est déjà pris") from e
+        _reveiller(request.app.state)
+        return await _vue_doc(s, carte_id)
+
+    @app.get("/api/docs/cartes", response_model=list[CarteDocVue])
+    async def lister_cartes(s: Session, projet_id: int | None = None):
+        return await _vues_doc(s, *([CarteDoc.projet_id == projet_id] if projet_id else []))
+
+    @app.post("/api/docs/cartes", status_code=201, response_model=CarteDocVue)
+    async def creer_carte(corps: CarteDocIn, request: Request, s: Session):
+        projet = await s.get(Projet, corps.projet_id)
+        if projet is None:
+            raise Refus(404, "projet introuvable")
+        try:
+            chemin = chemin_doc(projet.nom, corps.titre)
+        except ValueError as e:
+            raise Refus(422, str(e)) from e
+        carte = CarteDoc(**corps.model_dump(), chemin=chemin, remarques=[])
+        s.add(carte)
+        try:
+            await s.flush()
+        except IntegrityError as e:
+            raise Refus(409, "ce chemin du coffre est déjà pris") from e
+        inscrire(s, auteur_de(request), "carte_doc.creer", "carte_doc", carte.id)
+        await s.commit()
+        _reveiller(request.app.state)
+        return await _vue_doc(s, carte.id)
+
+    @app.patch("/api/docs/cartes/{carte_id}", response_model=CarteDocVue)
+    async def modifier_carte(carte_id: int, corps: CarteDocPatch, request: Request, s: Session):
+        champs = corps.model_dump(exclude_none=True)
+        if "chemin" in champs:  # forme normalisée : l'unicité porte sur le chemin réellement écrit
+            try:
+                champs["chemin"] = verifier_ecriture(champs["chemin"])
+            except ValueError as e:
+                raise Refus(422, str(e)) from e
+        return await _modifier_carte(s, request, carte_id, "carte_doc.modifier", **champs)
+
+    @app.post("/api/docs/cartes/{carte_id}/valider", response_model=CarteDocVue)
+    async def valider_carte(carte_id: int, corps: Validation, request: Request, s: Session):
+        if request.app.state.usine is None:
+            raise Refus(503, "usine de doc éteinte")
+        await request.app.state.usine.valider(carte_id, corps.forcer)
+        await _tracer(s, request, "carte_doc.valider", "carte_doc", carte_id)
+        return await _vue_doc(s, carte_id)
+
+    @app.post("/api/docs/cartes/{carte_id}/renvoyer", response_model=CarteDocVue)
+    async def renvoyer_carte(carte_id: int, corps: Renvoi, request: Request, s: Session):
+        return await _modifier_carte(
+            s, request, carte_id, "carte_doc.renvoyer",
+            remarques=corps.remarques, renvois=0, erreur=None, colonne="a_rediger",
+        )  # fmt: skip
+
+    @app.post("/api/docs/cartes/{carte_id}/relancer", response_model=CarteDocVue)
+    async def relancer_carte(carte_id: int, request: Request, s: Session):
+        return await _modifier_carte(
+            s, request, carte_id, "carte_doc.relancer", erreur=None, colonne="a_rediger"
+        )
+
+    @app.delete("/api/docs/cartes/{carte_id}", status_code=204)
+    async def supprimer_carte(carte_id: int, request: Request, s: Session):
+        """La carte seulement : la note publiée reste dans le coffre."""
+        carte = await _carte(s, carte_id, verrou=True)
+        if carte.colonne in DOC_EN_COURS:
+            raise Refus(409, "carte en cours de rédaction ou de revue")
+        await s.delete(carte)
+        inscrire(s, auteur_de(request), "carte_doc.supprimer", "carte_doc", carte_id)
+        await s.commit()
 
     class MusiqueIn(BaseModel):
         texte: str = Field(min_length=1)

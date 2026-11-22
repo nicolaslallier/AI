@@ -395,3 +395,55 @@ class PosteDetail(BaseModel):
     tours_max: int
     contexte_max: int
     missions: list[MissionOut]
+
+
+GenreDoc = Literal["readme", "architecture", "runbook", "adr", "api", "guide", "autre"]
+
+
+class CarteDocIn(BaseModel):
+    projet_id: int
+    genre: GenreDoc
+    titre: str
+    consigne: str = ""
+
+    _titre = field_validator("titre")(_titre_valide)
+
+
+class CarteDocPatch(BaseModel):
+    titre: str | None = None
+    genre: GenreDoc | None = None
+    consigne: str | None = None
+    chemin: str | None = Field(default=None, min_length=1, max_length=500)
+    contenu: str | None = None
+
+    @field_validator("titre")
+    @classmethod
+    def _titre(cls, v):
+        return None if v is None else _titre_valide(v)
+
+
+class Validation(BaseModel):
+    forcer: bool = False
+
+
+class Renvoi(BaseModel):
+    remarques: list[str] = Field(min_length=1)
+
+
+class CarteDocVue(BaseModel):
+    id: int
+    projet_id: int
+    projet_nom: str
+    titre: str
+    genre: str
+    consigne: str
+    colonne: str
+    chemin: str
+    contenu: str
+    remarques: list[str]
+    renvois: int
+    sha: str | None
+    pipeline_id: int | None
+    erreur: str | None
+    publie_le: datetime | None
+    maj_le: datetime

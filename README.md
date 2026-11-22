@@ -63,29 +63,34 @@ flowchart LR
     g2_challenger --> g2_securite
     g2_securite --> g2_documentaliste
   end
-  subgraph g3["architecture"]
-    g3_archi_entreprise["archi-entreprise"]
-    g3_archi_affaires["archi-affaires"]
-    g3_archi_donnees["archi-donnees"]
-    g3_archi_applicatif["archi-applicatif"]
-    g3_archi_techno["archi-techno"]
-    g3_archi_securite["archi-securite"]
-    g3_archi_solution["archi-solution"]
-    g3_archi_entreprise_synthese["archi-entreprise-synthese"]
-    g3_archi_entreprise --> g3_archi_affaires
-    g3_archi_affaires --> g3_archi_donnees
-    g3_archi_donnees --> g3_archi_applicatif
-    g3_archi_applicatif --> g3_archi_techno
-    g3_archi_techno --> g3_archi_securite
-    g3_archi_securite --> g3_archi_solution
-    g3_archi_solution --> g3_archi_entreprise_synthese
+  subgraph g3["doc"]
+    g3_documentaliste["documentaliste"]
+    g3_revue["revue"]
+    g3_documentaliste --> g3_revue
   end
-  subgraph g4["hors pipeline"]
-    g4_orchestrateur["orchestrateur"]
-    g4_architecte["architecte"]
-    g4_doc["doc"]
-    g4_pm["pm"]
-    g4_tri["tri"]
+  subgraph g4["architecture"]
+    g4_archi_entreprise["archi-entreprise"]
+    g4_archi_affaires["archi-affaires"]
+    g4_archi_donnees["archi-donnees"]
+    g4_archi_applicatif["archi-applicatif"]
+    g4_archi_techno["archi-techno"]
+    g4_archi_securite["archi-securite"]
+    g4_archi_solution["archi-solution"]
+    g4_archi_entreprise_synthese["archi-entreprise-synthese"]
+    g4_archi_entreprise --> g4_archi_affaires
+    g4_archi_affaires --> g4_archi_donnees
+    g4_archi_donnees --> g4_archi_applicatif
+    g4_archi_applicatif --> g4_archi_techno
+    g4_archi_techno --> g4_archi_securite
+    g4_archi_securite --> g4_archi_solution
+    g4_archi_solution --> g4_archi_entreprise_synthese
+  end
+  subgraph g5["hors pipeline"]
+    g5_orchestrateur["orchestrateur"]
+    g5_architecte["architecte"]
+    g5_doc["doc"]
+    g5_pm["pm"]
+    g5_tri["tri"]
   end
 ```
 <!-- schema-pipelines:fin -->
@@ -100,6 +105,10 @@ Pour un projet, le pipeline `architecture` produit un document d'architecture (T
 - **Réflexion** : champ facultatif `reflexion` d'un agent (booléen, `true` par défaut) ; à `false`, le Portail envoie `reasoning_effort: "none"`, seul réglage qui coupe la réflexion de `qwen3.8:27b-mlx` à travers LiteLLM (`think: false` et `chat_template_kwargs` sont ignorés). Les agents de dev `tests`, `code` et `revue` le mettent à `false` : leur premier appel dépassait le délai de 300 s du client. Comme la température, un modèle choisi pour une étape, autre que celui de l'agent, ne le reçoit pas.
 - **Secrets** : huit `PORTAIL_AGENT_SECRET_ARCHI_*` à créer dans OpenBao (`infra/portail`, 32 caractères au moins), voir « Étapes manuelles ».
 - **Confidentialité** : ces agents envoient le contenu des visions, des architectures et des fichiers du dépôt qu'ils lisent à OpenAI (et à Anthropic ou Google si on choisit leur modèle pour une étape).
+
+## Usine de documentation (pipeline `doc`, vue `/docs`)
+
+Un kanban de cartes de doc (`carte_doc`) : *À rédiger* → *Rédaction* (`documentaliste`, lecture seule du dépôt, sa réponse est le document) → *Revue* (`revue`, verdict ; un renvoi repasse en rédaction, au plus `PORTAIL_RENVOIS_MAX` fois) → *À valider* → Nicolas valide → écriture dans le coffre Obsidian, sous `01 - Projets/<Projet>/Docs/` → *Publié*. L'usine partage les places de l'ordonnanceur (`PORTAIL_PARALLELES_MAX`) avec la boucle de dev, qui passe en premier ; elle ne tourne que si l'ordonnanceur est allumé. Rien n'est écrit dans le dépôt ; aucun agent n'écrit dans le coffre : seule la route « valider » le fait. Sans coffre configuré, la validation répond 503 et la carte reste *À valider*. Supprimer une carte ne supprime jamais la note.
 
 ## Agents en conteneur
 

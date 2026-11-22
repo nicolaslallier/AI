@@ -589,3 +589,9 @@ def test_agent_effectif():
     assert cat.agents["spec"].modele == "m"  # le catalogue n'est pas modifié
     assert agent_effectif(cat, "spec", "retire").modele == "m"  # retiré d'agents.yaml : repli
     assert agent_effectif(cat, "absent", "g") is None
+
+
+def test_agents_yaml_reel_usine_de_doc():
+    cat = charger_catalogue(RACINE / "agents.yaml")
+    assert cat.pipelines["doc"] == ["documentaliste", "revue"]
+    assert "Sans outil d'écriture" in cat.agents["documentaliste"].prompt_systeme
