@@ -25,6 +25,7 @@ from portail.dev import Orchestrateur
 from portail.etats import Etat
 from portail.github import ErreurGitHub
 from portail.taches import deplacer_tache
+from portail.usine_doc import UsineDoc
 
 logger = logging.getLogger(__name__)
 
@@ -80,11 +81,18 @@ class Ordonnanceur:
         sessions: async_sessionmaker[AsyncSession],
         orchestrateur: Orchestrateur,
         paralleles_max: int,
+        usine: UsineDoc | None = None,
     ):
         self._sessions = sessions
         self._orch = orchestrateur
         self._max = paralleles_max
+        self._usine = usine
         self._reveil = asyncio.Event()
+
+    def _libres(self) -> int:
+        """Places partagées entre la boucle de dev et l'usine de doc."""
+        doc = len(self._usine.taches) if self._usine else 0
+        return self._max - len(self._orch.taches) - doc
 
     def reveiller(self) -> None:
         self._reveil.set()
@@ -95,8 +103,15 @@ class Ordonnanceur:
         self._orch.taches[pipeline_id].add_done_callback(lambda _: self.reveiller())
 
     async def tour(self) -> None:
+        """Le dev d'abord (reprises, puis tâches *Prêtes*), puis les cartes de doc."""
+        await self._tour_dev()
+        if self._usine and (libres := self._libres()) > 0:
+            for t in await self._usine.tour(libres):
+                t.add_done_callback(lambda _: self.reveiller())
+
+    async def _tour_dev(self) -> None:
         """Démarre des tâches tant qu'il reste de la place : les reprises d'abord."""
-        while len(self._orch.taches) < self._max:
+        while self._libres() > 0:
             reprise = await self._reprise()
             if reprise is None:
                 return

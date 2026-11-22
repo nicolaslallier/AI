@@ -371,3 +371,34 @@ export const lireArbreCoffre = (dossier = '') =>
   appel<ArbreCoffre>('GET', `/coffre/arbre?dossier=${encodeURIComponent(dossier)}`)
 export const lireNoteCoffre = (chemin: string) =>
   appel<{ chemin: string; contenu: string }>('GET', `/coffre/note?chemin=${encodeURIComponent(chemin)}`)
+// --- kanban doc ---------------------------------------------------------
+export interface CarteDoc {
+  id: number
+  projet_id: number
+  projet_nom: string
+  titre: string
+  genre: string
+  consigne: string
+  colonne: string
+  chemin: string
+  contenu: string
+  remarques: string[]
+  renvois: number
+  sha: string | null
+  pipeline_id: number | null
+  erreur: string | null
+  publie_le: string | null
+  maj_le: string
+}
+export type CarteDocPatch = Partial<Pick<CarteDoc, 'titre' | 'genre' | 'consigne' | 'chemin' | 'contenu'>>
+export const listerCartesDoc = () => appel<CarteDoc[]>('GET', '/docs/cartes')
+export const creerCarteDoc = (d: { projet_id: number; genre: string; titre: string; consigne: string }) =>
+  appel<CarteDoc>('POST', '/docs/cartes', d)
+export const modifierCarteDoc = (id: number, d: CarteDocPatch) =>
+  appel<CarteDoc>('PATCH', `/docs/cartes/${id}`, d)
+export const validerCarteDoc = (id: number, forcer = false) =>
+  appel<CarteDoc>('POST', `/docs/cartes/${id}/valider`, { forcer })
+export const renvoyerCarteDoc = (id: number, remarques: string[]) =>
+  appel<CarteDoc>('POST', `/docs/cartes/${id}/renvoyer`, { remarques })
+export const relancerCarteDoc = (id: number) => appel<CarteDoc>('POST', `/docs/cartes/${id}/relancer`)
+export const supprimerCarteDoc = (id: number) => appel<void>('DELETE', `/docs/cartes/${id}`)

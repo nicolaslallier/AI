@@ -56,6 +56,8 @@ async def creer_pipeline(
     """Renvoie le pipeline et l'étape à lancer (agent auto), à lancer après le commit."""
     if type_ == "dev":  # créé par l'orchestrateur seul, depuis une tâche Prête
         raise Refus(422, "un pipeline dev se lance depuis une tâche Prête du kanban")
+    if type_ == "doc":  # créé par l'usine de doc seule, depuis une carte du kanban doc
+        raise Refus(422, "un pipeline doc se lance depuis une carte du kanban doc")
     if type_ not in catalogue.pipelines:
         raise Refus(404, f"type de pipeline inconnu : {type_}")
     if type_ in UN_SEUL_ACTIF:
@@ -142,7 +144,8 @@ async def recuperer_interrompues(session: AsyncSession) -> int:
         await session.scalars(
             select(Etape)
             .join(Pipeline, Pipeline.id == Etape.pipeline_id)
-            .where(Etape.etat == Etat.EN_COURS, Pipeline.type != "dev")  # dev : son orchestrateur
+            # dev et doc : leur orchestrateur reprend
+            .where(Etape.etat == Etat.EN_COURS, Pipeline.type.not_in(("dev", "doc")))
         )
     ).all()
     for e in etapes:

@@ -4,6 +4,7 @@
     <nav>
       <RouterLink to="/">Pipelines</RouterLink>
       <RouterLink to="/projets">Projets</RouterLink>
+      <RouterLink to="/docs">Docs</RouterLink>
       <RouterLink to="/chat">Chat</RouterLink>
       <RouterLink to="/musique">Musique</RouterLink>
       <RouterLink to="/coffre">Coffre</RouterLink>

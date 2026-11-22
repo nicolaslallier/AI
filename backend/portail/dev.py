@@ -108,7 +108,7 @@ FORMAT_VERDICT = {
 }
 
 
-def _lire_verdict(texte: str) -> Verdict | None:
+def lire_verdict(texte: str) -> Verdict | None:
     try:
         return Verdict.model_validate_json(texte)
     except ValidationError:
@@ -1002,7 +1002,7 @@ class Orchestrateur:
         outils = OutilsEspace(ctx.racine, "revue", ctx.cfg, self._lancer_controle(ctx))
         consigne = "Relis ce diff et rends ton verdict en JSON."
         texte, messages = await self._agent(ctx, nom, annexes, consigne, outils, modele)
-        verdict = _lire_verdict(texte)
+        verdict = lire_verdict(texte)
         if verdict is None:  # une seule relance, avec le format imposé
             messages += [
                 {"role": "assistant", "content": texte},
@@ -1013,7 +1013,7 @@ class Orchestrateur:
                 await completer(self._llm, self._missions, relecteur, messages, FORMAT_VERDICT)
             ).strip()
             await self._message(ctx, "assistant", texte or "(réponse vide)")
-            verdict = _lire_verdict(texte)
+            verdict = lire_verdict(texte)
         if verdict is None:
             verdict = Verdict(decision="ok", notes=[f"verdict illisible de {nom}"])
         await self._message(ctx, "system", _resume(verdict))

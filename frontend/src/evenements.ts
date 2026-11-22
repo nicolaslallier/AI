@@ -2,6 +2,7 @@ export interface RappelsEvenements {
   kanban?: (projetId: number | null) => void
   pipelines?: () => void
   bureau?: () => void
+  docs?: () => void
 }
 
 // le navigateur se reconnecte seul ; le sondage de secours des vues couvre les trous
@@ -12,6 +13,7 @@ export function ecouterEvenements(rappels: RappelsEvenements): () => void {
   )
   source.addEventListener('pipelines', () => rappels.pipelines?.())
   source.addEventListener('bureau', () => rappels.bureau?.())
+  source.addEventListener('docs', () => rappels.docs?.())
   return () => source.close()
 }
 

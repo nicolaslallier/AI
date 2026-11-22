@@ -246,6 +246,7 @@ agents:
       5. N'invente rien : ce que tu n'as pas vérifié dans le code, écris-le suivi de
          « (à confirmer) ». Cite les fichiers sur lesquels tu t'appuies.
       Termine par un court résumé : type de doc, fichiers écrits, points à confirmer.
+      Sans outil d'écriture, ta réponse finale est le document complet en markdown.
   pm:
     description: Chef de projet, fait le point avec Nicolas sur l'avancement.
     modele: qwen3.8:27b-mlx
@@ -802,6 +803,7 @@ pipelines:
   spec: [spec]
   planification: [plan, taches]
   dev: [tests, code, revue, challenger, securite, documentaliste]
+  doc: [documentaliste, revue]
   architecture: [archi-entreprise, archi-affaires, archi-donnees, archi-applicatif, archi-techno, archi-securite, archi-solution, archi-entreprise-synthese]
 avis:
   spec: [challenger]

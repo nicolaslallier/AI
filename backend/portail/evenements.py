@@ -14,6 +14,7 @@ from portail.db import (
     ActionConversation,
     AppelLLM,
     Avis,
+    CarteDoc,
     Conversation,
     Etape,
     ExecutionDev,
@@ -24,7 +25,7 @@ from portail.db import (
 
 logger = logging.getLogger(__name__)
 
-Signal = tuple[Literal["kanban", "pipelines", "bureau"], int | None]
+Signal = tuple[Literal["kanban", "pipelines", "bureau", "docs"], int | None]
 
 
 class Bus:
@@ -59,6 +60,8 @@ def _signal(objet: object) -> Signal | None:
         return ("kanban", objet.projet_id)
     if isinstance(objet, _PIPELINES):
         return ("pipelines", None)
+    if isinstance(objet, CarteDoc):
+        return ("docs", None)
     if isinstance(objet, _BUREAU):
         return ("bureau", None)
     return None
@@ -81,6 +84,8 @@ def _avant_execution(etat) -> None:
         s: Signal | None = ("kanban", None)
     elif classe in _PIPELINES:
         s = ("pipelines", None)
+    elif classe is CarteDoc:
+        s = ("docs", None)
     elif classe in _BUREAU:
         s = ("bureau", None)
     else:

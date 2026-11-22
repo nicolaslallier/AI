@@ -350,6 +350,32 @@ class AppelLLM(Base):
     issue: Mapped[str] = mapped_column(String)  # ok | erreur | delai
 
 
+class CarteDoc(Base):
+    """Une carte du kanban de documentation : rédigée par l'usine, validée par Nicolas, écrite
+    dans le coffre Obsidian."""
+
+    __tablename__ = "carte_doc"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    projet_id: Mapped[int] = mapped_column(ForeignKey("projet.id", ondelete="CASCADE"))
+    titre: Mapped[str] = mapped_column(String(200))
+    genre: Mapped[str] = mapped_column(String)  # readme | architecture | runbook | adr | api | …
+    consigne: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # a_rediger | redaction | revue | a_valider | publie
+    colonne: Mapped[str] = mapped_column(String, default="a_rediger", server_default="a_rediger")
+    chemin: Mapped[str] = mapped_column(String, unique=True)  # dans le coffre
+    contenu: Mapped[str] = mapped_column(Text, default="", server_default="")
+    remarques: Mapped[list] = mapped_column(JSON, default=list)
+    renvois: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    sha: Mapped[str | None] = mapped_column(String)  # SHA du dépôt lu
+    pipeline_id: Mapped[int | None] = mapped_column(ForeignKey("pipeline.id", ondelete="SET NULL"))
+    erreur: Mapped[str | None] = mapped_column(Text)  # non nulle : plus tirée par l'usine
+    etag: Mapped[str | None] = mapped_column(String)  # ETag S3 de la dernière écriture
+    publie_le: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cree_le: Mapped[datetime] = _horodatage()
+    maj_le: Mapped[datetime] = _horodatage(onupdate=func.now())
+
+
 def creer_moteur(url: str) -> AsyncEngine:
     return create_async_engine(url)
 
