@@ -528,7 +528,7 @@ def test_agents_yaml_reel_bureau_d_architectes():
         "sol-",
         "ent-",
     ]
-    locaux = {"qwen3.8:27b-mlx", "gemma4:26b-a4b-it-qat"}
+    locaux = {"qwen3.8:27b-mlx", "gemma4:26b-a4b-it-qat", "qwen3.6:35b-mlx"}
     for nom, a in cat.agents.items():
         assert nom.startswith("archi-") or a.modele in locaux, nom
     for a in cat.pipelines["architecture"][1:]:
