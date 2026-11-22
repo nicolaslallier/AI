@@ -70,7 +70,9 @@ def test_coffre_rend_chaque_secret():
         assert _secret(n) not in facultatives
 
 
-def _lancer_coffre(tmp_path: Path, court: bool, **extra: str) -> subprocess.CompletedProcess:
+def _lancer_coffre(
+    tmp_path: Path, court: bool, autres: dict | None = None, **extra: str
+) -> subprocess.CompletedProcess:
     secrets = {
         k: "v" * 40
         for k in (
@@ -81,6 +83,7 @@ def _lancer_coffre(tmp_path: Path, court: bool, **extra: str) -> subprocess.Comp
             *(_secret(n) for n in NOMS),
         )
     }
+    secrets.update(autres or {})
     if court:
         secrets[_secret(NOMS[0])] = "court-" + "9" * 25  # 31 caractères
     bin_ = tmp_path / "bin"
@@ -179,3 +182,12 @@ def test_cle_des_agents_facultative_dans_la_pile():
     rendu = VAULT.read_text()
     assert "PORTAIL_LITELLM_CLE_AGENTS=PORTAIL_LITELLM_CLE_AGENTS" in rendu
     assert " PORTAIL_LITELLM_CLE_AGENTS " in _facultatives(rendu)
+
+
+def test_jeton_service_court_refuse_vide_admis(tmp_path):
+    (tmp_path / "a").mkdir()
+    r = _lancer_coffre(tmp_path / "a", court=False, autres={"PORTAIL_JETON_SERVICE": "x" * 31})
+    assert r.returncode != 0 and "PORTAIL_JETON_SERVICE trop court" in r.stderr
+    (tmp_path / "b").mkdir()
+    r = _lancer_coffre(tmp_path / "b", court=False, autres={"PORTAIL_JETON_SERVICE": ""})
+    assert r.returncode == 0, r.stderr

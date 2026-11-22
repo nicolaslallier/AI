@@ -6,8 +6,8 @@ de `/interne/` : aucune des trois portes n'ouvre les deux autres. Fermée sur le
 
 import secrets
 
-from fastapi import APIRouter, Depends, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from fastapi import APIRouter, Request, Response
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,7 @@ from portail.schemas import DonneesTache
 from portail.taches import creer_tache, deplacer_tache
 
 MAX_OUVERTES = 5
+TAILLE_MAX = 16 * 1024  # octets du corps
 OUVERTES = ("a_faire", "prete", "en_cours")
 
 
@@ -41,6 +42,8 @@ class DemandeDoc(BaseModel):
     @classmethod
     def _demande(cls, v: str) -> str:
         v = v.strip()
+        if "\x00" in v:  # Postgres refuse NUL dans un texte : 422 plutôt que 500
+            raise ValueError("caractère nul interdit")
         if not 1 <= len(v) <= 4000:
             raise ValueError("la demande doit faire de 1 à 4000 caractères")
         return v
@@ -78,9 +81,8 @@ async def demander_doc(
     )
     if existante is not None:
         return existante, True
-    if await session.scalar(select(func.count()).select_from(Tache).where(*ouvertes)) >= (
-        MAX_OUVERTES
-    ):
+    n = await session.scalar(select(func.count()).select_from(Tache).where(*ouvertes)) or 0
+    if n >= MAX_OUVERTES:
         raise Refus(429, "trop de demandes de documentation ouvertes")
     auteur = f"service:{corps.appelant}"
     titre = "Documentation : " + corps.demande.splitlines()[0][:180]
@@ -97,7 +99,6 @@ async def demander_doc(
 
 
 def _verifier_jeton(request: Request) -> None:
-    """Dépendance : jugée avant le corps, un appelant sans jeton n'apprend rien du schéma."""
     attendu = request.app.state.reglages.jeton_service
     if not attendu:
         raise Refus(503, "service désactivé")
@@ -110,8 +111,25 @@ def routeur_service(reveiller) -> APIRouter:
     """`reveiller(state)` : réveille l'ordonnanceur (passé par api.py, qui le définit)."""
     routeur = APIRouter()
 
-    @routeur.post("/service/taches-doc", status_code=201, dependencies=[Depends(_verifier_jeton)])
-    async def taches_doc(corps: DemandeDoc, request: Request, response: Response):
+    @routeur.post("/service/taches-doc", status_code=201)
+    async def taches_doc(request: Request, response: Response):
+        # Jeton d'abord, corps ensuite : sans jeton, le corps n'est ni lu ni validé.
+        _verifier_jeton(request)
+        try:
+            annonce = int(request.headers.get("Content-Length") or 0)
+        except ValueError:
+            annonce = 0
+        if annonce > TAILLE_MAX:
+            raise Refus(413, "corps trop gros")
+        brut = b""
+        async for morceau in request.stream():  # borné aussi sans Content-Length (chunked)
+            brut += morceau
+            if len(brut) > TAILLE_MAX:
+                raise Refus(413, "corps trop gros")
+        try:
+            corps = DemandeDoc.model_validate_json(brut)
+        except ValidationError:
+            raise Refus(422, "corps invalide") from None
         r = request.app.state.reglages
         async with request.app.state.sessions() as s:
             tache, existante = await demander_doc(s, r, corps)

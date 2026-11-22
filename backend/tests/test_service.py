@@ -122,3 +122,21 @@ async def test_reseau_agents_ne_voit_pas_service(moteur, tmp_path, faux_llm):
     transport = ASGITransport(app, client=("172.31.250.7", 5000))
     async with LifespanManager(app), AsyncClient(transport=transport, base_url="http://t") as c:
         assert (await c.post(CHEMIN, json=CORPS, headers=JETON)).status_code == 404
+
+
+async def test_jeton_avant_le_corps(client_service, client):
+    assert (await client_service.post(CHEMIN, content=b"{")).status_code == 401
+    assert (await client.post(CHEMIN, content=b"{")).status_code == 503
+    r = await client_service.post(CHEMIN, content=b"{", headers=JETON)
+    assert r.status_code == 422
+
+
+async def test_corps_trop_gros(client_service):
+    gros = CORPS | {"demande": "x" * 20000}
+    assert (await client_service.post(CHEMIN, json=gros, headers=JETON)).status_code == 413
+
+
+async def test_caractere_nul_refuse(client_service):
+    await _projet(client_service, "https://github.com/nicolaslallier/Infra")
+    r = await client_service.post(CHEMIN, json=CORPS | {"demande": "a\u0000b"}, headers=JETON)
+    assert r.status_code == 422

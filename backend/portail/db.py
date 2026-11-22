@@ -221,7 +221,7 @@ class TacheEvenement(Base):
     projet_id: Mapped[int] = mapped_column(ForeignKey("projet.id", ondelete="CASCADE"))
     tache_id: Mapped[int] = mapped_column(Integer)  # sans clé étrangère : le journal survit
     type: Mapped[str] = mapped_column(String)  # creation | modification | deplacement | suppression
-    auteur: Mapped[str] = mapped_column(String)  # "nicolas" | "agent:<nom>"
+    auteur: Mapped[str] = mapped_column(String)  # "nicolas" | "agent:<nom>" | "service:<appelant>"
     donnees: Mapped[dict] = mapped_column(JSON, default=dict)
     cree_le: Mapped[datetime] = _horodatage()
 

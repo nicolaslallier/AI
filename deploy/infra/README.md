@@ -92,10 +92,12 @@ Le sous-réseau `10.250.250.0/24` de `portail-agents` est réservé ; s'il entre
 
 Toutes ces étapes sont faites par Nicolas, dans cet ordre :
 
-1. `openssl rand -hex 32` ; ranger la valeur dans OpenBao : `infra/portail` clé
-   `PORTAIL_JETON_SERVICE`, et `infra/env` clé `AGENT_DOC_PORTAIL_JETON` (même valeur).
-2. Fusionner la PR du Portail (le Portail se redéploie).
-3. Recopier `deploy/nginx/portail.conf` dans l'Infra (plan 3 du projet 2, tâche 9).
+1. Recopier `deploy/nginx/portail.conf` dans l'Infra (plan 3 du projet 2, tâche 9) : `/service`
+   doit être fermé sur le vhost **avant** qu'un jeton existe.
+2. `openssl rand -hex 32` (32 caractères au moins, sinon le déploiement s'arrête) ; ranger la
+   valeur dans OpenBao : `infra/portail` clé `PORTAIL_JETON_SERVICE`, et `infra/env` clé
+   `AGENT_DOC_PORTAIL_JETON` (même valeur).
+3. Fusionner la PR du Portail (le Portail se redéploie).
 4. Clé locale : après `make litellm-provision` dans l'Infra (plan 3 du projet 2, tâche 1), ranger
    la clé `portail-agents` dans `infra/portail`, clé `PORTAIL_LITELLM_CLE_AGENTS`, puis
    redéployer le Portail ; vérifier que la page Musique répond toujours. C'est seulement après

@@ -184,7 +184,8 @@ Le dépôt est public : rien de secret n'y entre, tout passe par OpenBao.
 | 404 | aucun projet pour ce dépôt |
 | 409 | plusieurs projets pour ce dépôt |
 | 429 | 5 tâches de service déjà ouvertes dans le projet |
-| 422 | corps invalide |
+| 413 | corps de plus de 16 Ko |
+| 422 | corps invalide (jugé après le jeton) |
 
 Étapes manuelles : `deploy/infra/README.md`, section « agent-doc (jeton de service) ».
 
