@@ -23,7 +23,7 @@ Le workflow `.github/workflows/deploy.yml` construit les images `ghcr.io/nicolas
   - Environnement GitHub `production` (Settings → Environments), limité à la branche `main`, qui porte les secrets `PORTAINER_API_KEY` (jeton d'accès Portainer) et `BAO_TOKEN` (jeton OpenBao, lecture seule de `infra/data/portail`). Le job `deploy` ne tourne que sur `main`.
   - Le jeton OpenBao est périodique (32 jours) et renouvelé à chaque déploiement ; sans déploiement pendant 32 jours, en créer un nouveau.
   - Variables du dépôt : `PORTAINER_URL` (défaut `https://portainer.infra.famillelallier.net`), `VAULT_URL` (défaut `https://vault.infra.famillelallier.net`), `PORTAINER_ENDPOINT_ID` (obligatoire), `VAULT_SECRET_PATH` (défaut `infra/data/portail`), `INFRA_CA_CERT_PATH` (chemin de la CA de l'Infra dans le runner, défaut `/etc/ai/infra-ca.crt`).
-  - Clés du secret KV v2 `infra/portail` (lu via l'API à `infra/data/portail`) : `PORTAIL_DB_PASSWORD`, `PORTAIL_LITELLM_CLE`, `PORTAIL_GITHUB_JETON`, `PORTAIL_GITHUB_APP_ID`, `PORTAIL_GITHUB_APP_CLE`, `PORTAIL_LANCEUR_SECRET`, `PORTAIL_NTFY_JETON`, `PORTAIL_LLM_DELAI_S` (facultative), `PORTAIL_S3_SECRET_KEY` et `PORTAIL_COFFRE_PREFIXE` (facultatives, voir « Coffre Obsidian »).
+  - Clés du secret KV v2 `infra/portail` (lu via l'API à `infra/data/portail`) : `PORTAIL_DB_PASSWORD`, `PORTAIL_LITELLM_CLE`, `PORTAIL_GITHUB_JETON`, `PORTAIL_GITHUB_APP_ID`, `PORTAIL_GITHUB_APP_CLE`, `PORTAIL_LANCEUR_SECRET`, `PORTAIL_NTFY_JETON`, `PORTAIL_LLM_DELAI_S` (facultative), `PORTAIL_S3_SECRET_KEY` et `PORTAIL_COFFRE_PREFIXE` (facultatives, voir « Coffre Obsidian »), `PORTAIL_LITELLM_CLE_AGENTS` et `PORTAIL_JETON_SERVICE` (facultatives, voir « Route de service et clé des agents »).
   - Aucun workflow du dépôt ne doit avoir de déclencheur `pull_request`, `pull_request_target`, `issue_comment` ou `workflow_run` pouvant atteindre le label self-hosted `ai` : une PR de fork peut modifier `ci.yml` elle-même. Le dépôt est public : exiger l'approbation pour tous les collaborateurs externes (Settings → Actions → General → Fork pull request workflows from outside collaborators), et le runner `ai` doit être éphémère (conteneur neuf par job, aucun volume de travail persistant).
   - Le déploiement rejoue la CI (`ci.yml`, appelée par `deploy.yml`) et ne construit rien si elle échoue. Elle comprend les audits de dépendances (`pip-audit`, `npm audit`, `cargo audit`), la recherche de secrets (`gitleaks`) et, après chaque construction, l'analyse Trivy des images (CRITICAL/HIGH corrigeables). Actions et images de base sont épinglées par SHA ou digest ; Renovate propose les mises à jour le samedi (`renovate.json`).
   - Étapes manuelles (réglages GitHub, hors dépôt) :
@@ -168,6 +168,25 @@ Le dépôt est public : rien de secret n'y entre, tout passe par OpenBao.
 13. Ajouter le contrôle `agents` à la protection de `main` (avec `backend`, `frontend`, `lanceur` et `securite`).
 14. **Après la fusion** : ouvrir la PR Infra du lot I (`deploy/infra/README.md`).
 15. **Avant le premier `service:`** : vérifier que le réseau `portail_portail-agents` n'ouvre pas l'hôte (`nc -zv 10.250.250.1 22` depuis un conteneur de test doit échouer) et que le paquet GHCR `ai-agents` peut être tiré par Portainer et Trivy (voir `deploy/infra/README.md`).
+
+### Route de service et clé des agents (agent-doc)
+
+- **`PORTAIL_LITELLM_CLE_AGENTS`** (facultative) : clé LiteLLM d'alias `portail-agents`, équipe `agents`, modèles locaux seulement. Le Portail l'utilise pour tout appel à un agent A2A (aujourd'hui `/api/musique` vers agent-musique). Vide : repli sur `PORTAIL_LITELLM_CLE`, comme avant. Les appels aux modèles gardent `PORTAIL_LITELLM_CLE`.
+- **`PORTAIL_JETON_SERVICE`** (facultative, `openssl rand -hex 32`) : n'ouvre qu'une route, `POST /service/taches-doc` (`Authorization: Bearer <jeton>`, comparé en temps constant), utilisée par agent-doc (dépôt Infra, `AGENT_DOC_PORTAIL_JETON` de `infra/env`, même valeur). Elle crée dans le projet du dépôt une tâche de documentation seule, d'origine `agent`, non protégée, directement « Prête », et réveille l'ordonnanceur ; la PR produite reste à fusionner par Nicolas. Ni `/api/` ni `/interne/` n'acceptent ce jeton. Le vhost la ferme (`location ^~ /service`) : seuls les conteneurs d'`infra-net` l'atteignent, via `http://portail:8000`. Le réseau des agents (`PORTAIL_RESEAU_AGENTS`) ne la voit pas.
+- Corps : `{"depot": "<nom du dépôt, sans propriétaire>", "demande": "<texte>", "appelant": "<nom>"}`. Le projet est retrouvé par `depot_url` = `https://github.com/<PORTAIL_GITHUB_PROPRIETAIRE>/<depot>` (sans casse, `.git` ni `/` final).
+
+| Code | Cas |
+|---|---|
+| 201 | tâche créée : `{"tache_id", "projet_id", "lien", "existante": false}` |
+| 200 | une tâche identique est déjà ouverte : même corps, `existante: true` |
+| 401 | jeton absent ou faux |
+| 503 | `PORTAIL_JETON_SERVICE` vide (route désactivée) |
+| 404 | aucun projet pour ce dépôt |
+| 409 | plusieurs projets pour ce dépôt |
+| 429 | 5 tâches de service déjà ouvertes dans le projet |
+| 422 | corps invalide |
+
+Étapes manuelles : `deploy/infra/README.md`, section « agent-doc (jeton de service) ».
 
 ### Jeton GitHub (lecture seule)
 

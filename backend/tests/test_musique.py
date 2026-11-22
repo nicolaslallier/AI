@@ -117,3 +117,28 @@ async def test_api_passe_le_delai_llm(monkeypatch):
         rep = await c.post("/api/musique", json={"texte": "Beatles ?"})
     assert rep.status_code == 200, rep.text
     assert vus["delai_s"] == 321
+
+
+async def test_musique_appelle_avec_la_cle_des_agents(monkeypatch):
+    from portail import api
+    from portail.config import Reglages
+
+    cles = []
+
+    async def faux(url, cle, *args, **kwargs):
+        cles.append(cle)
+        return {"texte": "ok"}
+
+    monkeypatch.setattr(api, "demander", faux)
+    for agents in ("cle-agents", ""):  # vide : repli sur la clé actuelle
+        r = Reglages(
+            database_url="postgresql+psycopg://x@l/x",
+            litellm_cle="cle-apps",
+            litellm_cle_agents=agents,
+        )
+        app = api.create_app(r)
+        app.state.reglages, app.state.reseau_agents = r, None
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            assert (await c.post("/api/musique", json={"texte": "x"})).status_code == 200
+    assert cles == ["cle-agents", "cle-apps"]

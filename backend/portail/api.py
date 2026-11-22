@@ -97,6 +97,7 @@ from portail.schemas import (
     TacheVue,
     verifier_depot,
 )
+from portail.service import routeur_service
 from portail.suivi_pr import SuiviPR
 from portail.taches import (
     creer_tache,
@@ -836,7 +837,11 @@ def create_app(
         r = request.app.state.reglages
         try:
             return await demander(
-                r.litellm_url, r.litellm_cle, corps.texte, corps.context_id, delai_s=r.llm_delai_s
+                r.litellm_url,
+                r.litellm_cle_agents or r.litellm_cle,
+                corps.texte,
+                corps.context_id,
+                delai_s=r.llm_delai_s,
             )
         except ErreurMusique as e:
             raise HTTPException(502, str(e)) from e
@@ -1029,6 +1034,8 @@ def create_app(
 
     # Avant le repli SPA ; hors /api/ : le jeton de mission remplace l'en-tête d'utilisateur.
     app.include_router(ROUTEUR_INTERNE)
+    # Hors /api/ et /interne/ : le jeton de service n'ouvre que cette route ; fermée sur le vhost.
+    app.include_router(routeur_service(_reveiller))
 
     if r.static_dir:
         racine = r.static_dir.resolve()

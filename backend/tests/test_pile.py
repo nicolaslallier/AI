@@ -157,3 +157,25 @@ def test_reseau_des_agents_fixe_et_connu_du_portail():
 def test_digests_verifies_au_deploiement():
     wf = (RACINE / ".github" / "workflows" / "deploy.yml").read_text()
     assert wf.count("sha256:[0-9a-f]{64}") == 1 and "for v in EXECUTION_DIGEST AGENTS_DIGEST" in wf
+
+
+def _facultatives(rendu: str) -> str:
+    return re.search(r'FACULTATIVES="([^"]*)"', rendu).group(1)
+
+
+def test_service_ferme_sur_le_vhost_et_jeton_facultatif():
+    conf = (RACINE / "deploy" / "nginx" / "portail.conf").read_text()
+    assert re.search(r"location \^~ /service \{\s*return 404;\s*\}", conf)
+    pile = (RACINE / "deploy" / "portainer-stack.yml").read_text()
+    assert "PORTAIL_JETON_SERVICE: ${PORTAIL_JETON_SERVICE:-}" in pile
+    rendu = VAULT.read_text()
+    assert "PORTAIL_JETON_SERVICE=PORTAIL_JETON_SERVICE" in rendu
+    assert " PORTAIL_JETON_SERVICE " in _facultatives(rendu)
+
+
+def test_cle_des_agents_facultative_dans_la_pile():
+    pile = (RACINE / "deploy" / "portainer-stack.yml").read_text()
+    assert "PORTAIL_LITELLM_CLE_AGENTS: ${PORTAIL_LITELLM_CLE_AGENTS:-}" in pile
+    rendu = VAULT.read_text()
+    assert "PORTAIL_LITELLM_CLE_AGENTS=PORTAIL_LITELLM_CLE_AGENTS" in rendu
+    assert " PORTAIL_LITELLM_CLE_AGENTS " in _facultatives(rendu)
