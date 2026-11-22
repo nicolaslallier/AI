@@ -3,7 +3,7 @@
 use agent::serveur::Tourner;
 
 /// Les agents de `agents.yaml` (un test vérifie l'égalité).
-pub const NOMS: [&str; 22] = [
+pub const NOMS: [&str; 23] = [
     "spec",
     "orchestrateur",
     "plan",
@@ -16,6 +16,7 @@ pub const NOMS: [&str; 22] = [
     "securite",
     "doc",
     "documentaliste",
+    "relecteur-doc",
     "pm",
     "tri",
     "archi-entreprise",
