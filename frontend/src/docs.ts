@@ -17,3 +17,8 @@ export function grouper(cartes: CarteDoc[]): Record<string, CarteDoc[]> {
   for (const c of [...cartes].sort((a, b) => a.id - b.id)) (g[c.colonne] ??= []).push(c)
   return g
 }
+
+/** Le contenu a changé côté serveur : le brouillon suit seulement s'il n'a pas été modifié. */
+export function resynchroniser(brouillon: string, base: string, nouveau: string): { brouillon: string; base: string } {
+  return brouillon === base ? { brouillon: nouveau, base: nouveau } : { brouillon, base: nouveau }
+}

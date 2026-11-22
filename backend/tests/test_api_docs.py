@@ -154,3 +154,36 @@ async def test_pipeline_doc_refuse_par_la_route(client):
     pid = (await client.post("/api/projets", json={"nom": "p"})).json()["id"]
     r = await client.post("/api/pipelines", json={"projet_id": pid, "type": "doc"})
     assert r.status_code == 422
+
+
+async def test_patch_chemin_verifie_et_normalise(client):
+    a = await _carte(client)
+    r = await client.patch(f"/api/docs/cartes/{a['id']}", json={"chemin": "../x.md"})
+    assert r.status_code == 422
+    r = await client.patch(f"/api/docs/cartes/{a['id']}", json={"chemin": "02 - Notes/a.md"})
+    assert r.status_code == 422  # hors de 01 - Projets/<Projet>/Docs/
+    b = await client.post(
+        "/api/docs/cartes", json={"projet_id": a["projet_id"], "genre": "adr", "titre": "Autre"}
+    )
+    # même chemin une fois normalisé (« ./ » et double barre) : refusé comme doublon
+    r = await client.patch(
+        f"/api/docs/cartes/{b.json()['id']}",
+        json={"chemin": a["chemin"].replace("/Docs/", "/./Docs//")},
+    )
+    assert r.status_code == 409
+
+
+async def test_pipeline_doc_ni_annule_ni_reessaye(client, sessions):
+    from portail.db import Etape, Pipeline
+    from portail.etats import Etat
+
+    c = await _carte(client)
+    async with sessions() as s:
+        p = Pipeline(projet_id=c["projet_id"], type="doc", etat=Etat.ECHOUEE)
+        s.add(p)
+        await s.flush()
+        e = Etape(pipeline_id=p.id, ordre=0, agent="documentaliste", etat=Etat.ECHOUEE, erreur="x")
+        s.add(e)
+        await s.commit()
+    assert (await client.post(f"/api/pipelines/{p.id}/annuler")).status_code == 409
+    assert (await client.post(f"/api/etapes/{e.id}/reessayer")).status_code == 409

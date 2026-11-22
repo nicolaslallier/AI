@@ -55,6 +55,13 @@ async def test_valider_lancer_pipeline_dev_refuse(sessions):
     assert "Prête" in r.message
 
 
+async def test_valider_lancer_pipeline_doc_refuse(sessions):
+    async with sessions() as s:
+        pid = await _projet(s)
+        r = await _refus(s, "lancer_pipeline", {"projet_id": pid, "type": "doc"})
+    assert "kanban doc" in r.message
+
+
 async def test_valider_projet_inconnu(sessions):
     async with sessions() as s:
         await _refus(s, "creer_tache", {"projet_id": 999, "titre": "T"})

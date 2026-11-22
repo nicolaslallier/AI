@@ -174,3 +174,11 @@ async def test_capacite_partagee_avec_le_dev(usine, sessions, depot_origine, max
     for t in usine.taches.values():
         t.cancel()
     await asyncio.gather(*usine.taches.values(), return_exceptions=True)
+
+
+def test_sans_frontmatter():
+    from portail.usine_doc import sans_frontmatter
+
+    assert sans_frontmatter("---\ntype: x\n---\n\n# T") == "# T"
+    assert sans_frontmatter("# T\n---\nx") == "# T\n---\nx"
+    assert sans_frontmatter("---\nnon fermé") == "---\nnon fermé"

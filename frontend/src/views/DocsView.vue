@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   creerCarteDoc, listerCartesDoc, listerProjets, modifierCarteDoc, relancerCarteDoc, renvoyerCarteDoc,
   supprimerCarteDoc, validerCarteDoc, type CarteDoc, type Projet,
 } from '../api'
-import { COLONNES_DOC, EN_COURS, GENRES, grouper } from '../docs'
+import { COLONNES_DOC, EN_COURS, GENRES, grouper, resynchroniser } from '../docs'
 import { ecouterEvenements, regrouper } from '../evenements'
 import { rendreMarkdown } from '../markdown'
 
@@ -14,6 +14,7 @@ const erreur = ref('')
 const nouvelle = ref<{ projet_id: number | null; genre: string; titre: string; consigne: string } | null>(null)
 const ouverteId = ref<number | null>(null)
 const brouillon = ref('')
+let base = '' // contenu du serveur sur lequel le brouillon s'appuie
 const remarques = ref('')
 const forcer = ref(false)
 let minuteur: ReturnType<typeof setInterval> | undefined
@@ -22,6 +23,12 @@ let arreter: (() => void) | undefined
 const colonnes = computed(() => grouper(cartes.value))
 const ouverte = computed(() => cartes.value.find((c) => c.id === ouverteId.value) ?? null)
 const enCours = computed(() => !!ouverte.value && EN_COURS.includes(ouverte.value.colonne))
+watch(
+  () => ouverte.value?.contenu,
+  (nouveau) => {
+    if (nouveau !== undefined) ({ brouillon: brouillon.value, base } = resynchroniser(brouillon.value, base, nouveau))
+  },
+)
 
 async function charger() {
   try {
@@ -42,7 +49,7 @@ async function agir(f: () => Promise<unknown>, fermer = false) {
 }
 function ouvrir(c: CarteDoc) {
   ouverteId.value = c.id
-  brouillon.value = c.contenu
+  brouillon.value = base = c.contenu
   remarques.value = ''
   forcer.value = false
   erreur.value = ''
@@ -141,7 +148,14 @@ onBeforeUnmount(() => {
       <div v-if="!enCours" class="actions">
         <template v-if="ouverte.colonne === 'a_valider'">
           <label><input v-model="forcer" type="checkbox" /> Écraser la note du coffre</label>
-          <button class="primaire" @click="agir(() => validerCarteDoc(ouverte!.id, forcer))">Valider</button>
+          <button
+            class="primaire"
+            :disabled="brouillon !== ouverte.contenu"
+            :title="brouillon !== ouverte.contenu ? 'Enregistrer le texte avant de valider' : ''"
+            @click="agir(() => validerCarteDoc(ouverte!.id, forcer))"
+          >
+            Valider
+          </button>
         </template>
         <textarea v-model="remarques" rows="2" placeholder="Remarques, une par ligne" aria-label="Remarques de renvoi" />
         <button :disabled="!lignes(remarques).length" @click="agir(() => renvoyerCarteDoc(ouverte!.id, lignes(remarques)))">

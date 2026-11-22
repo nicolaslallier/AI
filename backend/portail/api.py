@@ -60,7 +60,7 @@ from portail.missions import ROUTEUR_INTERNE, Missions, lire_secrets
 from portail.moteur import Refus, creer_pipeline, recuperer_interrompues, spec_courante
 from portail.musique import ErreurMusique, demander
 from portail.notifications import Notifieur
-from portail.obsidian import Coffre, chemin_doc, creer_coffre
+from portail.obsidian import Coffre, chemin_doc, creer_coffre, verifier_ecriture
 from portail.ordonnanceur import Ordonnanceur, reprendre_interrompues
 from portail.propositions import accepter, fermer_si_fini, rejeter
 from portail.propositions import tout_accepter as accepter_tout
@@ -357,6 +357,8 @@ async def _annuler(state, s: AsyncSession, pipeline_id: int, clos: bool) -> None
     if p is None:
         raise Refus(404, "pipeline introuvable")
     type_, etat = p.type, p.etat
+    if type_ == "doc":  # mené par l'usine de doc : rien à annuler côté chat
+        raise Refus(409, "un pipeline doc se gère depuis sa carte du kanban doc")
     mode = await s.scalar(select(ExecutionDev.mode).where(ExecutionDev.pipeline_id == pipeline_id))
     reprise = mode == "reprise" and etat == Etat.EN_COURS
     await s.rollback()
@@ -919,6 +921,11 @@ def create_app(
     @app.patch("/api/docs/cartes/{carte_id}", response_model=CarteDocVue)
     async def modifier_carte(carte_id: int, corps: CarteDocPatch, request: Request, s: Session):
         champs = corps.model_dump(exclude_none=True)
+        if "chemin" in champs:  # forme normalisée : l'unicité porte sur le chemin réellement écrit
+            try:
+                champs["chemin"] = verifier_ecriture(champs["chemin"])
+            except ValueError as e:
+                raise Refus(422, str(e)) from e
         return await _modifier_carte(s, request, carte_id, "carte_doc.modifier", **champs)
 
     @app.post("/api/docs/cartes/{carte_id}/valider", response_model=CarteDocVue)

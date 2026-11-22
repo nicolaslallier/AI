@@ -8,6 +8,7 @@ valide → écriture dans le coffre Obsidian → *Publié*. Rien n'est écrit da
 import asyncio
 import json
 import logging
+import re
 from datetime import UTC, datetime
 
 from sqlalchemy import select, update
@@ -59,6 +60,15 @@ def frontmatter(carte: CarteDoc, projet: str, maintenant: datetime) -> str:
     return "---\n" + "\n".join(lignes) + "\n---\n\n"
 
 
+def sans_frontmatter(md: str) -> str:
+    """Retire un frontmatter de tête (du modèle ou de Nicolas) : un seul, le nôtre, sera écrit."""
+    if re.match(r"---[ \t]*\r?\n", md):
+        fin = re.search(r"^---[ \t]*\r?$", md[3:], re.MULTILINE)
+        if fin:
+            return md[3 + fin.end() :].lstrip("\r\n")
+    return md
+
+
 class UsineDoc:
     def __init__(
         self,
@@ -83,8 +93,9 @@ class UsineDoc:
 
     # --- tirage -------------------------------------------------------------
 
-    async def tour(self, places: int) -> list[asyncio.Task]:
-        """Démarre jusqu'à `places` cartes *À rédiger* sans erreur, par `id`."""
+    async def tour(self, places: int, sur_fin=None) -> list[asyncio.Task]:
+        """Démarre jusqu'à `places` cartes *À rédiger* sans erreur, par `id`. `sur_fin` est
+        accroché dès le lancement : une erreur au tirage suivant ne le perd pas."""
         lancees = []
         while len(lancees) < places:
             async with self._sessions() as s:
@@ -108,7 +119,9 @@ class UsineDoc:
                 carte.pipeline_id, carte.colonne = pipeline.id, "redaction"
                 inscrire(s, "ordonnanceur", "pipeline.lancer", "pipeline", pipeline.id)
                 await s.commit()
-            lancees.append(self._lancer(carte.id))
+            lancees.append(t := self._lancer(carte.id))
+            if sur_fin:
+                t.add_done_callback(sur_fin)
         return lancees
 
     def _lancer(self, carte_id: int) -> asyncio.Task:
@@ -312,7 +325,7 @@ class UsineDoc:
                 raise Refus(409, "seule une carte « à valider » se publie")
             projet = await s.get(Projet, carte.projet_id)
             maintenant = datetime.now(UTC)
-            texte = frontmatter(carte, projet.nom, maintenant) + carte.contenu
+            texte = frontmatter(carte, projet.nom, maintenant) + sans_frontmatter(carte.contenu)
             try:
                 etag = await self.coffre.ecrire_doc(carte.chemin, texte, carte.etag, forcer)
             except Conflit as e:

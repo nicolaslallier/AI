@@ -90,6 +90,8 @@ async def _verifier(s: AsyncSession, catalogue: Catalogue, nom: str, p: BaseMode
     elif nom == "lancer_pipeline":
         if p.type == "dev":
             raise Refus(422, "un pipeline dev se lance depuis une tâche Prête du kanban")
+        if p.type == "doc":
+            raise Refus(422, "un pipeline doc se lance depuis une carte du kanban doc")
         if p.type not in catalogue.pipelines:
             raise Refus(422, f"type de pipeline inconnu : {p.type}")
     elif nom == "deplacer_tache" and p.colonne not in COLONNES:

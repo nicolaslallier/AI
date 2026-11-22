@@ -287,6 +287,8 @@ class ServiceChat:
             if etape.etat != Etat.ECHOUEE:
                 raise Refus(409, "seule une étape échouée peut être relancée")
             pipeline = await s.get(Pipeline, etape.pipeline_id)
+            if pipeline.type == "doc":  # l'usine de doc mène ses étapes : on relance la carte
+                raise Refus(409, "une étape doc se relance depuis sa carte du kanban doc")
             if pipeline.type in UN_SEUL_ACTIF and await autre_actif(
                 s, pipeline.projet_id, pipeline.type, sauf=pipeline.id
             ):

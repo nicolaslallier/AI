@@ -106,8 +106,7 @@ class Ordonnanceur:
         """Le dev d'abord (reprises, puis tâches *Prêtes*), puis les cartes de doc."""
         await self._tour_dev()
         if self._usine and (libres := self._libres()) > 0:
-            for t in await self._usine.tour(libres):
-                t.add_done_callback(lambda _: self.reveiller())
+            await self._usine.tour(libres, lambda _: self.reveiller())
 
     async def _tour_dev(self) -> None:
         """Démarre des tâches tant qu'il reste de la place : les reprises d'abord."""
