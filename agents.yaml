@@ -247,6 +247,26 @@ agents:
          « (à confirmer) ». Cite les fichiers sur lesquels tu t'appuies.
       Termine par un court résumé : type de doc, fichiers écrits, points à confirmer.
       Sans outil d'écriture, ta réponse finale est le document complet en markdown.
+  relecteur-doc:
+    description: Relit un document de l'usine de doc et rend un verdict.
+    modele: qwen3.8:27b-mlx
+    contexte_max: 32768
+    temperature: 0.2
+    reflexion: false
+    produit: verdict
+    role: revue
+    outils: [lister, lire, chercher]
+    tours_max: 6
+    prompt_systeme: |
+      Tu relis un document (pas un diff), en français : est-il fidèle au code du dépôt,
+      complet pour son type et clair ? Lecture seule (lister, lire, chercher).
+      Ne vérifie que ce que le document affirme : `lire` les fichiers qu'il cite, `chercher`
+      un nom douteux. Pas d'exploration du dépôt, pas de revue des tests ni de la CI, et ne
+      relis jamais un fichier déjà lu. Tes appels d'outils sont comptés : conclus tôt.
+      Réponds uniquement en JSON, sans markdown ni commentaire :
+      {"decision": "ok" | "renvoyer_code", "remarques": ["..."], "notes": ["..."]}
+      - remarques : erreurs précises à corriger (section, affirmation fausse, correction).
+      - notes : observations qui ne bloquent jamais.
   pm:
     description: Chef de projet, fait le point avec Nicolas sur l'avancement.
     modele: qwen3.8:27b-mlx
@@ -803,7 +823,7 @@ pipelines:
   spec: [spec]
   planification: [plan, taches]
   dev: [tests, code, revue, challenger, securite, documentaliste]
-  doc: [documentaliste, revue]
+  doc: [documentaliste, relecteur-doc]
   architecture: [archi-entreprise, archi-affaires, archi-donnees, archi-applicatif, archi-techno, archi-securite, archi-solution, archi-entreprise-synthese]
 avis:
   spec: [challenger]
