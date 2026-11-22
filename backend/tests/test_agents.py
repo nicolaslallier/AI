@@ -593,5 +593,6 @@ def test_agent_effectif():
 
 def test_agents_yaml_reel_usine_de_doc():
     cat = charger_catalogue(RACINE / "agents.yaml")
-    assert cat.pipelines["doc"] == ["documentaliste", "revue"]
+    assert cat.pipelines["doc"] == ["documentaliste", "relecteur-doc"]
+    assert cat.agents["relecteur-doc"].tours_max <= 8
     assert "Sans outil d'écriture" in cat.agents["documentaliste"].prompt_systeme
