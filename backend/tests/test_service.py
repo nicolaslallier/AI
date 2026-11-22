@@ -3,6 +3,7 @@
 import pytest_asyncio
 from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import update
 
 from portail.api import create_app
 from portail.config import Reglages
@@ -140,3 +141,21 @@ async def test_caractere_nul_refuse(client_service):
     await _projet(client_service, "https://github.com/nicolaslallier/Infra")
     r = await client_service.post(CHEMIN, json=CORPS | {"demande": "a\u0000b"}, headers=JETON)
     assert r.status_code == 422
+
+
+async def test_plafond_compte_en_revue_et_bloquee(client_service, sessions):
+    await _projet(client_service, "https://github.com/nicolaslallier/Infra")
+    for i in range(5):
+        r = await client_service.post(CHEMIN, json=CORPS | {"demande": f"d{i}"}, headers=JETON)
+        assert r.status_code == 201
+    async with sessions() as s:
+        await s.execute(update(Tache).values(colonne="en_revue"))
+        await s.execute(update(Tache).where(Tache.id == 1).values(colonne="bloquee"))
+        await s.commit()
+    r = await client_service.post(CHEMIN, json=CORPS | {"demande": "d5"}, headers=JETON)
+    assert r.status_code == 429
+    async with sessions() as s:
+        await s.execute(update(Tache).values(colonne="terminee"))
+        await s.commit()
+    r = await client_service.post(CHEMIN, json=CORPS | {"demande": "d5"}, headers=JETON)
+    assert r.status_code == 201

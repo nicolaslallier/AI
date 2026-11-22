@@ -183,7 +183,7 @@ Le dépôt est public : rien de secret n'y entre, tout passe par OpenBao.
 | 503 | `PORTAIL_JETON_SERVICE` vide (route désactivée) |
 | 404 | aucun projet pour ce dépôt |
 | 409 | plusieurs projets pour ce dépôt |
-| 429 | 5 tâches de service déjà ouvertes dans le projet |
+| 429 | 5 tâches de service non terminées dans le projet (`en_revue` et `bloquee` comprises) |
 | 413 | corps de plus de 16 Ko |
 | 422 | corps invalide (jugé après le jeton) |
 

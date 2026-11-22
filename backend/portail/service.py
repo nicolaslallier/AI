@@ -21,7 +21,9 @@ from portail.taches import creer_tache, deplacer_tache
 
 MAX_OUVERTES = 5
 TAILLE_MAX = 16 * 1024  # octets du corps
-OUVERTES = ("a_faire", "prete", "en_cours")
+OUVERTES = ("a_faire", "prete", "en_cours")  # anti-doublon
+# plafond : toute tâche non terminée (décision de Nicolas, 2026-11-22)
+NON_TERMINEES = (*OUVERTES, "en_revue", "bloquee")
 
 
 class DemandeDoc(BaseModel):
@@ -70,18 +72,21 @@ async def demander_doc(
     projet_id = projets[0].id
     # verrou du projet : deux appels identiques simultanés ne créent qu'une tâche
     await session.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
-    ouvertes = (
-        Tache.projet_id == projet_id,
-        Tache.doc.is_(True),
-        Tache.origine == "agent",
-        Tache.colonne.in_(OUVERTES),
-    )
+    service = (Tache.projet_id == projet_id, Tache.doc.is_(True), Tache.origine == "agent")
+    ouvertes = (*service, Tache.colonne.in_(OUVERTES))
     existante = await session.scalar(
         select(Tache).where(*ouvertes, Tache.description == corps.demande).limit(1)
     )
     if existante is not None:
         return existante, True
-    n = await session.scalar(select(func.count()).select_from(Tache).where(*ouvertes)) or 0
+    n = (
+        await session.scalar(
+            select(func.count())
+            .select_from(Tache)
+            .where(*service, Tache.colonne.in_(NON_TERMINEES))
+        )
+        or 0
+    )
     if n >= MAX_OUVERTES:
         raise Refus(429, "trop de demandes de documentation ouvertes")
     auteur = f"service:{corps.appelant}"
