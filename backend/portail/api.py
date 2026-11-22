@@ -854,8 +854,11 @@ def create_app(
             raise HTTPException(404, "note introuvable") from None
         except ValueError as e:
             raise HTTPException(422, str(e)) from None
-        except (BotoCoreError, ClientError):
-            journal.erreur(logger, "coffre Obsidian injoignable")
+        except (BotoCoreError, ClientError) as e:
+            code = (
+                e.response.get("Error", {}).get("Code", "?") if isinstance(e, ClientError) else ""
+            )
+            journal.erreur(logger, "coffre Obsidian injoignable %s", code)
             raise HTTPException(502, "coffre Obsidian injoignable") from None
 
     @app.get("/api/coffre/arbre")

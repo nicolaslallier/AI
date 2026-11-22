@@ -22,6 +22,7 @@ class FauxS3:
 
     def __init__(self):
         self.objets: dict[str, bytes] = {}
+        self.fermes = 0
 
     def _etag(self, cle):
         return '"' + hashlib.md5(self.objets[cle]).hexdigest() + '"'
@@ -58,9 +59,14 @@ class FauxS3:
             raise self._absent("GetObject")
         donnees = self.objets[Key]
 
+        faux = self
+
         class Corps:
-            def read(self):
-                return donnees
+            def read(self, n=-1):
+                return donnees if n < 0 else donnees[:n]
+
+            def close(self):
+                faux.fermes += 1
 
         return {"Body": Corps(), "ContentLength": len(donnees), "ETag": self._etag(Key)}
 
@@ -108,6 +114,7 @@ def test_est_note(chemin, ok):
         "01 - Projets/Portail/Docs/x.txt",
         "01 - Projets/.obsidian/Docs/x.md",
         "01 - Projets/../Docs/x.md",
+        "01 - Projets/P/Docs/a\tb.md",
     ],
 )
 def test_verifier_ecriture_refuse(chemin):
@@ -124,6 +131,7 @@ def test_chemin_doc_nettoie():
         "01 - Projets/Por-tail/Docs/Por-tail - Guide- ..-install.md"
     )
     verifier_ecriture(chemin_doc("../..", ".."))
+    assert chemin_doc("P", 'a?*"<>|#^[]b') == "01 - Projets/P/Docs/P - a----------b.md"
 
 
 def _coffre(prefixe=""):
@@ -166,6 +174,7 @@ async def test_lire_prefixe_et_plafond():
     s3.objets["Maison/gros.md"] = b"x" * (1024 * 1024 + 1)
     with pytest.raises(ValueError):
         await c.lire("gros.md")
+    assert s3.fermes == 2
     with pytest.raises(FileNotFoundError):
         await c.lire("absent.md")
     with pytest.raises(ValueError):
@@ -206,3 +215,9 @@ async def test_ecrire_doc_refuse_hors_docs_et_trop_gros():
 def test_creer_coffre_sans_secret():
     assert creer_coffre(Reglages(database_url="x")) is None
     assert isinstance(creer_coffre(Reglages(database_url="x", s3_secret_key="s")), Coffre)
+
+
+def test_creer_coffre_prefixe_invalide():
+    assert (
+        creer_coffre(Reglages(database_url="x", s3_secret_key="s", coffre_prefixe="a/../b")) is None
+    )

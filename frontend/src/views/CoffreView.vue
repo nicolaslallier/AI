@@ -56,9 +56,10 @@ watch(
     if (!chemin) return
     erreur.value = ''
     try {
-      contenu.value = (await lireNoteCoffre(chemin)).contenu
+      const lu = (await lireNoteCoffre(chemin)).contenu
+      if (chemin === note.value) contenu.value = lu // une réponse lente ne remplace pas la note suivante
     } catch (e) {
-      erreur.value = (e as Error).message
+      if (chemin === note.value) erreur.value = (e as Error).message
     }
   },
   { immediate: true },

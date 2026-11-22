@@ -51,13 +51,13 @@ def est_note(chemin: str) -> bool:
 def verifier_ecriture(chemin: str) -> str:
     """Le seul endroit où le Portail peut écrire : `01 - Projets/<un segment>/Docs/<fichier>.md`."""
     c = normaliser(chemin)
-    if not est_note(c) or not _DOC.fullmatch(c):
+    if re.search(r"[\x00-\x1f]", c) or not est_note(c) or not _DOC.fullmatch(c):
         raise ValueError("écriture permise seulement sous 01 - Projets/<Projet>/Docs/")
     return c
 
 
 def _nettoyer(texte: str) -> str:
-    propre = re.sub(r"[/\\:\x00-\x1f]", "-", texte).strip().lstrip(".").strip()
+    propre = re.sub(r'[/\\:?*"<>|#^\[\]\x00-\x1f]', "-", texte).strip().lstrip(".").strip()
     return propre or "Sans titre"
 
 
@@ -112,9 +112,14 @@ class Coffre:
             if _absent(e):
                 raise FileNotFoundError(c) from None
             raise
-        if r["ContentLength"] > LECTURE_MAX:
+        corps = r["Body"]
+        try:
+            donnees = await asyncio.to_thread(corps.read, LECTURE_MAX + 1)
+        finally:
+            corps.close()
+        if len(donnees) > LECTURE_MAX:
             raise ValueError("note trop grosse (1 Mio au plus)")
-        return (await asyncio.to_thread(r["Body"].read)).decode("utf-8", errors="replace")
+        return donnees.decode("utf-8", errors="replace")
 
     async def ecrire_doc(
         self, chemin: str, texte: str, etag_connu: str | None, forcer: bool = False
@@ -153,12 +158,24 @@ def creer_coffre(r: Reglages) -> Coffre | None:
     if not r.s3_secret_key:
         logger.warning("coffre Obsidian éteint : PORTAIL_S3_SECRET_KEY absente")
         return None
+    try:
+        prefixe = normaliser(r.coffre_prefixe.strip("/")) if r.coffre_prefixe.strip("/") else ""
+    except ValueError:
+        logger.warning("coffre Obsidian éteint : préfixe invalide")
+        return None
     s3 = boto3.client(
         "s3",
         endpoint_url=r.s3_url,
         aws_access_key_id=r.s3_access_key,
         aws_secret_access_key=r.s3_secret_key,
         region_name="us-east-1",
-        config=Config(s3={"addressing_style": "path"}),
+        config=Config(
+            s3={"addressing_style": "path"},
+            connect_timeout=5,
+            read_timeout=15,
+            retries={"max_attempts": 2},
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        ),
     )
-    return Coffre(s3, r.s3_bucket, r.coffre_prefixe)
+    return Coffre(s3, r.s3_bucket, prefixe)

@@ -46,7 +46,7 @@ async def test_chemins_refuses(avec_coffre):
     assert (await c.get("/api/coffre/note", params={"chemin": "x.md"})).status_code == 404
 
 
-async def test_erreur_s3_masquee(avec_coffre):
+async def test_erreur_s3_masquee(avec_coffre, caplog):
     c, s3 = avec_coffre
 
     def panne(**_):
@@ -55,3 +55,6 @@ async def test_erreur_s3_masquee(avec_coffre):
     s3.list_objects_v2 = panne
     r = await c.get("/api/coffre/arbre")
     assert r.status_code == 502 and "secret-xyz" not in r.text
+    # la pile journalisée recopie la ligne source du test : on regarde seulement le message
+    msg = caplog.records[-1].getMessage().split("\n")[0]
+    assert "AccessDenied" in msg and "secret-xyz" not in msg
