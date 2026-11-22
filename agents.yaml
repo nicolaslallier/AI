@@ -1,4 +1,4 @@
-modeles_permis: [qwen3.8:27b-mlx, gemma4:26b-a4b-it-qat, qwen3.6:35b-mlx, cloud-anthropic, cloud-openai, cloud-gemini]
+modeles_permis: [qwen3.8:27b-mlx, gemma4:26b-a4b-it-qat, qwen3.6:35b-a3b, cloud-anthropic, cloud-openai, cloud-gemini]
 agents:
   spec:
     description: Discute avec Nicolas pour écrire la spec d'un projet.
@@ -206,7 +206,7 @@ agents:
       - notes : observations qui ne bloquent jamais.
   doc:
     description: Met à jour la documentation d'une tâche.
-    modele: qwen3.6:35b-mlx
+    modele: qwen3.6:35b-a3b
     contexte_max: 32768
     temperature: 0.2
     produit: travail
@@ -249,7 +249,7 @@ agents:
       Sans outil d'écriture, ta réponse finale est le document complet en markdown.
   relecteur-doc:
     description: Relit un document de l'usine de doc et rend un verdict.
-    modele: qwen3.6:35b-mlx
+    modele: qwen3.6:35b-a3b
     contexte_max: 32768
     temperature: 0.2
     reflexion: false
