@@ -1,9 +1,26 @@
 import ipaddress
 import re
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources.types import NoDecode
+
+
+def _parsing_admin_emails(v: object) -> list[str]:
+    """Parse une chaîne séparée par des virgules (ou une liste) en liste d'adresses.
+
+    Les espaces autour des adresses sont ignorés ; une valeur vide ou absente
+    produit une liste vide.
+    """
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [part.strip() for part in v.split(",") if part.strip()]
+    if isinstance(v, (list, tuple)):
+        return [str(part).strip() for part in v if str(part).strip()]
+    return [str(v).strip()]
 
 
 class Reglages(BaseSettings):
@@ -54,6 +71,15 @@ class Reglages(BaseSettings):
     s3_secret_key: str = ""  # PORTAIL_S3_SECRET_KEY ; vide : coffre Obsidian éteint
     coffre_prefixe: str = ""  # PORTAIL_COFFRE_PREFIXE = ORGANIZER_VAULT_PREFIX d'Infra
     deploye_le: int = 0  # PORTAIL_DEPLOYE_LE : secondes Unix du déploiement
+    # PORTAIL_ADMIN_EMAILS : adresses administratives séparées par des virgules ;
+    # vide : aucun admin (sauf en mode local où tous les utilisateurs sont admins).
+    # NoDecode : la valeur d'environnement est une chaîne, pas du JSON.
+    admin_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
+    @field_validator("admin_emails", mode="before")
+    @classmethod
+    def _admin_emails(cls, v: object) -> list[str]:
+        return _parsing_admin_emails(v)
 
     @field_validator("reseau_agents")
     @classmethod
@@ -71,3 +97,11 @@ class Reglages(BaseSettings):
         if v and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
             raise ValueError(f"PORTAIL_RESUME_HEURE doit être vide ou au format HH:MM, reçu {v!r}")
         return v
+
+
+def est_admin(reglages: Reglages, email: str) -> bool:
+    """Garde admin : en mode local, tout utilisateur est admin ; sinon, l'adresse
+    doit figurer dans `admin_emails`."""
+    if not reglages.exiger_utilisateur:
+        return True
+    return email in reglages.admin_emails
