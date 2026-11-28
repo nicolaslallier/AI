@@ -1,8 +1,8 @@
-modeles_permis: [qwen3.8:27b-mlx, gemma4:26b-a4b-it-qat, qwen3.6:35b-a3b, cloud-anthropic, cloud-openai, cloud-gemini]
+modeles_permis: [qwen3.6:35b-a3b, gemma4:26b-a4b-it-qat, cloud-anthropic, cloud-openai, cloud-gemini]
 agents:
   spec:
     description: Discute avec Nicolas pour écrire la spec d'un projet.
-    modele: qwen3.8:27b-mlx
+    modele: qwen3.6:35b-a3b
     contexte_max: 32768 # à ajuster au contexte réel du modèle dans LiteLLM
     temperature: 0.3
     outils: [lister, lire, chercher] # utilisés seulement si le projet a un dépôt
@@ -18,7 +18,7 @@ agents:
       Réponds uniquement avec le document, sans préambule ni commentaire.
   orchestrateur:
     description: Répond aux questions de Nicolas, en dehors de tout projet.
-    modele: qwen3.8:27b-mlx
+    modele: qwen3.6:35b-a3b
     contexte_max: 32768
     temperature: 0.3
     outils:
@@ -51,7 +51,7 @@ agents:
       Pour démarrer une tâche de développement, propose de la déplacer vers « prete ».
   plan:
     description: Lit le dépôt et rédige le plan d'implémentation à partir de la spec.
-    modele: qwen3.8:27b-mlx
+    modele: qwen3.6:35b-a3b
     contexte_max: 32768
     temperature: 0.3
     produit: plan
@@ -72,7 +72,7 @@ agents:
       Réponds uniquement avec le document, sans préambule ni commentaire.
   taches:
     description: Découpe le plan validé en tâches, créées directement dans le kanban.
-    modele: qwen3.8:27b-mlx
+    modele: qwen3.6:35b-a3b
     contexte_max: 32768
     temperature: 0.2
     produit: taches
@@ -96,7 +96,7 @@ agents:
       rend la réponse invalide.
   tests:
     description: Écrit les tests d'une tâche, avant le code.
-    modele: qwen3.8:27b-mlx
+    modele: qwen3.6:35b-a3b
     contexte_max: 32768
     temperature: 0.2
     reflexion: false
@@ -122,7 +122,7 @@ agents:
       Termine par un court résumé des tests écrits.
   code:
     description: Écrit le code qui fait passer les tests d'une tâche.
-    modele: qwen3.8:27b-mlx
+    modele: qwen3.6:35b-a3b
     contexte_max: 32768
     temperature: 0.2
     reflexion: false
@@ -140,7 +140,7 @@ agents:
       Termine par un court résumé des changements.
   revue:
     description: Relit le diff d'une tâche et rend un verdict.
-    modele: qwen3.8:27b-mlx
+    modele: qwen3.6:35b-a3b
     contexte_max: 32768
     temperature: 0.2
     reflexion: false
@@ -160,7 +160,7 @@ agents:
       Les notes sont des observations qui ne bloquent jamais (facultatives).
   architecte:
     description: Donne un avis d'architecte sur une spec ou un plan.
-    modele: qwen3.8:27b-mlx
+    modele: qwen3.6:35b-a3b
     contexte_max: 32768
     temperature: 0.3
     outils: [lister, lire, chercher]
@@ -174,7 +174,7 @@ agents:
       Réponds uniquement avec l'avis, sans préambule.
   challenger:
     description: Conteste le travail ou le document avec un regard indépendant.
-    modele: qwen3.8:27b-mlx
+    modele: qwen3.6:35b-a3b
     modele_si_meme: gemma4:26b-a4b-it-qat
     contexte_max: 32768
     temperature: 0.3
@@ -195,7 +195,7 @@ agents:
       Réponds uniquement avec l'avis, sans préambule.
   securite:
     description: Contrôle la sécurité du diff d'une tâche.
-    modele: qwen3.8:27b-mlx
+    modele: qwen3.6:35b-a3b
     contexte_max: 32768
     temperature: 0.2
     produit: verdict
@@ -275,7 +275,7 @@ agents:
       - notes : observations qui ne bloquent jamais.
   pm:
     description: Chef de projet, fait le point avec Nicolas sur l'avancement.
-    modele: qwen3.8:27b-mlx
+    modele: qwen3.6:35b-a3b
     contexte_max: 32768
     temperature: 0.3
     outils:
@@ -294,7 +294,7 @@ agents:
       Tu n'as que des outils de lecture : tu ne modifies rien.
   tri:
     description: Trie les commentaires de Nicolas sur une PR avant une reprise.
-    modele: qwen3.8:27b-mlx
+    modele: qwen3.6:35b-a3b
     contexte_max: 32768
     temperature: 0.2
     produit: verdict
