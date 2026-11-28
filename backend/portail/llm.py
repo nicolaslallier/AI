@@ -186,30 +186,27 @@ class ClientLLM:
             corps["tools"] = outils
         if response_format is not None:
             corps["response_format"] = response_format
-        for essai in (1, 2):  # un seul réessai, sur délai dépassé (httpx ou 408 de LiteLLM)
-            debut = time.monotonic()
-            try:
-                async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(self._delai_s, connect=10), transport=self._transport
-                ) as client:
-                    reponse = await client.post(
-                        f"{self._url}/v1/chat/completions",
-                        json=corps,
-                        headers={"Authorization": f"Bearer {self._cle}"} if self._cle else {},
-                    )
-            except httpx.TimeoutException as e:
-                await self._noter(modele, "delai", None, debut)
-                if essai == 1:
-                    continue
-                raise ErreurLLM(f"LiteLLM : délai dépassé ({e.__class__.__name__})") from e
-            except httpx.HTTPError as e:
-                await self._noter(modele, "erreur", None, debut)
-                raise ErreurLLM(f"LiteLLM injoignable : {e}") from e
-            if reponse.status_code != 408:  # litellm.Timeout : délai amont dépassé
-                break
+        # Un seul essai : la reprise sur l'autre Mac est faite par LiteLLM (failover), et le délai
+        # couvre ses deux tentatives. Réessayer ici couperait cette reprise en plein milieu.
+        debut = time.monotonic()
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(self._delai_s, connect=10), transport=self._transport
+            ) as client:
+                reponse = await client.post(
+                    f"{self._url}/v1/chat/completions",
+                    json=corps,
+                    headers={"Authorization": f"Bearer {self._cle}"} if self._cle else {},
+                )
+        except httpx.TimeoutException as e:
             await self._noter(modele, "delai", None, debut)
-            if essai == 2:
-                raise ErreurLLM("LiteLLM : délai dépassé (408)")
+            raise ErreurLLM(f"LiteLLM : délai dépassé ({e.__class__.__name__})") from e
+        except httpx.HTTPError as e:
+            await self._noter(modele, "erreur", None, debut)
+            raise ErreurLLM(f"LiteLLM injoignable : {e}") from e
+        if reponse.status_code == 408:  # litellm.Timeout : les deux Macs ont dépassé leur délai
+            await self._noter(modele, "delai", None, debut)
+            raise ErreurLLM("LiteLLM : délai dépassé (408)")
         if not reponse.is_success:
             await self._noter(modele, "erreur", None, debut)
             raise ErreurLLM(f"LiteLLM a répondu {reponse.status_code} : {reponse.text[:300]}")

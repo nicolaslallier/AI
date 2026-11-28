@@ -123,7 +123,7 @@ async def test_flux_reessaie_sans_stream_options_sur_400(sessions):
 @pytest.mark.parametrize(
     ("handler", "issues"),
     [
-        (lambda r: (_ for _ in ()).throw(httpx.ReadTimeout("t")), ["delai"] * 3),
+        (lambda r: (_ for _ in ()).throw(httpx.ReadTimeout("t")), ["delai"] * 2),
         (lambda r: httpx.Response(500, text="contenu secret"), ["erreur"] * 2),
     ],
 )
@@ -134,18 +134,8 @@ async def test_issue_delai_et_erreur(sessions, handler, issues):
     with pytest.raises(ErreurLLM):
         [m async for m in client.flux("m", MSG, None)]
     lignes = await _lignes(sessions)
-    assert [x.issue for x in lignes] == issues  # completer réessaie le délai, pas flux
+    assert [x.issue for x in lignes] == issues  # un essai chacun : la reprise est dans LiteLLM
     assert all(x.jetons_entree is None for x in lignes)
-
-
-def _premier_puis_ok(premier):
-    appels = []
-
-    def handler(requete: httpx.Request) -> httpx.Response:
-        appels.append(requete)
-        return premier(requete) if len(appels) == 1 else _ok(requete)
-
-    return handler, appels
 
 
 def _delai(requete):
@@ -153,16 +143,8 @@ def _delai(requete):
 
 
 @pytest.mark.parametrize("premier", [_delai, lambda r: httpx.Response(408, text="Timeout")])
-async def test_completer_reessaie_apres_delai(sessions, premier):
-    handler, appels = _premier_puis_ok(premier)
-    assert (await _client(handler, sessions).completer("m", MSG, None))["content"] == "r"
-    assert len(appels) == 2
-    lignes = sorted(await _lignes(sessions), key=lambda x: x.id)
-    assert [(x.issue, x.jetons_entree) for x in lignes] == [("delai", None), ("ok", 10)]
-
-
-@pytest.mark.parametrize("premier", [_delai, lambda r: httpx.Response(408, text="Timeout")])
-async def test_completer_deux_delais(sessions, premier):
+async def test_completer_sans_reessai_sur_delai(sessions, premier):
+    """LiteLLM fait déjà la reprise sur l'autre Mac : le portail n'ajoute pas son propre essai."""
     appels = []
 
     def handler(requete):
@@ -171,8 +153,8 @@ async def test_completer_deux_delais(sessions, premier):
 
     with pytest.raises(ErreurLLM, match="délai dépassé"):
         await _client(handler, sessions).completer("m", MSG, None)
-    assert len(appels) == 2
-    assert [x.issue for x in await _lignes(sessions)] == ["delai", "delai"]
+    assert len(appels) == 1
+    assert [x.issue for x in await _lignes(sessions)] == ["delai"]
 
 
 async def test_inscription_impossible_n_arrete_pas_l_appel():

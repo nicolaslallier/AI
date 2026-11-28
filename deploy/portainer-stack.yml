@@ -34,7 +34,7 @@ services:
       PORTAIL_NTFY_SUJET: portail
       PORTAIL_URL_PUBLIQUE: https://portail.infra.famillelallier.net
       PORTAIL_NTFY_JETON: ${PORTAIL_NTFY_JETON:-}
-      PORTAIL_LLM_DELAI_S: ${PORTAIL_LLM_DELAI_S:-440}
+      PORTAIL_LLM_DELAI_S: ${PORTAIL_LLM_DELAI_S:-840}
       # deux Macs servent les modèles locaux (LiteLLM les répartit) : deux jobs, deux appels par modèle
       PORTAIL_PARALLELES_MAX: "2"
       PORTAIL_APPELS_PAR_MODELE: "2"

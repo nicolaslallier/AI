@@ -47,9 +47,10 @@ class Reglages(BaseSettings):
         ""  # PORTAIL_RESEAU_AGENTS : CIDR du réseau des agents ; vide : aucun filtrage
     )
     llm_delai_s: int = Field(
-        default=440, gt=0, lt=450
-    )  # PORTAIL_LLM_DELAI_S : délai de lecture LiteLLM ; 2 essais < 900, DELAI_LECTURE de l'agent.
-    # Couvre le timeout du MacBook (120 s, ordre 1 dans Infra litellm/config.yaml) + la reprise sur le Studio.
+        default=840, gt=0, lt=900
+    )  # PORTAIL_LLM_DELAI_S : délai de lecture LiteLLM, un seul essai ; < 900, DELAI_LECTURE de
+    # l'agent. Couvre les deux tentatives de LiteLLM (timeout 400 s par Mac + reprise sur l'autre,
+    # Infra litellm/config.yaml) : 400 + 400 = 800 < 840.
     s3_url: str = "http://s3:8333"
     s3_bucket: str = "obsidian"
     s3_access_key: str = "portail"

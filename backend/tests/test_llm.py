@@ -286,7 +286,14 @@ async def test_delai_configure_arrive_au_timeout():
     assert all(d["connect"] == 10 for d in delais)
 
 
-@pytest.mark.parametrize("delai", [0, 450])
+def test_delai_par_defaut_couvre_la_reprise_litellm():
+    from portail.config import Reglages
+
+    # 400 s par Mac + reprise sur l'autre (Infra litellm/config.yaml) < délai < 900 s de l'agent
+    assert 800 < Reglages(database_url="postgresql://x").llm_delai_s < 900
+
+
+@pytest.mark.parametrize("delai", [0, 900])
 def test_delai_hors_bornes_refuse(delai):
     from pydantic import ValidationError
 
