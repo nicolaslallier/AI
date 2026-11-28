@@ -7,7 +7,10 @@ RUN npm run build
 
 FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 # upgrade : l'image de base épinglée peut retarder sur les correctifs Debian (Trivy bloque sinon)
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends git \
+# APT_DATE (date du jour, passée par deploy.yml) invalide le cache de cette couche chaque jour :
+# sans elle, la couche reste figée à son premier build et l'upgrade ne s'exécute plus.
+ARG APT_DATE
+RUN echo "apt: ${APT_DATE}" && apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:0.9.8@sha256:08f409e1d53e77dfb5b65c788491f8ca70fe1d2d459f41c89afa2fcbef998abe /uv /usr/local/bin/uv
 WORKDIR /app/backend

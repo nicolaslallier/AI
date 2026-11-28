@@ -82,6 +82,11 @@ jobs:
           tags: |
             type=sha
 
+      # Change chaque jour : force la couche apt-get upgrade du Dockerfile à se reconstruire
+      # une fois par jour malgré le cache gha (sinon Trivy voit des correctifs Debian manquants).
+      - id: jour
+        run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
       # ponytail: amd64 seul (hôte de déploiement) ; ajouter arm64 comme DarkAngel si la pile doit tourner sur le Mac mini.
       - id: construire
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
@@ -91,6 +96,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APT_DATE=${{ steps.jour.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
