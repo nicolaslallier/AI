@@ -1,24 +1,88 @@
 /* Feuille de style du portail : toutes les couleurs passent par ces variables (clair et sombre). */
 :root {
-  color-scheme: light dark;
-  --fond: light-dark(#faf6f0, #1c1917);
-  --surface: light-dark(#ffffff, #292524);
-  --creux: light-dark(#f1ebe2, #201d1b);
-  --texte: light-dark(#2b2622, #f5f0e8);
-  --discret: light-dark(#6f665d, #b5aca2);
-  --bord: light-dark(#e4dccf, #44403c);
-  --accent: light-dark(#b8430f, #fb923c);
-  --sur-accent: light-dark(#ffffff, #1c1917);
-  --danger: light-dark(#b91c1c, #f87171);
-  --alerte: light-dark(#a15c07, #fbbf24);
-  --succes: light-dark(#15803d, #4ade80);
-  --gris-doux: light-dark(#ebe5db, #3a3532);
-  --bleu-doux: light-dark(#dbeafe, #1e3a5f);
-  --jaune-doux: light-dark(#fdf0c4, #4a3a10);
-  --vert-doux: light-dark(#d5f2dd, #173d27);
-  --rouge-doux: light-dark(#fde2e2, #4c1d1d);
+  /* Repli pour navigateurs anciens : valeurs par défaut claires */
+  --fond: #faf6f0;
+  --surface: #ffffff;
+  --creux: #f1ebe2;
+  --texte: #2b2622;
+  --discret: #6f665d;
+  --bord: #e4dccf;
+  --accent: #b8430f;
+  --sur-accent: #ffffff;
+  --danger: #b91c1c;
+  --alerte: #a15c07;
+  --succes: #15803d;
+  --gris-doux: #ebe5db;
+  --bleu-doux: #dbeafe;
+  --jaune-doux: #fdf0c4;
+  --vert-doux: #d5f2dd;
+  --rouge-doux: #fde2e2;
   --rayon: 0.75rem;
   --ombre: 0 1px 2px #0000000f, 0 2px 8px #0000000a;
+}
+
+/* Thème clair */
+[data-theme="clair"] {
+  color-scheme: light;
+  --fond: #faf6f0;
+  --surface: #ffffff;
+  --creux: #f1ebe2;
+  --texte: #2b2622;
+  --discret: #6f665d;
+  --bord: #e4dccf;
+  --accent: #b8430f;
+  --sur-accent: #ffffff;
+  --danger: #b91c1c;
+  --alerte: #a15c07;
+  --succes: #15803d;
+}
+
+/* Thème sombre */
+[data-theme="sombre"] {
+  color-scheme: dark;
+  --fond: #1c1917;
+  --surface: #292524;
+  --creux: #201d1b;
+  --texte: #f5f0e8;
+  --discret: #b5aca2;
+  --bord: #44403c;
+  --accent: #fb923c;
+  --sur-accent: #1c1917;
+  --danger: #f87171;
+  --alerte: #fbbf24;
+  --succes: #4ade80;
+}
+
+/* Thème high-contrast */
+[data-theme="high-contrast"] {
+  color-scheme: dark;
+  --fond: #000000;
+  --surface: #1a1a1a;
+  --creux: #0d0d0d;
+  --texte: #ffffff;
+  --discret: #cccccc;
+  --bord: #555555;
+  --accent: #ffcc00;
+  --sur-accent: #000000;
+  --danger: #ff4444;
+  --alerte: #ffdd00;
+  --succes: #44ff44;
+}
+
+/* Thème ocean */
+[data-theme="ocean"] {
+  color-scheme: dark;
+  --fond: #0a192f;
+  --surface: #112240;
+  --creux: #061a33;
+  --texte: #e6f1ff;
+  --discret: #8892b0;
+  --bord: #233554;
+  --accent: #64ffda;
+  --sur-accent: #0a192f;
+  --danger: #ff6b6b;
+  --alerte: #ffd93d;
+  --succes: #69db7c;
 }
 
 body {
