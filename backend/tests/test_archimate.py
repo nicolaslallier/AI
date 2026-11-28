@@ -504,3 +504,40 @@ def test_champs_nuls_ou_absents_sont_vides():
     _, m = lire_bloc(f"```json\n{json.dumps(brut)}\n```")
     assert m.elements[0].description == "" and [r.nom for r in m.relations] == ["", ""]
     assert m.vues[0].point_de_vue == ""
+
+
+@pytest.mark.parametrize("cle_nom", ["nom", "name", "libelle", "libellé"])
+@pytest.mark.parametrize("cle_id", ["id", "identifiant"])
+def test_lire_bloc_accepte_les_cles_synonymes_d_un_element(cle_id, cle_nom):
+    brut = {"elements": [{cle_id: "a", "type": "Node", cle_nom: "A"}]}
+    _, m = lire_bloc(f"```json\n{json.dumps(brut)}\n```")
+    assert (m.elements[0].id, m.elements[0].nom) == ("a", "A")
+
+
+def test_lire_bloc_accepte_les_cles_anglaises_des_relations_et_vues():
+    brut = {
+        "elements": [{"id": "a", "type": "Node", "name": "A"}],
+        "relations": [{"type": "Serving", "source": "a", "target": "a", "name": "n"}],
+        "vues": [{"name": "v", "viewpoint": "Layered", "elements": ["a"]}],
+    }
+    _, m = lire_bloc(f"```json\n{json.dumps(brut)}\n```")
+    assert (m.relations[0].cible, m.relations[0].nom) == ("a", "n")
+    assert (m.vues[0].nom, m.vues[0].point_de_vue) == ("v", "Layered")
+
+
+def test_lire_bloc_liste_toutes_les_erreurs():
+    brut = {"elements": [{"id": "a", "type": "Node"}, {"id": "b", "nom": "B"}]}
+    with pytest.raises(BlocInvalide) as exc:
+        lire_bloc(f"```json\n{json.dumps(brut)}\n```")
+    message = str(exc.value)
+    assert "elements.0.nom : champ obligatoire" in message
+    assert "elements.1.type : champ obligatoire" in message
+
+
+def test_lire_bloc_tronque_une_longue_liste_d_erreurs():
+    brut = {"elements": [{"id": f"e{i}", "type": "Node"} for i in range(20)]}
+    with pytest.raises(BlocInvalide) as exc:
+        lire_bloc(f"```json\n{json.dumps(brut)}\n```")
+    assert "elements.4.nom" in str(exc.value)
+    assert "elements.5.nom" not in str(exc.value)
+    assert "et 15 autres erreurs" in str(exc.value)
