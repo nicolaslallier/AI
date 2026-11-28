@@ -1,4 +1,5 @@
-"""Arbitre des modèles locaux : un appel à la fois par modèle, l'interactif avant le fond."""
+"""Arbitre des modèles locaux : `capacite` appels à la fois par modèle (un par machine qui le
+sert derrière LiteLLM), l'interactif avant le fond."""
 
 import asyncio
 from collections import deque
@@ -13,19 +14,22 @@ _RAFALE_MAX = 3
 
 class _Modele:
     def __init__(self) -> None:
-        self.occupe = False
+        self.en_cours = 0  # appels qui tiennent une place
         self.files: dict[str, deque[asyncio.Future]] = {"interactif": deque(), "fond": deque()}
         self.rafale = 0  # passages interactifs consécutifs pendant qu'un fond attend
 
 
 class Arbitre:
-    def __init__(self) -> None:
+    def __init__(self, capacite: int = 1) -> None:
+        if capacite < 1:
+            raise ValueError("capacite doit valoir au moins 1")
+        self._capacite = capacite
         self._modeles: dict[str, _Modele] = {}
 
     @asynccontextmanager
     async def tour(self, modele: str, priorite: Priorite) -> AsyncIterator[None]:
         m = self._modeles.setdefault(modele, _Modele())
-        if m.occupe:
+        if m.en_cours >= self._capacite:
             f = asyncio.get_running_loop().create_future()
             m.files[priorite].append(f)
             try:
@@ -38,7 +42,7 @@ class Arbitre:
                     self._liberer(m)
                 raise
         else:
-            m.occupe = True
+            m.en_cours += 1
         try:
             yield
         finally:
@@ -57,10 +61,10 @@ class Arbitre:
             m.rafale = m.rafale + 1 if fond else 0
             suivant = interactif.popleft()
         else:
-            m.occupe = False
+            m.en_cours -= 1
             m.rafale = 0
             return
-        suivant.set_result(None)  # le modèle reste occupé : il passe au suivant
+        suivant.set_result(None)  # la place passe directement au suivant
 
 
 class LLMArbitre:

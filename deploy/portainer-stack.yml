@@ -35,6 +35,9 @@ services:
       PORTAIL_URL_PUBLIQUE: https://portail.infra.famillelallier.net
       PORTAIL_NTFY_JETON: ${PORTAIL_NTFY_JETON:-}
       PORTAIL_LLM_DELAI_S: ${PORTAIL_LLM_DELAI_S:-440}
+      # deux Macs servent les modèles locaux (LiteLLM les répartit) : deux jobs, deux appels par modèle
+      PORTAIL_PARALLELES_MAX: "2"
+      PORTAIL_APPELS_PAR_MODELE: "2"
       PORTAIL_RESEAU_AGENTS: 10.250.250.0/24
       PORTAIL_S3_URL: http://s3:8333
       PORTAIL_S3_BUCKET: obsidian

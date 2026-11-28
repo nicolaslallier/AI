@@ -469,7 +469,7 @@ def create_app(
             await depots.nettoyer(garder=en_attente)
         except ErreurDepot:
             journal.erreur(logger, "nettoyage des arbres de travail incomplet")
-        arbitre = Arbitre()
+        arbitre = Arbitre(r.appels_par_modele)
         interactif = LLMArbitre(app.state.llm, arbitre, "interactif")
         app.state.diffuseur = Diffuseur()
         app.state.avis = ServiceAvis(

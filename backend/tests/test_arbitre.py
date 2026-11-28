@@ -140,7 +140,7 @@ async def test_rafale_remise_a_zero_sans_fond_en_attente():
     fond.cancel()
     stop.set()
     await asyncio.gather(t0, i1, i2, fond, return_exceptions=True)
-    assert a._modeles["m"].rafale == 0 and not a._modeles["m"].occupe
+    assert a._modeles["m"].rafale == 0 and a._modeles["m"].en_cours == 0
 
 
 async def test_llm_arbitre_flux_tient_le_tour(faux_llm):
@@ -163,3 +163,44 @@ async def test_llm_arbitre_flux_tient_le_tour(faux_llm):
     fin.set()
     assert await t2 == {"content": "ok"}
     await t1
+
+
+async def test_capacite_deux_appels_simultanes_par_modele():
+    a, ordre, fin = Arbitre(capacite=2), [], asyncio.Event()
+    t1 = asyncio.create_task(_tache(a, "m", "fond", "A", ordre, fin))
+    t2 = asyncio.create_task(_tache(a, "m", "fond", "B", ordre, fin))
+    await _ceder()
+    t3 = asyncio.create_task(_tache(a, "m", "fond", "C", ordre))
+    await _ceder()
+    assert ordre == ["A", "B"]  # deux Macs : deux appels ; le troisième attend
+    fin.set()
+    await asyncio.gather(t1, t2, t3)
+    assert ordre == ["A", "B", "C"]
+
+
+async def test_capacite_deux_libere_une_place_a_la_fois():
+    a, ordre = Arbitre(capacite=2), []
+    fin_a, fin_b = asyncio.Event(), asyncio.Event()
+    ta = asyncio.create_task(_tache(a, "m", "fond", "A", ordre, fin_a))
+    tb = asyncio.create_task(_tache(a, "m", "fond", "B", ordre, fin_b))
+    await _ceder()
+    fin_d = asyncio.Event()
+    tc = asyncio.create_task(_tache(a, "m", "fond", "C", ordre))
+    td = asyncio.create_task(_tache(a, "m", "interactif", "D", ordre, fin_d))
+    await _ceder()
+    fin_a.set()
+    await _ceder()
+    assert ordre == ["A", "B", "D"]  # une place libre : l'interactif passe, C attend encore
+    fin_b.set()
+    await _ceder()
+    assert ordre == ["A", "B", "D", "C"]
+    fin_d.set()
+    await asyncio.gather(ta, tb, tc, td)
+    await asyncio.wait_for(_tache(a, "m", "fond", "E", ordre), 1)  # plus rien de tenu
+
+
+def test_capacite_au_moins_un():
+    import pytest
+
+    with pytest.raises(ValueError):
+        Arbitre(capacite=0)

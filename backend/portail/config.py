@@ -25,7 +25,9 @@ class Reglages(BaseSettings):
     espaces_dir: Path = Path("/espaces")
     github_app_id: str = ""
     github_app_cle: str = ""  # base64 du PEM
-    paralleles_max: int = 1
+    paralleles_max: int = Field(default=1, ge=1)  # pipelines (dev + doc) menés en même temps
+    # appels simultanés par modèle local : un par machine qui le sert derrière LiteLLM
+    appels_par_modele: int = Field(default=1, ge=1)
     duree_max_tache_s: int = 7200
     delai_commande_s: int = 600
     renvois_max: int = 2
