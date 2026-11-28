@@ -117,6 +117,8 @@ jobs:
           push: true
           tags: ${{ steps.meta-lanceur.outputs.tags }}
           labels: ${{ steps.meta-lanceur.outputs.labels }}
+          build-args: |
+            APT_DATE=${{ steps.jour.outputs.date }}
           cache-from: type=gha,scope=lanceur
           cache-to: type=gha,mode=max,scope=lanceur
 
@@ -136,6 +138,8 @@ jobs:
           push: true
           tags: ${{ steps.meta-execution.outputs.tags }}
           labels: ${{ steps.meta-execution.outputs.labels }}
+          build-args: |
+            APT_DATE=${{ steps.jour.outputs.date }}
           cache-from: type=gha,scope=execution
           cache-to: type=gha,mode=max,scope=execution
 

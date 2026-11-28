@@ -6,7 +6,11 @@ COPY src ./src
 RUN cargo build --release --locked
 
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
-RUN apt-get update \
+# upgrade : l'image de base épinglée peut retarder sur les correctifs Debian (Trivy bloque sinon).
+# APT_DATE (date du jour, passée par deploy.yml) reconstruit cette couche une fois par jour.
+ARG APT_DATE
+RUN echo "apt: ${APT_DATE}" && apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=compilation /src/target/release/lanceur /usr/local/bin/lanceur
