@@ -199,6 +199,9 @@ class Tache(Base):
     verrou: Mapped[int | None] = mapped_column(ForeignKey("pipeline.id", ondelete="SET NULL"))
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     resume_blocage: Mapped[str | None] = mapped_column(Text)
+    # blocage passager : l'ordonnanceur la remet Prête à partir de ce moment ; tout déplacement
+    # l'efface
+    relance_le: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cree_le: Mapped[datetime] = _horodatage()
     maj_le: Mapped[datetime] = _horodatage(onupdate=func.now())
 

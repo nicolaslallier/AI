@@ -529,7 +529,7 @@ def create_app(
             await app.state.usine.reprendre()
         if orch:  # ponytail: l'usine de doc tourne seulement avec l'ordonnanceur de dev
             app.state.ordonnanceur = Ordonnanceur(
-                app.state.sessions, orch, r.paralleles_max, app.state.usine
+                app.state.sessions, orch, r.paralleles_max, app.state.usine, r.relances_max
             )
             await reprendre_interrompues(app.state.sessions, orch, app.state.ordonnanceur.lancer)
             suivi = SuiviPR(

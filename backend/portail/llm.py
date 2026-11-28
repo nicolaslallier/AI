@@ -17,7 +17,11 @@ _OUVRE, _FERME = "<think>", "</think>"
 
 
 class ErreurLLM(Exception):
-    pass
+    """`passagere` : LiteLLM injoignable ou trop lent ; il reviendra, la tâche peut repartir."""
+
+    def __init__(self, message: str, *, passagere: bool = False):
+        super().__init__(message)
+        self.passagere = passagere
 
 
 _SANS_QUESTION = "Poursuis."
@@ -157,10 +161,12 @@ class ClientLLM:
                     raise ErreurLLM("flux interrompu")
         except httpx.TimeoutException as e:
             await self._noter(modele, "delai", None, debut)
-            raise ErreurLLM(f"LiteLLM : délai dépassé ({e.__class__.__name__})") from e
+            raise ErreurLLM(
+                f"LiteLLM : délai dépassé ({e.__class__.__name__})", passagere=True
+            ) from e
         except httpx.HTTPError as e:
             await self._noter(modele, "erreur", None, debut)
-            raise ErreurLLM(f"LiteLLM injoignable : {e}") from e
+            raise ErreurLLM(f"LiteLLM injoignable : {e}", passagere=True) from e
         except ErreurLLM:
             await self._noter(modele, "erreur", None, debut)
             raise
@@ -200,13 +206,15 @@ class ClientLLM:
                 )
         except httpx.TimeoutException as e:
             await self._noter(modele, "delai", None, debut)
-            raise ErreurLLM(f"LiteLLM : délai dépassé ({e.__class__.__name__})") from e
+            raise ErreurLLM(
+                f"LiteLLM : délai dépassé ({e.__class__.__name__})", passagere=True
+            ) from e
         except httpx.HTTPError as e:
             await self._noter(modele, "erreur", None, debut)
-            raise ErreurLLM(f"LiteLLM injoignable : {e}") from e
+            raise ErreurLLM(f"LiteLLM injoignable : {e}", passagere=True) from e
         if reponse.status_code == 408:  # litellm.Timeout : les deux Macs ont dépassé leur délai
             await self._noter(modele, "delai", None, debut)
-            raise ErreurLLM("LiteLLM : délai dépassé (408)")
+            raise ErreurLLM("LiteLLM : délai dépassé (408)", passagere=True)
         if not reponse.is_success:
             await self._noter(modele, "erreur", None, debut)
             raise ErreurLLM(f"LiteLLM a répondu {reponse.status_code} : {reponse.text[:300]}")
