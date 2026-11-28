@@ -25,7 +25,7 @@ from portail.db import (
 
 logger = logging.getLogger(__name__)
 
-Signal = tuple[Literal["kanban", "pipelines", "bureau", "docs"], int | None]
+Signal = tuple[Literal["kanban", "pipelines", "bureau", "docs", "theme"], int | None | dict]
 
 
 class Bus:
@@ -46,6 +46,9 @@ class Bus:
                 file.put_nowait(signal)
             except asyncio.QueueFull:
                 pass  # abonné à la traîne : le sondage de secours le rattrapera
+
+    def emettre(self, type_: str, payload: dict) -> None:
+        self.publier((type_, payload))
 
 
 bus = Bus()
@@ -109,10 +112,13 @@ async def flux(bus: Bus, ping_s: float = 25) -> AsyncIterator[str]:
     try:
         while True:
             try:
-                type_, projet_id = await asyncio.wait_for(file.get(), ping_s)
+                type_, charge = await asyncio.wait_for(file.get(), ping_s)
             except TimeoutError:
                 yield ": ping\n\n"
                 continue
-            yield _sse(type_, {"projet_id": projet_id} if type_ == "kanban" else {})
+            if type_ == "kanban":
+                yield _sse(type_, {"projet_id": charge})
+            else:
+                yield _sse(type_, charge or {})
     finally:
         bus.desabonner(file)
