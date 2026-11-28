@@ -117,7 +117,7 @@ def test_agents_yaml_du_depot_est_valide():
         a["architecte"].outils == ["lister", "lire", "chercher"] and a["architecte"].consigne_avis
     )
     c = a["challenger"]
-    assert (c.produit, c.role, c.modele) == ("verdict", "revue", "qwen3.8:27b-mlx")
+    assert (c.produit, c.role, c.modele) == ("verdict", "revue", "qwen3.6:35b-a3b")
     assert c.modele_si_meme == "gemma4:26b-a4b-it-qat"
     assert c.outils == ["lister", "lire", "chercher"] and c.consigne_avis
     s = a["securite"]
