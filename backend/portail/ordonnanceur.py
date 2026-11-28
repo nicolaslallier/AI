@@ -1,9 +1,12 @@
 """Ordonnanceur de la boucle de dev : les tâches *Prêtes* et les reprises partent seules,
-une à la fois (`paralleles_max`), et un pipeline interrompu par un redémarrage repart une seule fois."""
+une à la fois (`paralleles_max`), et un pipeline interrompu par un redémarrage repart une seule fois.
+Une tâche bloquée pour une cause passagère (LiteLLM, redémarrage) est remise *Prête* après un délai,
+au plus `relances_max` fois."""
 
 import asyncio
 import logging
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 from sqlalchemy import exists, func, select, update
 from sqlalchemy.exc import SQLAlchemyError
@@ -20,6 +23,7 @@ from portail.db import (
     Projet,
     Tache,
     TacheDependance,
+    TacheEvenement,
 )
 from portail.dev import Orchestrateur
 from portail.etats import Etat
@@ -75,6 +79,29 @@ async def choisir_reprise(session: AsyncSession) -> ExecutionDev | None:
     )
 
 
+async def _relances(session: AsyncSession, tache_id: int) -> int:
+    """Relances du portail (*Bloquée* → *Prête*) depuis la dernière mise en *Prête* par un autre :
+    une relance à la main remet le compte à zéro."""
+    deplacements = (
+        TacheEvenement.tache_id == tache_id,
+        TacheEvenement.type == "deplacement",
+        TacheEvenement.donnees["vers"].as_string() == "prete",
+    )
+    derniere_main = (
+        select(func.coalesce(func.max(TacheEvenement.id), 0))
+        .where(*deplacements, TacheEvenement.auteur != "portail")
+        .scalar_subquery()
+    )
+    return await session.scalar(
+        select(func.count()).where(
+            *deplacements,
+            TacheEvenement.auteur == "portail",
+            TacheEvenement.donnees["de"].as_string() == "bloquee",
+            TacheEvenement.id > derniere_main,
+        )
+    )
+
+
 class Ordonnanceur:
     def __init__(
         self,
@@ -82,11 +109,15 @@ class Ordonnanceur:
         orchestrateur: Orchestrateur,
         paralleles_max: int,
         usine: UsineDoc | None = None,
+        relances_max: int = 3,
+        horloge: Callable[[], datetime] = lambda: datetime.now(UTC),
     ):
         self._sessions = sessions
         self._orch = orchestrateur
         self._max = paralleles_max
         self._usine = usine
+        self._relances_max = relances_max
+        self._horloge = horloge
         self._reveil = asyncio.Event()
 
     def _libres(self) -> int:
@@ -103,7 +134,11 @@ class Ordonnanceur:
         self._orch.taches[pipeline_id].add_done_callback(lambda _: self.reveiller())
 
     async def tour(self) -> None:
-        """Le dev d'abord (reprises, puis tâches *Prêtes*), puis les cartes de doc."""
+        """Les relances, le dev (reprises, puis tâches *Prêtes*), puis les cartes de doc."""
+        try:
+            await self.relancer()
+        except Exception:  # une relance ratée n'empêche jamais le tour  # noqa: BLE001
+            journal.erreur(logger, "ordonnanceur : relance en échec")
         await self._tour_dev()
         if self._usine and (libres := self._libres()) > 0:
             await self._usine.tour(libres, lambda _: self.reveiller())
@@ -157,6 +192,43 @@ class Ordonnanceur:
                 await self._bloquer(tache_id, f"démarrage impossible : {e}")
                 continue
             self.lancer(pipeline.id)
+
+    async def relancer(self) -> None:
+        """Remet *Prêtes* les tâches bloquées pour une cause passagère dont l'heure est venue.
+        Les relances se comptent dans le journal des tâches (survit à un redémarrage)."""
+        async with self._sessions() as s:
+            ids = (
+                await s.scalars(
+                    select(Tache.id)
+                    .where(Tache.colonne == "bloquee", Tache.relance_le <= self._horloge())
+                    .order_by(Tache.id)
+                )
+            ).all()
+        for tache_id in ids:
+            async with self._sessions() as s:
+                projet_id = await s.scalar(select(Tache.projet_id).where(Tache.id == tache_id))
+                await s.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
+                tache = await s.scalar(
+                    select(Tache)
+                    .where(Tache.id == tache_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                if (
+                    tache is None
+                    or tache.colonne != "bloquee"
+                    or tache.verrou is not None
+                    or tache.relance_le is None
+                    or tache.relance_le > self._horloge()
+                ):
+                    continue  # déplacée ou verrouillée entre-temps : on n'y touche pas
+                if await _relances(s, tache_id) >= self._relances_max:
+                    tache.relance_le = None  # à Nicolas de décider
+                    logger.warning("ordonnanceur : tâche %s laissée bloquée", tache_id)
+                else:
+                    await deplacer_tache(s, tache, "prete", None, "portail")
+                    logger.info("ordonnanceur : tâche %s relancée", tache_id)
+                await s.commit()
 
     async def _reprise(self) -> bool | None:
         """Démarre la plus ancienne reprise en attente. `True` : une reprise a été traitée ;
@@ -251,4 +323,6 @@ async def reprendre_interrompues(
         if interruptions <= 1:
             (lancer or orchestrateur.lancer)(pipeline_id)
         else:
-            await orchestrateur.bloquer(pipeline_id, "interrompue deux fois", cause="interrompue")
+            await orchestrateur.bloquer(
+                pipeline_id, "interrompue deux fois", cause="interrompue", passager=True
+            )

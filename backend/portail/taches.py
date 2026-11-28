@@ -126,6 +126,7 @@ async def deplacer_tache(
     pos = next((i for i, t in enumerate(cible) if t.id == avant_id), len(cible))
     cible.insert(pos, tache)
     tache.colonne = colonne
+    tache.relance_le = None  # tout déplacement annule une relance prévue
     _renumeroter(cible)
     if source != colonne:
         _renumeroter(
