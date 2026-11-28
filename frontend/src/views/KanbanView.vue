@@ -155,7 +155,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.colonnes { display: grid; grid-template-columns: repeat(6, minmax(13rem, 1fr)); gap: 0.75rem; overflow-x: auto; align-items: start; }
+.colonnes { display: grid; grid-template-columns: repeat(6, minmax(10rem, 1fr)); gap: 0.75rem; overflow-x: auto; align-items: start; }
 .colonne { background: var(--creux); border-radius: var(--rayon); padding: 0.6rem; min-height: 8rem; display: flex; flex-direction: column; gap: 0.5rem; }
 .colonne h3 { display: flex; justify-content: space-between; align-items: center; padding: 0.1rem 0.25rem; }
 </style>
