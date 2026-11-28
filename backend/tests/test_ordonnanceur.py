@@ -22,8 +22,10 @@ from portail.db import (
     TacheEvenement,
 )
 from portail.github import ErreurGitHub
+from portail.llm import ErreurLLM
 from portail.moteur import recuperer_interrompues
 from portail.ordonnanceur import Ordonnanceur, choisir, reprendre_interrompues
+from portail.taches import deplacer_tache
 
 
 async def attendre(condition, delai=15):
@@ -529,3 +531,163 @@ def test_ordonnanceur_eteint_nomme_les_cles_absentes(caplog):
         caplog.text
     )
     assert "PORTAIL_LANCEUR_SECRET" not in caplog.text and "s3cr3t" not in caplog.text
+
+
+# --- relance des blocages passagers ------------------------------------
+
+
+async def test_llm_injoignable_bloque_avec_relance_prevue(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    m.llm.exception = ErreurLLM("LiteLLM injoignable : x", passagere=True)
+    avant = datetime.now(UTC)
+    pid = await m.lancer()
+    _ex, t, _pipeline = await m.etat(pid)
+    assert t.colonne == "bloquee"
+    delai = timedelta(seconds=m.reglages.relance_delai_s)
+    assert avant + delai <= t.relance_le <= datetime.now(UTC) + delai
+
+
+@pytest.mark.parametrize(
+    "erreur", [ErreurLLM("LiteLLM a répondu 500 : x"), ErreurGitHub("App non installée", 404)]
+)
+async def test_blocage_non_passager_sans_relance(tmp_path, sessions, erreur):
+    m = await _monde(tmp_path, sessions)
+    m.llm.exception = erreur
+    pid = await m.lancer()
+    _ex, t, _pipeline = await m.etat(pid)
+    assert (t.colonne, t.relance_le) == ("bloquee", None)
+
+
+async def test_interrompue_deux_fois_relance_prevue(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    async with sessions() as s:
+        pid = (await m.orch.demarrer(s, await s.get(Tache, 1))).id
+        ex = await s.scalar(select(ExecutionDev).where(ExecutionDev.pipeline_id == pid))
+        ex.interruptions = 1
+        await s.commit()
+    await reprendre_interrompues(sessions, m.orch)
+    _ex, t, _pipeline = await m.etat(pid)
+    assert t.colonne == "bloquee" and t.relance_le is not None
+
+
+async def _bloquee(sessions, relance_le) -> None:
+    async with sessions() as s:
+        t = await s.get(Tache, 1)
+        t.colonne, t.relance_le = "bloquee", relance_le
+        t.resume_blocage = "LiteLLM injoignable"
+        await s.commit()
+
+
+async def _relances(sessions, tache_id=1) -> list[TacheEvenement]:
+    async with sessions() as s:
+        return list(
+            (
+                await s.scalars(
+                    select(TacheEvenement)
+                    .where(TacheEvenement.tache_id == tache_id, TacheEvenement.auteur == "portail")
+                    .order_by(TacheEvenement.id)
+                )
+            ).all()
+        )
+
+
+def _deplacements(s, *paires) -> None:
+    for auteur, de in paires:
+        s.add(
+            TacheEvenement(
+                projet_id=1,
+                tache_id=1,
+                type="deplacement",
+                auteur=auteur,
+                donnees={"de": de, "vers": "prete", "avant_id": None},
+            )
+        )
+
+
+async def test_relance_apres_le_delai_pas_avant(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    maintenant = datetime.now(UTC)
+    await _bloquee(sessions, maintenant + timedelta(minutes=5))
+    await Ordonnanceur(sessions, m.orch, 1, horloge=lambda: maintenant).relancer()
+    async with sessions() as s:
+        assert (await s.get(Tache, 1)).colonne == "bloquee"
+    plus_tard = maintenant + timedelta(minutes=5)
+    await Ordonnanceur(sessions, m.orch, 1, horloge=lambda: plus_tard).relancer()
+    async with sessions() as s:
+        t = await s.get(Tache, 1)
+    assert (t.colonne, t.relance_le, t.verrou) == ("prete", None, None)
+    (ev,) = await _relances(sessions)
+    assert (ev.type, ev.donnees["de"], ev.donnees["vers"]) == ("deplacement", "bloquee", "prete")
+
+
+async def test_relance_puis_tour_lance_la_tache(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    await _bloquee(sessions, datetime.now(UTC) - timedelta(seconds=1))
+    m.llm.reponses = [asyncio.Event()]
+    try:
+        await Ordonnanceur(sessions, m.orch, 1).tour()
+        assert list(m.orch.taches) == [1]
+    finally:
+        await _arreter(m)
+
+
+async def test_limite_de_relances_la_tache_reste_bloquee(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    passe = datetime.now(UTC) - timedelta(seconds=1)
+    async with sessions() as s:  # Nicolas l'a mise Prête, puis 2 relances du portail
+        _deplacements(s, ("nicolas", "a_faire"), ("portail", "bloquee"), ("portail", "bloquee"))
+        await s.commit()
+    await _bloquee(sessions, passe)
+    # chaque ordonnanceur est neuf (redémarrage) : le compte vient de la base
+    await Ordonnanceur(sessions, m.orch, 1, relances_max=3).relancer()
+    async with sessions() as s:
+        assert (await s.get(Tache, 1)).colonne == "prete"
+    await _bloquee(sessions, passe)
+    await Ordonnanceur(sessions, m.orch, 1, relances_max=3).relancer()
+    async with sessions() as s:
+        t = await s.get(Tache, 1)
+    assert (t.colonne, t.relance_le) == ("bloquee", None)  # à Nicolas de décider
+    assert t.resume_blocage == "LiteLLM injoignable"
+    assert len(await _relances(sessions)) == 3
+
+
+async def test_remise_en_pret_par_nicolas_remet_le_compte_a_zero(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    async with sessions() as s:
+        _deplacements(s, *[("portail", "bloquee")] * 3, ("nicolas", "bloquee"))
+        await s.commit()
+    await _bloquee(sessions, datetime.now(UTC) - timedelta(seconds=1))
+    await Ordonnanceur(sessions, m.orch, 1, relances_max=3).relancer()
+    async with sessions() as s:
+        assert (await s.get(Tache, 1)).colonne == "prete"
+
+
+async def test_jamais_de_relance_sans_cause_passagere_ni_verrouillee(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    await _bloquee(sessions, None)
+    async with sessions() as s:
+        pipeline = Pipeline(projet_id=1, type="dev", etat="en_cours")
+        s.add(pipeline)
+        await s.flush()
+        t2 = await _tache(s, 1, 2000, "bloquee", verrou=pipeline.id)
+        (await s.get(Tache, t2)).relance_le = datetime.now(UTC) - timedelta(seconds=1)
+        await s.commit()
+    await Ordonnanceur(sessions, m.orch, 1).relancer()
+    async with sessions() as s:
+        assert (await s.get(Tache, 1)).colonne == "bloquee"
+        assert (await s.get(Tache, t2)).colonne == "bloquee"
+    assert await _relances(sessions) == []
+
+
+async def test_deplacement_manuel_annule_la_relance(tmp_path, sessions):
+    m = await _monde(tmp_path, sessions)
+    await _bloquee(sessions, datetime.now(UTC) - timedelta(seconds=1))
+    async with sessions() as s:
+        t = await s.get(Tache, 1)
+        await deplacer_tache(s, t, "a_faire", None, "nicolas")
+        await deplacer_tache(s, t, "bloquee", None, "nicolas")
+        await s.commit()
+    await Ordonnanceur(sessions, m.orch, 1).relancer()
+    async with sessions() as s:
+        t = await s.get(Tache, 1)
+    assert (t.colonne, t.relance_le) == ("bloquee", None)

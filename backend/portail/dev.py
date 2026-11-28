@@ -14,7 +14,7 @@ import re
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from posixpath import basename
 from typing import Literal
@@ -390,6 +390,7 @@ class Orchestrateur:
     async def executer(self, pipeline_id: int) -> None:
         journal.commencer(pipeline=pipeline_id)
         delai = asyncio.timeout(self._reglages.duree_max_tache_s)
+        passager = False  # LiteLLM injoignable ou trop lent : l'ordonnanceur la relancera
         try:
             async with delai:
                 await self._derouler(pipeline_id)
@@ -405,10 +406,11 @@ class Orchestrateur:
             raison, cause = e.message, "config"
         except tuple(_CAUSES) as e:
             raison, cause = str(e), next(c for t, c in _CAUSES.items() if isinstance(e, t))
+            passager = isinstance(e, ErreurLLM) and e.passagere
         except Exception as e:  # dernier recours : une tâche ne reste jamais verrouillée en cours  # noqa: BLE001
             journal.erreur(logger, "pipeline dev %s : erreur inattendue", pipeline_id)
             raison, cause = f"erreur inattendue : {type(e).__name__}", "inattendue"
-        await self.bloquer(pipeline_id, raison, cause=cause)
+        await self.bloquer(pipeline_id, raison, cause=cause, passager=passager)
 
     async def _derouler(self, pipeline_id: int) -> None:
         ctx = await self._charger(pipeline_id)
@@ -1219,8 +1221,11 @@ class Orchestrateur:
             journal.erreur(logger, "pipeline dev : %s impossible", quoi)
             return None
 
-    async def bloquer(self, pipeline_id: int, raison: str, *, cause: str) -> None:
-        # la raison reste en base ; au journal et en métrique, seulement la cause (liste fixe)
+    async def bloquer(
+        self, pipeline_id: int, raison: str, *, cause: str, passager: bool = False
+    ) -> None:
+        # la raison reste en base ; au journal et en métrique, seulement la cause (liste fixe).
+        # `passager` : la tâche bloquée sera remise Prête par l'ordonnanceur après un délai
         logger.warning("pipeline dev %s bloqué : %s", pipeline_id, cause)
         ex = projet = None
         try:
@@ -1251,11 +1256,17 @@ class Orchestrateur:
         if reprise:
             await self._echouer_reprise(pipeline_id, raison, ex, projet)
             return
+        relance_le = (
+            self._horloge() + timedelta(seconds=self._reglages.relance_delai_s)
+            if passager
+            else None
+        )
         try:
-            await self._enregistrer_blocage(pipeline_id, raison, branche)
+            await self._enregistrer_blocage(pipeline_id, raison, branche, relance_le)
         except Exception:  # noqa: BLE001
             journal.erreur(logger, "blocage du pipeline %s : état non enregistré", pipeline_id)
-            await self._au_mieux("blocage minimal", self._blocage_minimal(pipeline_id, raison))
+            minimal = self._blocage_minimal(pipeline_id, raison, relance_le=relance_le)
+            await self._au_mieux("blocage minimal", minimal)
         if ex is not None and projet is not None:
             lien = self.lien(f"/projets/{projet.id}/kanban")
             await self._au_mieux("notifier", self.notifier(ex.tache_id, "Bloquée", lien))
@@ -1315,7 +1326,9 @@ class Orchestrateur:
                 "reprise %s : notification impossible (%s)", pipeline_id, type(e).__name__
             )
 
-    async def _enregistrer_blocage(self, pipeline_id: int, raison: str, branche: str | None):
+    async def _enregistrer_blocage(
+        self, pipeline_id: int, raison: str, branche: str | None, relance_le: datetime | None
+    ):
         async with self._sessions() as s:
             projet_id = await s.scalar(select(Pipeline.projet_id).where(Pipeline.id == pipeline_id))
             await s.scalar(select(Projet.id).where(Projet.id == projet_id).with_for_update())
@@ -1343,6 +1356,7 @@ class Orchestrateur:
                 await s.flush()
                 await deplacer_tache(s, tache, "bloquee", None, "portail")
                 tache.resume_blocage = "\n".join(lignes)
+                tache.relance_le = relance_le
             await s.execute(
                 update(Pipeline)
                 .where(Pipeline.id == pipeline_id)
@@ -1350,13 +1364,18 @@ class Orchestrateur:
             )
             await s.commit()
 
-    async def _blocage_minimal(self, pipeline_id: int, raison: str, reprise=False) -> None:
+    async def _blocage_minimal(
+        self, pipeline_id: int, raison: str, reprise=False, relance_le: datetime | None = None
+    ) -> None:
         """Repli : la tâche ne reste jamais verrouillée en cours (colonne écrite sans
         renuméroter) ; une reprise revient *En revue* en gardant son verrou."""
         if reprise:
             champs = {"colonne": "en_revue"}
         else:
-            champs = {"verrou": None, "colonne": "bloquee", "resume_blocage": raison}
+            champs = {
+                "verrou": None, "colonne": "bloquee", "resume_blocage": raison,
+                "relance_le": relance_le,
+            }  # fmt: skip
         async with self._sessions() as s:
             await s.execute(update(Tache).where(Tache.verrou == pipeline_id).values(**champs))
             await s.execute(

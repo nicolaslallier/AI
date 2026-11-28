@@ -157,6 +157,48 @@ async def test_completer_sans_reessai_sur_delai(sessions, premier):
     assert [x.issue for x in await _lignes(sessions)] == ["delai"]
 
 
+def _injoignable(requete):
+    raise httpx.ConnectError("All connection attempts failed")
+
+
+def _coupe(requete):
+    raise httpx.RemoteProtocolError("Server disconnected without sending a response")
+
+
+_ILLISIBLE = lambda r: httpx.Response(200, text="pas du json")
+_ERREUR_500 = lambda r: httpx.Response(500, text="boum")
+
+
+@pytest.mark.parametrize(
+    ("handler", "passagere"),
+    [
+        (_delai, True),
+        (_injoignable, True),
+        (_coupe, True),
+        (lambda r: httpx.Response(408, text="Timeout"), True),
+        (_ERREUR_500, False),
+        (_ILLISIBLE, False),
+    ],
+)
+async def test_completer_erreur_passagere_si_litellm_injoignable_ou_lent(
+    sessions, handler, passagere
+):
+    """Injoignable ou trop lent : LiteLLM reviendra, la tâche pourra repartir seule."""
+    with pytest.raises(ErreurLLM) as e:
+        await _client(handler, sessions).completer("m", MSG, None)
+    assert e.value.passagere is passagere
+
+
+@pytest.mark.parametrize(
+    ("handler", "passagere"),
+    [(_delai, True), (_injoignable, True), (_coupe, True), (_ERREUR_500, False)],
+)
+async def test_flux_erreur_passagere_si_litellm_injoignable_ou_lent(sessions, handler, passagere):
+    with pytest.raises(ErreurLLM) as e:
+        [m async for m in _client(handler, sessions).flux("m", MSG, None)]
+    assert e.value.passagere is passagere
+
+
 async def test_inscription_impossible_n_arrete_pas_l_appel():
     def casse():
         raise RuntimeError("base saturée")

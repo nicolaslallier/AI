@@ -31,6 +31,12 @@ class Reglages(BaseSettings):
     duree_max_tache_s: int = 7200
     delai_commande_s: int = 600
     renvois_max: int = 2
+    # PORTAIL_RELANCE_DELAI_S : attente avant de remettre Prête une tâche bloquée pour une cause
+    # passagère (LiteLLM injoignable ou trop lent, redémarrage), le temps que LiteLLM revienne
+    relance_delai_s: int = Field(default=600, ge=0)
+    # PORTAIL_RELANCES_MAX : relances automatiques par tâche depuis sa dernière mise en Prête
+    # par quelqu'un d'autre que le portail ; au-delà, elle reste bloquée pour Nicolas
+    relances_max: int = Field(default=3, ge=0)
     github_proprietaire: str = ""
     ntfy_url: str = "http://ntfy"
     ntfy_sujet: str = "portail"
