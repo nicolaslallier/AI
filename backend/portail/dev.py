@@ -647,6 +647,9 @@ class Orchestrateur:
             lint = await self._commande(ctx, "lint", tout_lecture_seule=True)
             champs["lint_base_ok"] = lint.code == 0
         suivante = "tri" if reprise else "doc" if ctx.ex.mode == "doc" else "tests"
+        if suivante == "tests":  # une suite déjà rouge sur la base ne bloque pas la tâche
+            suite = await self._commande(ctx, "tests")
+            champs["tests_base_ok"] = suite.code == 0
         return await self._transition(ctx, suivante, base_sha=sha, **champs)
 
     async def _tri(self, ctx: _Ctx) -> str:
@@ -901,9 +904,47 @@ class Orchestrateur:
             )  # fmt: skip
         for nom, fichiers in (("tests_cibles", ctx.ex.fichiers_tests), ("tests", [])):
             r = await self._commande(ctx, nom, fichiers)
-            if r.code != 0:
-                raise _Blocage(f"vérification échouée ({nom}) :\n{r.sortie[-_FIN_SORTIE:]}")
+            if r.code == 0:
+                continue
+            sortie = r.sortie[-_FIN_SORTIE:]
+            if nom == "tests" and ctx.ex.tests_base_ok is False:  # pas cassée par la tâche
+                note = {
+                    "agent": "verification",
+                    "texte": f"la suite `tests` échoue, mais déjà sur la base :\n{sortie}",
+                }  # remplace celle d'une vérification précédente
+                notes = [n for n in ctx.ex.notes if n["agent"] != "verification"]
+                await self._maj(ctx, notes=[*notes, note])
+                continue
+            return await self._renvoi_verification(ctx, nom, sortie)
         return await self._transition(ctx, "controles", controle_courant=0)
+
+    async def _renvoi_verification(self, ctx: _Ctx, nom: str, sortie: str) -> str:
+        """Tests rouges à la vérification : d'abord au code ; s'il a déjà eu sa chance, aux tests
+        (un test faux ou impossible à satisfaire) ; renvois épuisés : blocage."""
+        raison = f"vérification échouée ({nom})"
+        if ctx.ex.renvois >= self._reglages.renvois_max:
+            raise _Blocage(f"{raison} :\n{sortie}")
+        async with self._sessions() as s:
+            deja = await s.scalar(
+                select(func.count()).where(
+                    Etape.pipeline_id == ctx.pipeline_id,
+                    Etape.action == "verification",
+                    Etape.erreur.startswith("vérification échouée"),
+                )
+            )
+        suivante, remarque = "code", f"{raison} :\n{sortie}"
+        if deja:
+            suivante = "tests"
+            remarque = (
+                f"{raison} même après un renvoi au code : le test est peut-être faux ou "
+                "impossible à satisfaire (ex. deux expressions SQLAlchemy comparées par ==). "
+                f"Corrige-le pour qu'il vérifie le comportement demandé.\n{sortie}"
+            )
+        metriques.RENVOIS.labels(agent="verification", vers=suivante).inc()
+        return await self._transition(
+            ctx, suivante, raison, renvois=ctx.ex.renvois + 1, controle_courant=0,
+            remarques=[remarque],
+        )  # fmt: skip
 
     async def _proteger(self, ctx: _Ctx) -> None:
         if violations := await verifier_commits_code(ctx.espace, ctx.ex.base_sha, ctx.cfg):

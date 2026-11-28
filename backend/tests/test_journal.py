@@ -65,7 +65,8 @@ async def test_mission_complete_sans_contenu(tmp_path, sessions, caplog):
         ) else r  # fmt: skip
 
     m.lanceur.lancer = lancer_bruyant
-    m.lanceur.codes = {CIBLES: [1], "pytest": [1]}
+    m.reglages.renvois_max = 0  # blocage dès la vérification
+    m.lanceur.codes = {CIBLES: [1], "pytest": [0, 1]}  # verte sur la base
     m.llm.reponses = [*TESTS_OK, *CODE_OK]
     await m.lancer(2)
     async with sessions() as s:

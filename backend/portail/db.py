@@ -273,6 +273,7 @@ class ExecutionDev(Base):
     controle_courant: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     notes: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")  # {agent, texte}
     lint_base_ok: Mapped[bool | None] = mapped_column(Boolean)
+    tests_base_ok: Mapped[bool | None] = mapped_column(Boolean)  # suite `tests` sur la base
     fichiers_rouge: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
     debut: Mapped[datetime] = _horodatage()
 
