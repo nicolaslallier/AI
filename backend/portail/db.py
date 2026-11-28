@@ -376,6 +376,18 @@ class CarteDoc(Base):
     maj_le: Mapped[datetime] = _horodatage(onupdate=func.now())
 
 
+class Theme(Base):
+    """Thème d'affichage : la table ne contient qu'une seule ligne (id = 1)."""
+
+    __tablename__ = "theme"
+
+    id: Mapped[int] = mapped_column(primary_key=True, unique=True)
+    nom: Mapped[str] = mapped_column(String(50), default="clair", server_default="clair")
+    maj_le: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 def creer_moteur(url: str) -> AsyncEngine:
     return create_async_engine(url)
 
