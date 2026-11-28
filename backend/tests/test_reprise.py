@@ -404,6 +404,7 @@ async def test_reprise_tout_reponse_ne_pousse_rien(monde):
 async def test_echec_verification_en_revue_sans_push(monde):
     await en_revue(monde)
     pointe = git(monde.origine, "rev-parse", BRANCHE)
+    monde.reglages.renvois_max = 0  # sans renvoi : la vérification bloque la reprise
     monde.lanceur.codes = {"pytest": [1]}
     monde.llm.reponses = [
         tri((1, "code", "corrige")), modifier("src/a.py", "a = 2\n"), texte("fait")

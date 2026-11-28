@@ -273,7 +273,8 @@ async def test_parcours_complet_ouvre_une_pr(monde):
     async with monde.sessions() as s:
         noms = (await s.scalars(select(CommandeLancee.nom).order_by(CommandeLancee.id))).all()
         etapes = (await s.scalars(select(Etape).order_by(Etape.ordre))).all()
-    assert noms == ["installer", "tests_cibles", "installer", "tests_cibles", "tests"]
+    # la suite sur la base, en préparation, puis rouge et vérification
+    assert noms == ["installer", "tests", "tests_cibles", "installer", "tests_cibles", "tests"]
     assert [(e.agent, e.action) for e in etapes] == [
         ("portail", "preparation"), ("tests", None), ("portail", "rouge"), ("code", None),
         ("portail", "verification"), ("revue", None), ("portail", "pr"),
@@ -345,15 +346,91 @@ async def test_rouge_qui_passe_renvoie_une_fois_puis_bloque(monde):
     assert any("passent déjà" in (m["content"] or "") for m in deuxieme)
 
 
-async def test_verification_rouge_bloque_avec_sortie(monde):
-    monde.lanceur.codes = {CIBLES: [1], "pytest": [1]}
-    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+def messages_de(monde, agent: str, rang: int = -1) -> str:
+    appels = [
+        a for a in monde.llm.appels if a["messages"][0]["content"].startswith(f"Tu es {agent}.")
+    ]
+    return "\n".join(m["content"] or "" for m in appels[rang]["messages"])
+
+
+async def test_tests_cibles_rouges_en_verification_renvoient_au_code(monde):
+    avant = valeur("portail_renvois_total", agent="verification", vers="code")
+    monde.lanceur.codes = {CIBLES: [1, 1]}  # rouge, puis vérification
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, texte("corrigé"), verdict("ok")]
     pid = await monde.lancer()
-    _ex, tache, pipeline = await monde.etat(pid)
-    assert tache.colonne == "bloquee"
+    ex, _tache, pipeline = await monde.etat(pid)
+    assert (pipeline.etat, ex.renvois) == ("terminee", 1)
+    code2 = messages_de(monde, "code")
+    assert "vérification échouée (tests_cibles)" in code2 and f"sortie de {CIBLES}" in code2
+    assert valeur("portail_renvois_total", agent="verification", vers="code") == avant + 1
+
+
+async def test_tests_cibles_encore_rouges_renvoient_aux_tests(monde):
+    # le code a déjà eu sa chance : le test est peut-être impossible à satisfaire
+    monde.lanceur.codes = {CIBLES: [1, 1, 1]}  # rouge, vérification, vérification
+    monde.llm.reponses = [
+        *TESTS_OK, *CODE_OK, texte("rien"),
+        appel("ecrire", chemin="tests/test_x.py", contenu="def test_x(): assert True"),
+        texte("test corrigé"), verdict("ok"),
+    ]  # fmt: skip
+    pid = await monde.lancer()
+    ex, _tache, pipeline = await monde.etat(pid)
+    assert (pipeline.etat, ex.renvois) == ("terminee", 2)
+    assert "impossible à satisfaire" in messages_de(monde, "tests")
+    async with monde.sessions() as s:
+        actions = (await s.scalars(select(Etape.action).order_by(Etape.ordre))).all()
+    # rouge du test corrigé (vert : le code existe), puis vérification
+    assert actions.count("rouge") == 2 and actions.count("verification") == 3
+
+
+async def test_verification_rouge_bloque_apres_les_renvois(monde):
+    monde.lanceur.codes = {CIBLES: [1, 1, 1, 1]}
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, texte("rien"), texte("rien"), texte("rien")]
+    pid = await monde.lancer()
+    ex, tache, pipeline = await monde.etat(pid)
+    assert ex.renvois == 2
+    assert tache.colonne == "bloquee" and pipeline.etat == "echouee"
+    assert tache.resume_blocage.startswith("vérification échouée (tests_cibles)")
     assert "sortie de pytest" in tache.resume_blocage
-    assert pipeline.etat == "echouee"
     assert monde.github.prs == {}
+
+
+async def test_suite_deja_rouge_sur_la_base_note_seulement(monde):
+    monde.lanceur.codes = {CIBLES: [1], "pytest": [1, 1]}  # base, puis vérification
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, verdict("ok")]
+    pid = await monde.lancer()
+    ex, _tache, pipeline = await monde.etat(pid)
+    assert (pipeline.etat, ex.renvois, ex.tests_base_ok) == ("terminee", 0, False)
+    assert [n["agent"] for n in ex.notes] == ["verification"]
+    assert "déjà sur la base" in ex.notes[0]["texte"]
+    assert "déjà sur la base" in monde.github.prs[1]["corps"]
+    suites = [a for a in monde.lanceur.appels if a.get("commande") == "pytest"]
+    assert len(suites) == 2  # une seule fois sur la base
+
+
+async def test_suite_de_base_hors_delai_reste_bloquante(monde):
+    # un délai dépassé sur la base n'est pas « déjà rouge » : la suite reste un contrôle
+    monde.lanceur.delais = {"pytest"}
+    monde.lanceur.effets = {
+        "installer": apres_la_base(lambda _d: monde.lanceur.delais.discard("pytest"))
+    }
+    monde.lanceur.codes = {CIBLES: [1], "pytest": [1]}  # rouge à la première vérification
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, texte("corrigé"), verdict("ok")]
+    pid = await monde.lancer()
+    ex, _tache, pipeline = await monde.etat(pid)
+    assert (pipeline.etat, ex.renvois, ex.tests_base_ok) == ("terminee", 1, None)
+    assert ex.notes == []
+    assert "vérification échouée (tests)" in messages_de(monde, "code")
+
+
+async def test_suite_cassee_par_la_tache_renvoie_au_code(monde):
+    monde.lanceur.codes = {CIBLES: [1], "pytest": [0, 1]}  # verte sur la base
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, texte("corrigé"), verdict("ok")]
+    pid = await monde.lancer()
+    ex, _tache, pipeline = await monde.etat(pid)
+    assert (pipeline.etat, ex.renvois, ex.tests_base_ok) == ("terminee", 1, True)
+    assert ex.notes == []
+    assert "vérification échouée (tests)" in messages_de(monde, "code")
 
 
 async def test_verification_efface_les_ignores_et_reinstalle(monde):
@@ -369,7 +446,7 @@ async def test_verification_efface_les_ignores_et_reinstalle(monde):
     def suite(d: Path):  # 1re fois (après le rouge) : l'agent de code ; ensuite : la vérification
         (constat if len(vus) > 1 else piege)(d)
 
-    monde.lanceur.effets = {"pytest": suite, CIBLES: constat}
+    monde.lanceur.effets = {"pytest": apres_la_base(suite), CIBLES: constat}
     monde.lanceur.codes = {CIBLES: [1]}
     monde.llm.reponses = [
         *TESTS_OK, appel("lancer", nom="tests"), texte("fait"), verdict("ok"),
@@ -480,7 +557,7 @@ async def test_glob_protege_restaure_pour_code(monde):
         (d / "conftest.py").write_text("# triche\n")
         (d / "src" / "conftest.py").write_text("# triche\n")
 
-    monde.lanceur.effets = {"pytest": effet}
+    monde.lanceur.effets = {"pytest": apres_la_base(effet)}
     monde.lanceur.codes = {CIBLES: [1]}
     monde.llm.reponses = [
         *TESTS_OK,
@@ -500,7 +577,20 @@ async def test_glob_protege_restaure_pour_code(monde):
         ).all()
     assert "[fichiers de tests restaurés : conftest.py, src/conftest.py]" in sorties[0]
     ro = [a["lecture_seule"] for a in monde.lanceur.appels if a.get("commande") == "pytest"]
+    ro = ro[1:]  # la première : la suite sur la base, en préparation
     assert ro and all(r == ["tests"] for r in ro)
+
+
+def apres_la_base(effet):
+    """La suite `tests` tourne d'abord sur la base, en préparation : l'effet vise les suivantes."""
+    appels = []
+
+    def apres(d: Path):
+        appels.append(d)
+        if len(appels) > 1:
+            effet(d)
+
+    return apres
 
 
 def triche(d: Path):
@@ -517,7 +607,7 @@ def triche(d: Path):
 async def test_violation_protection_bloque_sans_push(monde):
     # commit fabriqué pendant le travail de l'agent de code ; la suite échoue en plus :
     # la protection est vérifiée avant les commandes de la vérification
-    monde.lanceur.effets = {"pytest": triche}
+    monde.lanceur.effets = {"pytest": apres_la_base(triche)}
     monde.lanceur.codes = {CIBLES: [1], "pytest": [0, 1]}
     monde.llm.reponses = [*TESTS_OK, appel("lancer", nom="tests"), texte("fait")]
     pid = await monde.lancer()
@@ -530,8 +620,9 @@ async def test_violation_protection_bloque_sans_push(monde):
 async def test_verification_rouge_avec_violation_ne_pousse_pas(monde):
     # la violation naît pendant `tests` de la vérification, qui échoue : blocage
     # « vérification échouée », et bloquer ne pousse pas pour autant
-    monde.lanceur.effets = {"pytest": triche}
-    monde.lanceur.codes = {CIBLES: [1], "pytest": [1]}
+    monde.reglages.renvois_max = 0
+    monde.lanceur.effets = {"pytest": apres_la_base(triche)}
+    monde.lanceur.codes = {CIBLES: [1], "pytest": [0, 1]}  # verte sur la base
     monde.llm.reponses = [*TESTS_OK, *CODE_OK]
     pid = await monde.lancer()
     _ex, tache, _pipeline = await monde.etat(pid)
@@ -545,7 +636,7 @@ async def test_titre_de_tache_absent_des_journaux(monde, caplog):
     async with monde.sessions() as s:
         (await s.get(Tache, 1)).titre = "MarqueurTitre"
         await s.commit()
-    monde.lanceur.effets = {"pytest": triche}
+    monde.lanceur.effets = {"pytest": apres_la_base(triche)}
     monde.lanceur.codes = {CIBLES: [1], "pytest": [1]}
     monde.llm.reponses = [*TESTS_OK, *CODE_OK]
     with caplog.at_level(logging.DEBUG):
@@ -556,7 +647,7 @@ async def test_titre_de_tache_absent_des_journaux(monde, caplog):
 
 async def test_duree_max_apres_violation_ne_pousse_pas(monde):
     monde.reglages.duree_max_tache_s = 3
-    monde.lanceur.effets = {"pytest": triche}
+    monde.lanceur.effets = {"pytest": apres_la_base(triche)}
     monde.lanceur.codes = {CIBLES: [1]}
     monde.llm.reponses = [*TESTS_OK, appel("lancer", nom="tests"), asyncio.Event()]
     pid = await monde.lancer()
@@ -700,15 +791,25 @@ async def test_branche_non_protegee_bloque(monde):
 
 
 async def test_delai_depasse_en_verification_bloque(monde):
+    # la suite passe sur la base, puis dépasse son délai à chaque vérification
+    monde.lanceur.effets = {
+        "installer": apres_la_base(lambda _d: monde.lanceur.delais.add("pytest"))
+    }
     monde.lanceur.codes = {CIBLES: [1]}
-    monde.lanceur.delais = {"pytest"}
-    monde.llm.reponses = [*TESTS_OK, *CODE_OK]
+    # renvoi au code, puis aux tests, puis blocage
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, texte("rien"), texte("rien"), texte("rien")]
     pid = await monde.lancer()
     _ex, tache, _pipeline = await monde.etat(pid)
     assert tache.colonne == "bloquee"
     assert "délai dépassé" in tache.resume_blocage
     async with monde.sessions() as s:
-        c = await s.scalar(select(CommandeLancee).where(CommandeLancee.nom == "tests"))
+        c = (
+            await s.scalars(
+                select(CommandeLancee)
+                .where(CommandeLancee.nom == "tests")
+                .order_by(CommandeLancee.id.desc())
+            )
+        ).first()
     assert c.delai_depasse and c.code is None
 
 
@@ -1211,8 +1312,11 @@ async def test_delai_compte_commande_et_blocage(monde):
         ("portail_executions_dev_total", {"mode": "normal", "issue": "bloquee"}),
     ]
     avant = [valeur(n, **e) for n, e in lus]
+    monde.reglages.renvois_max = 0  # blocage dès la première vérification
+    monde.lanceur.effets = {
+        "installer": apres_la_base(lambda _d: monde.lanceur.delais.add("pytest"))
+    }
     monde.lanceur.codes = {CIBLES: [1]}
-    monde.lanceur.delais = {"pytest"}
     monde.llm.reponses = [*TESTS_OK, *CODE_OK]
     await monde.lancer()
     assert [valeur(n, **e) - a for (n, e), a in zip(lus, avant, strict=True)] == [1, 1, 1]

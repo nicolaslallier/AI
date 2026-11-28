@@ -253,3 +253,5 @@ services:
 ```
 
 La commande `tests_cibles` doit sortir en non-zéro seulement quand des tests échouent : à la vérification « rouge », les codes 3 et 4 (erreur interne ou d'usage de pytest) bloquent la tâche (« commande de tests invalide ») et le code 5 (aucun test collecté) la bloque comme « aucun test écrit ». Tout autre code non nul compte comme un vrai rouge (pytest 1 et 2, jest et vitest 1, cargo 101).
+
+La commande `tests` (la suite complète) tourne une fois sur la base, en préparation d'une tâche de dev : cela ajoute sa durée à chaque exécution. À la vérification, si `tests_cibles` ou `tests` échoue, la tâche est renvoyée à l'agent de code, puis, s'il a déjà eu sa chance, à l'agent de tests (test faux ou impossible à satisfaire), dans la limite des renvois (`renvois_max`) ; ensuite seulement elle bloque. Une suite `tests` déjà rouge sur la base ne bloque jamais : son échec devient une note de la PR.
