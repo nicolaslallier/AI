@@ -651,7 +651,8 @@ class Orchestrateur:
         suivante = "tri" if reprise else "doc" if ctx.ex.mode == "doc" else "tests"
         if suivante == "tests":  # une suite déjà rouge sur la base ne bloque pas la tâche
             suite = await self._commande(ctx, "tests")
-            champs["tests_base_ok"] = suite.code == 0
+            # délai dépassé : inconnu, pas « déjà rouge » — la vérification reste bloquante
+            champs["tests_base_ok"] = None if suite.delai_depasse else suite.code == 0
         return await self._transition(ctx, suivante, base_sha=sha, **champs)
 
     async def _tri(self, ctx: _Ctx) -> str:

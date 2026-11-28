@@ -408,6 +408,21 @@ async def test_suite_deja_rouge_sur_la_base_note_seulement(monde):
     assert len(suites) == 2  # une seule fois sur la base
 
 
+async def test_suite_de_base_hors_delai_reste_bloquante(monde):
+    # un délai dépassé sur la base n'est pas « déjà rouge » : la suite reste un contrôle
+    monde.lanceur.delais = {"pytest"}
+    monde.lanceur.effets = {
+        "installer": apres_la_base(lambda _d: monde.lanceur.delais.discard("pytest"))
+    }
+    monde.lanceur.codes = {CIBLES: [1], "pytest": [1]}  # rouge à la première vérification
+    monde.llm.reponses = [*TESTS_OK, *CODE_OK, texte("corrigé"), verdict("ok")]
+    pid = await monde.lancer()
+    ex, _tache, pipeline = await monde.etat(pid)
+    assert (pipeline.etat, ex.renvois, ex.tests_base_ok) == ("terminee", 1, None)
+    assert ex.notes == []
+    assert "vérification échouée (tests)" in messages_de(monde, "code")
+
+
 async def test_suite_cassee_par_la_tache_renvoie_au_code(monde):
     monde.lanceur.codes = {CIBLES: [1], "pytest": [0, 1]}  # verte sur la base
     monde.llm.reponses = [*TESTS_OK, *CODE_OK, texte("corrigé"), verdict("ok")]
