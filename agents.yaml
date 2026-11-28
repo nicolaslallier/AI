@@ -420,6 +420,8 @@ agents:
       - "type" : le nom anglais du format d'échange ArchiMate 3.2 (par exemple BusinessProcess,
         DataObject, ApplicationComponent, Node, Serving, Realization) ;
       - tes identifiants commencent par « aff- », en minuscules, avec des tirets ;
+      - chaque élément : {"id", "type", "nom", "description"} ; chaque relation :
+        {"type", "source", "cible", "nom"} — ces clés exactement, en français ;
       - au moins une vue : {"nom", "point_de_vue", "elements": [identifiants]}.
       Réponds uniquement avec le document, sans préambule ni commentaire.
   archi-donnees:
@@ -484,6 +486,8 @@ agents:
       - "type" : le nom anglais du format d'échange ArchiMate 3.2 (par exemple BusinessProcess,
         DataObject, ApplicationComponent, Node, Serving, Realization) ;
       - tes identifiants commencent par « don- », en minuscules, avec des tirets ;
+      - chaque élément : {"id", "type", "nom", "description"} ; chaque relation :
+        {"type", "source", "cible", "nom"} — ces clés exactement, en français ;
       - au moins une vue : {"nom", "point_de_vue", "elements": [identifiants]}.
       Réponds uniquement avec le document, sans préambule ni commentaire.
   archi-applicatif:
@@ -548,6 +552,8 @@ agents:
       - "type" : le nom anglais du format d'échange ArchiMate 3.2 (par exemple BusinessProcess,
         DataObject, ApplicationComponent, Node, Serving, Realization) ;
       - tes identifiants commencent par « app- », en minuscules, avec des tirets ;
+      - chaque élément : {"id", "type", "nom", "description"} ; chaque relation :
+        {"type", "source", "cible", "nom"} — ces clés exactement, en français ;
       - au moins une vue : {"nom", "point_de_vue", "elements": [identifiants]}.
       Réponds uniquement avec le document, sans préambule ni commentaire.
   archi-techno:
@@ -612,6 +618,8 @@ agents:
       - "type" : le nom anglais du format d'échange ArchiMate 3.2 (par exemple BusinessProcess,
         DataObject, ApplicationComponent, Node, Serving, Realization) ;
       - tes identifiants commencent par « tec- », en minuscules, avec des tirets ;
+      - chaque élément : {"id", "type", "nom", "description"} ; chaque relation :
+        {"type", "source", "cible", "nom"} — ces clés exactement, en français ;
       - au moins une vue : {"nom", "point_de_vue", "elements": [identifiants]}.
       Réponds uniquement avec le document, sans préambule ni commentaire.
   archi-securite:
@@ -683,6 +691,8 @@ agents:
       - "type" : le nom anglais du format d'échange ArchiMate 3.2 (par exemple BusinessProcess,
         DataObject, ApplicationComponent, Node, Serving, Realization) ;
       - tes identifiants commencent par « sec- », en minuscules, avec des tirets ;
+      - chaque élément : {"id", "type", "nom", "description"} ; chaque relation :
+        {"type", "source", "cible", "nom"} — ces clés exactement, en français ;
       - au moins une vue : {"nom", "point_de_vue", "elements": [identifiants]}.
       Réponds uniquement avec le document, sans préambule ni commentaire.
   archi-solution:
@@ -755,6 +765,8 @@ agents:
       - "type" : le nom anglais du format d'échange ArchiMate 3.2 (par exemple BusinessProcess,
         DataObject, ApplicationComponent, Node, Serving, Realization) ;
       - tes identifiants commencent par « sol- », en minuscules, avec des tirets ;
+      - chaque élément : {"id", "type", "nom", "description"} ; chaque relation :
+        {"type", "source", "cible", "nom"} — ces clés exactement, en français ;
       - au moins une vue : {"nom", "point_de_vue", "elements": [identifiants]}.
       Réponds uniquement avec le document, sans préambule ni commentaire.
   archi-entreprise-synthese:
@@ -821,6 +833,8 @@ agents:
       - "fusions" : pour chaque doublon entre volets, {"garder": "<identifiant>", "retirer":
         "<identifiant>"} ;
       - tes ajouts, dont les identifiants commencent par « ent- » ;
+      - chaque élément : {"id", "type", "nom", "description"} ; chaque relation :
+        {"type", "source", "cible", "nom"} — ces clés exactement, en français ;
       - au moins une vue d'ensemble en couches (point de vue « Layered ») qui cite des éléments
         de tous les volets.
       Ne recopie pas les éléments des volets : le portail les fusionne.

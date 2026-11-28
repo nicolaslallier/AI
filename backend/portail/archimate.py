@@ -3,11 +3,12 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Annotated
 
-from pydantic import BaseModel, BeforeValidator, ValidationError
+from pydantic import AliasChoices, BaseModel, BeforeValidator, Field, ValidationError
 
 from portail.archimate_types import ELEMENTS, POINTS_DE_VUE, RELATIONS
 
 BLOC = re.compile(r"```json\s*(.*?)\s*```", re.DOTALL)
+ERREURS_MAX = 5  # au-delà, le message renvoyé au modèle est tronqué
 
 
 class BlocInvalide(ValueError):
@@ -18,23 +19,30 @@ class BlocInvalide(ValueError):
 Texte = Annotated[str, BeforeValidator(lambda v: "" if v is None else v)]
 
 
+def _cle(*noms: str):
+    """Champ lu sous son nom ou sous un synonyme que les modèles emploient souvent."""
+    return Field(validation_alias=AliasChoices(*noms))
+
+
 class Element(BaseModel):
-    id: str
+    id: str = _cle("id", "identifiant")
     type: str
-    nom: str
+    nom: str = _cle("nom", "name", "libelle", "libellé")
     description: Texte = ""
 
 
 class Relation(BaseModel):
     type: str
     source: str
-    cible: str
-    nom: Texte = ""
+    cible: str = _cle("cible", "target")
+    nom: Texte = Field(default="", validation_alias=AliasChoices("nom", "name"))
 
 
 class Vue(BaseModel):
-    nom: str
-    point_de_vue: Texte = ""
+    nom: str = _cle("nom", "name")
+    point_de_vue: Texte = Field(
+        default="", validation_alias=AliasChoices("point_de_vue", "viewpoint")
+    )
     elements: list[str]
 
 
@@ -48,6 +56,20 @@ class Modele(BaseModel):
     relations: list[Relation] = []
     vues: list[Vue] = []
     fusions: list[Fusion] = []
+
+
+def _message(e: ValidationError) -> str:
+    """Toutes les erreurs (jusqu'à ERREURS_MAX) : la relance du modèle peut tout corriger."""
+    erreurs = e.errors()
+    lignes = [
+        ".".join(str(p) for p in err["loc"])
+        + " : "
+        + ("champ obligatoire" if err["type"] == "missing" else err["msg"])
+        for err in erreurs[:ERREURS_MAX]
+    ]
+    if reste := len(erreurs) - ERREURS_MAX:
+        lignes.append(f"et {reste} autres erreurs")
+    return " ; ".join(lignes)
 
 
 def lire_bloc(contenu: str) -> tuple[str, Modele]:
@@ -65,9 +87,7 @@ def lire_bloc(contenu: str) -> tuple[str, Modele]:
     try:
         modele = Modele.model_validate(brut)
     except ValidationError as e:
-        erreur = e.errors()[0]
-        chemin = ".".join(str(p) for p in erreur["loc"])
-        raise BlocInvalide(f"{chemin} : {erreur['msg']}") from e
+        raise BlocInvalide(_message(e)) from e
     return contenu[: dernier.start()] + contenu[dernier.end() :], modele
 
 
